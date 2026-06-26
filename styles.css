@@ -155,6 +155,21 @@ button {
   line-height: 1;
 }
 
+.logbook-header {
+  margin-bottom: 12px;
+}
+
+.logbook-header .eyebrow {
+  margin-bottom: 6px;
+}
+
+.logbook-header h1 {
+  max-width: 360px;
+  margin-bottom: 0;
+  font-size: 30px;
+  line-height: 1;
+}
+
 .compact-page-header {
   margin-bottom: 8px;
 }

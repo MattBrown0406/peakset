@@ -2274,11 +2274,10 @@ function renderLogbook() {
   const report = coachReportData(days);
   const latestMeasurementRows = measurementRows(report.latestMeasurement);
   return `
-    <div class="topbar">
+    <div class="logbook-header">
       <div>
         <p class="eyebrow">Coach export</p>
         <h1>Send the week without rewriting it.</h1>
-        <p class="muted">Create a PDF with body weight, latest measurements, workout volume, and set-by-set training logs for your coach.</p>
       </div>
     </div>
     <section class="card pad">
