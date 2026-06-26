@@ -663,7 +663,7 @@ const defaultState = {
   logbookRange: "7",
   todayPlanId: null,
   todayWorkoutPick: "recommended",
-  timer: { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null }
+  timer: { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null }
 };
 
 let state = loadState();
@@ -696,7 +696,9 @@ function loadState() {
       }
     }
     if (!next.timer?.running) {
-      next.timer = { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null };
+      next.timer = { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null };
+    } else {
+      next.timer = { fullscreen: false, exerciseIndex: null, ...next.timer };
     }
     next.measurements = (next.measurements || []).map(({ bodyweight, ...entry }) => entry);
     return next;
@@ -829,17 +831,25 @@ function getAudioContext() {
 }
 
 function playBellStrike(context, startTime, duration = 1.35) {
+  const compressor = context.createDynamicsCompressor();
+  compressor.threshold.setValueAtTime(-18, startTime);
+  compressor.knee.setValueAtTime(12, startTime);
+  compressor.ratio.setValueAtTime(4, startTime);
+  compressor.attack.setValueAtTime(0.003, startTime);
+  compressor.release.setValueAtTime(0.25, startTime);
+  compressor.connect(context.destination);
+
   const master = context.createGain();
   master.gain.setValueAtTime(0.0001, startTime);
-  master.gain.exponentialRampToValueAtTime(0.72, startTime + 0.01);
+  master.gain.exponentialRampToValueAtTime(1.55, startTime + 0.01);
   master.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
-  master.connect(context.destination);
+  master.connect(compressor);
 
   const partials = [
-    { frequency: 620, gain: 0.8 },
-    { frequency: 835, gain: 0.42 },
-    { frequency: 1180, gain: 0.26 },
-    { frequency: 1510, gain: 0.16 }
+    { frequency: 620, gain: 1 },
+    { frequency: 835, gain: 0.58 },
+    { frequency: 1180, gain: 0.36 },
+    { frequency: 1510, gain: 0.22 }
   ];
 
   partials.forEach((partial) => {
@@ -2022,7 +2032,7 @@ function completeSet(exIndex, setIndex) {
   }
   set.done = !set.done;
   saveState();
-  if (set.done) startTimer(ex.rest);
+  if (set.done) startTimer(ex.rest, true, exIndex);
   render();
 }
 
@@ -2030,7 +2040,7 @@ function adjustRest(seconds) {
   const timer = state.timer;
   const next = Math.max(15, Math.min(300, (timer.running ? timer.left : timer.seconds) + seconds));
   if (timer.running) {
-    startTimer(next);
+    startTimer(next, Boolean(timer.fullscreen), timer.exerciseIndex ?? null);
   } else {
     state.timer.seconds = next;
     saveState();
@@ -2038,15 +2048,21 @@ function adjustRest(seconds) {
   }
 }
 
-function startTimer(seconds = state.timer.seconds) {
+function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null) {
   getAudioContext();
   const now = Date.now();
+  const duration = Math.max(15, Math.min(300, Number(seconds) || DEFAULT_REST_SECONDS));
+  if (state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
+    state.activeWorkout.exercises[exerciseIndex].rest = duration;
+  }
   state.timer = {
-    seconds,
-    left: seconds,
+    seconds: duration,
+    left: duration,
     running: true,
     startedAt: now,
-    endsAt: now + seconds * 1000
+    endsAt: now + duration * 1000,
+    fullscreen,
+    exerciseIndex
   };
   saveState();
   ensureTimerTick();
@@ -2057,6 +2073,15 @@ function stopTimer() {
   state.timer.left = 0;
   state.timer.startedAt = null;
   state.timer.endsAt = null;
+  state.timer.fullscreen = false;
+  state.timer.exerciseIndex = null;
+  saveState();
+  render();
+}
+
+function closeRestOverlay() {
+  state.timer.fullscreen = false;
+  state.timer.exerciseIndex = null;
   saveState();
   render();
 }
@@ -2069,7 +2094,13 @@ function ensureTimerTick() {
     state.timer.left = left;
     if (left <= 0) {
       state.timer.running = false;
+      state.timer.left = 0;
       playBoxingBell();
+      if (state.timer.fullscreen) {
+        saveState();
+        render();
+        return;
+      }
       toast("Rest complete. Next set.");
     }
     saveState();
@@ -2078,20 +2109,77 @@ function ensureTimerTick() {
 }
 
 function updateTimerDom() {
-  const face = document.querySelector(".timer-face");
-  const time = document.querySelector("[data-timer-time]");
-  if (!face || !time) return;
   const total = Math.max(1, state.timer.seconds);
-  const left = state.timer.running ? state.timer.left : state.timer.seconds;
+  const left = timerDisplaySeconds();
   const elapsed = total - left;
-  face.style.setProperty("--progress", `${Math.min(360, (elapsed / total) * 360)}deg`);
-  time.textContent = formatTime(left);
+  document.querySelectorAll(".timer-face").forEach((face) => {
+    face.style.setProperty("--progress", `${Math.min(360, (elapsed / total) * 360)}deg`);
+  });
+  document.querySelectorAll("[data-timer-time]").forEach((time) => {
+    time.textContent = formatTime(left);
+  });
+  document.querySelectorAll("[data-timer-status]").forEach((status) => {
+    status.textContent = timerStatusText();
+  });
+}
+
+function timerDisplaySeconds() {
+  if (state.timer.running) return state.timer.left;
+  if (state.timer.fullscreen && state.timer.left === 0) return 0;
+  return state.timer.seconds;
+}
+
+function timerStatusText() {
+  if (state.timer.running) return "Resting";
+  if (state.timer.fullscreen && state.timer.left === 0) return "Rest complete";
+  return "Ready";
 }
 
 function formatTime(seconds) {
   const mins = Math.floor(seconds / 60);
   const secs = String(seconds % 60).padStart(2, "0");
   return `${mins}:${secs}`;
+}
+
+function restPresetButtons(fullscreen = false) {
+  const exerciseIndex = state.timer.exerciseIndex ?? null;
+  return [60, 90, 120, 180, 240].map((seconds) => `
+    <button class="chip ${seconds === state.timer.seconds ? "active" : ""}" onclick="startTimer(${seconds}, ${fullscreen}, ${exerciseIndex === null ? "null" : exerciseIndex})">${seconds}s</button>
+  `).join("");
+}
+
+function renderRestOverlay(left, progress) {
+  if (!state.timer.fullscreen) return "";
+  const workout = state.activeWorkout;
+  const exercise = workout && state.timer.exerciseIndex !== null ? workout.exercises[state.timer.exerciseIndex] : null;
+  return `
+    <div class="rest-overlay">
+      <div class="rest-overlay-inner">
+        <div class="rest-overlay-head">
+          <p class="eyebrow">Rest timer</p>
+          <button class="ghost-btn" onclick="closeRestOverlay()">Back to Workout</button>
+        </div>
+        <p class="muted" style="margin: 0;">${exercise ? escapeHtml(exercise.name) : "Next set"}</p>
+        <div class="timer-face timer-face-large" style="--progress: ${progress}deg;">
+          <div style="text-align: center;">
+            <strong data-timer-time>${formatTime(left)}</strong>
+            <p class="muted" data-timer-status style="margin: 8px 0 0;">${state.timer.running ? "Resting" : "Rest complete"}</p>
+          </div>
+        </div>
+        <div class="timer-controls rest-overlay-controls">
+          <div class="actions">
+            <button class="secondary-btn" onclick="adjustRest(-15)">-15s</button>
+            <button class="secondary-btn" onclick="adjustRest(15)">+15s</button>
+          </div>
+          <div class="actions">
+            ${restPresetButtons(true)}
+          </div>
+          <button class="primary-btn" onclick="closeRestOverlay()">${state.timer.running ? "Return to Workout" : "Next Set"}</button>
+          <button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function finishWorkout() {
@@ -2139,13 +2227,14 @@ function renderSession() {
   }
   const completed = workout.exercises.reduce((sum, ex) => sum + ex.sets.filter((set) => set.done).length, 0);
   const total = workout.exercises.reduce((sum, ex) => sum + ex.sets.length, 0);
-  const left = state.timer.running ? state.timer.left : state.timer.seconds;
+  const left = timerDisplaySeconds();
   const totalTimer = Math.max(1, state.timer.seconds);
-  const progress = state.timer.running ? ((totalTimer - left) / totalTimer) * 360 : 0;
+  const progress = state.timer.running || state.timer.fullscreen ? ((totalTimer - left) / totalTimer) * 360 : 0;
 
   setTimeout(ensureTimerTick, 0);
 
   return `
+    ${renderRestOverlay(left, progress)}
     <div class="topbar">
       <div>
         <p class="eyebrow">Live workout</p>
@@ -2186,7 +2275,7 @@ function renderSession() {
         <div class="timer-face" style="--progress: ${progress}deg;">
           <div style="text-align: center;">
             <strong data-timer-time>${formatTime(left)}</strong>
-            <p class="muted" style="margin: 6px 0 0;">${state.timer.running ? "Resting" : "Ready"}</p>
+            <p class="muted" data-timer-status style="margin: 6px 0 0;">${timerStatusText()}</p>
           </div>
         </div>
         <div class="timer-controls">
@@ -2195,7 +2284,7 @@ function renderSession() {
             <button class="secondary-btn" onclick="adjustRest(15)">+15s</button>
           </div>
           <div class="actions">
-            ${[60, 90, 120, 180, 240].map((seconds) => `<button class="chip ${seconds === DEFAULT_REST_SECONDS ? "active" : ""}" onclick="startTimer(${seconds})">${seconds}s</button>`).join("")}
+            ${restPresetButtons(false)}
           </div>
           <p class="muted" style="margin: 0; text-align: center; font-size: 12px;">Bell plays through the current device audio output.</p>
           <button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button>

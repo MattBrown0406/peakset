@@ -586,6 +586,33 @@ h3 {
   padding: 16px;
 }
 
+.exercise-card {
+  gap: 8px;
+  padding: 12px;
+}
+
+.exercise-card h3 {
+  margin-bottom: 0;
+  font-size: 16px;
+  line-height: 1.15;
+}
+
+.exercise-card p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.exercise-card .badge {
+  min-height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.exercise-card .secondary-btn {
+  min-height: 36px;
+}
+
 .plan-card {
   min-height: 230px;
 }
@@ -752,6 +779,15 @@ textarea:focus {
   line-height: 1;
 }
 
+.timer-face-large {
+  width: min(78vw, 340px);
+  margin: 22px auto;
+}
+
+.timer-face-large strong {
+  font-size: 66px;
+}
+
 .timer-controls {
   display: grid;
   gap: 10px;
@@ -759,6 +795,45 @@ textarea:focus {
 
 .timer-controls .actions {
   justify-content: center;
+}
+
+.rest-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background:
+    radial-gradient(circle at 50% 28%, rgba(30, 155, 255, 0.24), transparent 28rem),
+    rgba(5, 7, 10, 0.96);
+  backdrop-filter: blur(16px);
+}
+
+.rest-overlay-inner {
+  width: min(100%, 430px);
+  display: grid;
+  gap: 8px;
+}
+
+.rest-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rest-overlay-head .eyebrow {
+  margin-bottom: 0;
+}
+
+.rest-overlay-controls .actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rest-overlay-controls .actions + .actions {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .builder-list {
