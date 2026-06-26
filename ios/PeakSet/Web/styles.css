@@ -129,7 +129,7 @@ button {
 
 .main {
   min-width: 0;
-  padding: 18px 14px 92px;
+  padding: 18px 14px 126px;
 }
 
 .topbar {
@@ -815,7 +815,7 @@ textarea:focus {
   bottom: 10px;
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   padding: 7px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -825,12 +825,12 @@ textarea:focus {
 }
 
 .mobile-bar button {
-  min-height: 48px;
+  min-height: 40px;
   border: 0;
   border-radius: 14px;
   color: var(--muted);
   background: transparent;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 750;
 }
 
