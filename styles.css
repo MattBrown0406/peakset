@@ -762,6 +762,11 @@ textarea:focus {
   font-weight: 900;
 }
 
+.set-number.drop {
+  color: var(--ink);
+  background: linear-gradient(135deg, var(--amber), var(--green));
+}
+
 .timer-face {
   display: grid;
   place-items: center;

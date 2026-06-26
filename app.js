@@ -1168,7 +1168,7 @@ function buildCoachReportLines(days, coachNote = "") {
       lines.push({ text: `${(log.sets || []).length} sets - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} lb volume`, size: 10 });
       const grouped = (log.sets || []).reduce((groups, set) => {
         if (!groups[set.exercise]) groups[set.exercise] = [];
-        groups[set.exercise].push(`${set.weight || "--"} x ${set.reps || "--"}`);
+        groups[set.exercise].push(setLogSummary(set));
         return groups;
       }, {});
       Object.entries(grouped).forEach(([exercise, sets]) => {
@@ -1889,11 +1889,15 @@ function renderBuilder() {
             </select>
           </div>
           <div class="field">
+            <label for="customDropSets">Drop Sets</label>
+            <input id="customDropSets" type="number" value="0" min="0" max="4" />
+          </div>
+        </div>
+        <div class="grid two" style="margin-top: 12px;">
+          <div class="field">
             <label for="customRest">Rest Seconds</label>
             <input id="customRest" type="number" value="${DEFAULT_REST_SECONDS}" min="15" max="300" step="15" />
           </div>
-        </div>
-        <div style="margin-top: 12px;">
           <div class="field">
             <label for="customExercise">Exercise</label>
             <select id="customExercise">
@@ -1921,7 +1925,8 @@ function addBuilderExercise() {
   const sets = Number(document.getElementById("customSets").value) || 3;
   const reps = document.getElementById("customReps").value || "8-12";
   const rest = Number(document.getElementById("customRest").value) || DEFAULT_REST_SECONDS;
-  builderDraft.push([id, sets, reps, rest]);
+  const dropSets = Math.max(0, Math.min(4, Number(document.getElementById("customDropSets").value) || 0));
+  builderDraft.push([id, sets, reps, rest, dropSets]);
   document.getElementById("builderDraft").innerHTML = renderBuilderDraft();
 }
 
@@ -1935,11 +1940,11 @@ function renderBuilderDraft() {
   if (builderDraft.length === 0) {
     return '<div class="empty"><p class="muted">No exercises added yet.</p></div>';
   }
-  return builderDraft.map(([id, sets, reps], index) => `
+  return builderDraft.map(([id, sets, reps, rest, dropSets = 0], index) => `
     <div class="exercise-row">
       <div>
         <strong>${escapeHtml(exerciseById(id).name)}</strong>
-        <p class="muted" style="margin: 4px 0 0;">${sets} sets x ${reps}</p>
+        <p class="muted" style="margin: 4px 0 0;">${sets} sets x ${reps}${dropSets ? ` + ${dropSets} drop ${dropSets === 1 ? "set" : "sets"}` : ""}</p>
       </div>
       <button class="ghost-btn danger" onclick="removeBuilderExercise(${index})">Remove</button>
     </div>
@@ -1969,6 +1974,29 @@ function startCustomWorkout() {
   toast("Workout started.");
 }
 
+function workoutSetRows(sets, dropSets = 0) {
+  const workingSets = Math.max(1, Number(sets) || 1);
+  const drops = Math.max(0, Math.min(4, Number(dropSets) || 0));
+  return [
+    ...Array.from({ length: workingSets }, (_, index) => ({
+      set: index + 1,
+      label: String(index + 1),
+      dropSet: false,
+      weight: "",
+      reps: "",
+      done: false
+    })),
+    ...Array.from({ length: drops }, (_, index) => ({
+      set: workingSets + index + 1,
+      label: `D${index + 1}`,
+      dropSet: true,
+      weight: "",
+      reps: "",
+      done: false
+    }))
+  ];
+}
+
 function beginWorkoutFromPlan(plan) {
   state.activeWorkout = {
     id: crypto.randomUUID(),
@@ -1976,24 +2004,23 @@ function beginWorkoutFromPlan(plan) {
     title: plan.title,
     phase: plan.phase,
     startedAt: new Date().toISOString(),
-    exercises: plan.exercises.map(([id, sets, reps, rest]) => ({
-      id,
-      name: exerciseById(id).name,
-      targetSets: Number(sets),
-      targetReps: String(reps),
-      rest: plan.id.startsWith("custom-") || plan.id.startsWith("quick-") || plan.id.startsWith("builder-")
-        ? Number(rest || plan.rest || DEFAULT_REST_SECONDS)
-        : DEFAULT_REST_SECONDS,
-      sets: Array.from({ length: Number(sets) }, (_, index) => ({
-        set: index + 1,
-        weight: "",
-        reps: "",
-        done: false
-      }))
-    }))
+    exercises: plan.exercises.map(([id, sets, reps, rest, dropSets = 0]) => {
+      const drops = Math.max(0, Math.min(4, Number(dropSets) || 0));
+      return {
+        id,
+        name: exerciseById(id).name,
+        targetSets: Number(sets),
+        targetDropSets: drops,
+        targetReps: String(reps),
+        rest: plan.id.startsWith("custom-") || plan.id.startsWith("quick-") || plan.id.startsWith("builder-")
+          ? Number(rest || plan.rest || DEFAULT_REST_SECONDS)
+          : DEFAULT_REST_SECONDS,
+        sets: workoutSetRows(sets, drops)
+      };
+    })
   };
   state.view = "session";
-  state.timer = { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null };
+  state.timer = { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null };
   saveState();
   render();
 }
@@ -2141,6 +2168,10 @@ function formatTime(seconds) {
   return `${mins}:${secs}`;
 }
 
+function setLogSummary(set) {
+  return `${set.dropSet ? "Drop " : ""}${set.weight || "--"} x ${set.reps || "--"}`;
+}
+
 function restPresetButtons(fullscreen = false) {
   const exerciseIndex = state.timer.exerciseIndex ?? null;
   return [60, 90, 120, 180, 240].map((seconds) => `
@@ -2188,7 +2219,7 @@ function finishWorkout() {
   const sets = workout.exercises.flatMap((exercise) =>
     exercise.sets
       .filter((set) => set.done)
-      .map((set) => ({ exercise: exercise.name, weight: set.weight, reps: set.reps }))
+      .map((set) => ({ exercise: exercise.name, weight: set.weight, reps: set.reps, dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
   );
   if (sets.length === 0) {
     toast("Complete at least one set before saving.");
@@ -2252,7 +2283,7 @@ function renderSession() {
           <article class="card pad">
             <div class="card-head">
               <div>
-                <span class="badge blue">${exercise.targetSets} sets x ${escapeHtml(exercise.targetReps)}</span>
+                <span class="badge blue">${exercise.targetSets} sets${exercise.targetDropSets ? ` + ${exercise.targetDropSets} drop` : ""} x ${escapeHtml(exercise.targetReps)}</span>
                 <h2 style="margin-top: 10px;">${escapeHtml(exercise.name)}</h2>
               </div>
               <span class="badge">${exercise.rest}s rest</span>
@@ -2260,7 +2291,7 @@ function renderSession() {
             <div class="set-table">
               ${exercise.sets.map((set, setIndex) => `
                 <div class="set-row">
-                  <div class="set-number">${set.set}</div>
+                  <div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>
                   <input type="number" inputmode="decimal" placeholder="Weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />
                   <input type="number" inputmode="numeric" placeholder="Reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
                   <button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
@@ -2438,7 +2469,7 @@ function renderLogbook() {
               <span class="badge">${formatShortDate(log.date)}</span>
             </div>
             <p class="muted">${(log.sets || []).length} sets, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} lbs volume</p>
-            <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(set.weight || "--")} x ${escapeHtml(set.reps || "--")}`).join(" / ")}</p>
+            <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}</p>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No workouts logged in this range.</p></div>'}
       </div>
