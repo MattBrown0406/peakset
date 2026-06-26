@@ -1434,156 +1434,111 @@ function daysSince(dateString) {
   return Math.floor((Date.now() - date.getTime()) / 86400000);
 }
 
-const trackedTopLifts = new Set([
-  "Barbell Bench Press",
-  "Incline Barbell Press",
-  "Incline Dumbbell Press",
-  "Flat Dumbbell Press",
-  "Lat Pulldown",
-  "Neutral-Grip Pulldown",
-  "Wide-Grip Pulldown",
-  "Barbell Row",
-  "T-Bar Row",
-  "Rack Pull",
-  "Dumbbell Shoulder Press",
-  "Barbell Overhead Press",
-  "Machine Shoulder Press",
-  "Close-Grip Bench Press",
-  "Barbell Back Squat",
-  "Front Squat",
-  "Hack Squat",
-  "Leg Press",
-  "Dumbbell Romanian Deadlift",
-  "Hip Thrust"
-]);
+const measurementMetrics = [
+  { key: "chest", label: "Chest", direction: "up" },
+  { key: "shoulders", label: "Shoulders", direction: "up" },
+  { key: "arm", label: "Arm", direction: "up" },
+  { key: "thigh", label: "Thigh", direction: "up" },
+  { key: "calf", label: "Calf", direction: "up" },
+  { key: "waist", label: "Waist", direction: "down" },
+  { key: "bodyFat", label: "Body Fat", direction: "down" }
+];
 
-function exerciseByName(name) {
-  const normalized = String(name || "").toLowerCase();
-  return exerciseLibrary.find((exercise) => exercise.name.toLowerCase() === normalized);
+const growthMeasurementKeys = ["chest", "shoulders", "arm", "thigh", "calf"];
+
+function sortedMeasurementLogs() {
+  return [...state.measurements]
+    .filter((entry) => entry?.date)
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
 }
 
-function loggedSetsWithinDays(days) {
-  const cutoff = Date.now() - days * 86400000;
-  return state.workoutLogs.flatMap((log) => {
-    const timestamp = new Date(log.date).getTime();
-    if (!Number.isFinite(timestamp) || timestamp < cutoff) return [];
-    return (log.sets || []).map((set) => ({ ...set, date: log.date, timestamp }));
+function numericMeasurement(entry, key) {
+  const value = Number(entry?.[key]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function comparableMeasurementChanges(current, baseline, keys) {
+  return keys.flatMap((key) => {
+    const currentValue = numericMeasurement(current, key);
+    const baselineValue = numericMeasurement(baseline, key);
+    if (currentValue === null || baselineValue === null) return [];
+    const metric = measurementMetrics.find((item) => item.key === key);
+    return [{ key, label: metric?.label || key, change: currentValue - baselineValue }];
   });
 }
 
-function titleCase(value) {
-  return String(value || "").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function weakPointVolumeStatus() {
-  const recentWorkouts = state.workoutLogs.filter((log) => {
-    const timestamp = new Date(log.date).getTime();
-    return Number.isFinite(timestamp) && Date.now() - timestamp < 7 * 86400000;
-  });
-  const weeklySets = loggedSetsWithinDays(7);
-  const muscleCounts = weeklySets.reduce((counts, set) => {
-    const exercise = exerciseByName(set.exercise);
-    if (!exercise || exercise.muscle === "abs") return counts;
-    counts[exercise.muscle] = (counts[exercise.muscle] || 0) + 1;
-    return counts;
-  }, {});
-  const trainedMuscles = Object.entries(muscleCounts).filter(([, count]) => count > 0);
-
-  if (recentWorkouts.length < 3) {
+function weakPointMeasurementStatus() {
+  const logs = sortedMeasurementLogs();
+  if (logs.length < 2) {
     return {
       done: false,
-      label: "Weak-point volume reviewed",
-      detail: `Needs 3 workouts in the last 7 days. ${recentWorkouts.length}/3 logged.`
+      label: "Weak-point measurements reviewed",
+      detail: `Needs 2 measurement check-ins to compare body-part trends. ${logs.length}/2 logged.`
     };
   }
 
-  if (trainedMuscles.length < 3) {
+  const latest = logs[logs.length - 1];
+  const baseline = logs[0];
+  const changes = comparableMeasurementChanges(latest, baseline, growthMeasurementKeys);
+
+  if (changes.length < 3) {
     return {
       done: false,
-      label: "Weak-point volume reviewed",
-      detail: `Needs logged sets for 3+ body parts this week. ${trainedMuscles.length}/3 found.`
+      label: "Weak-point measurements reviewed",
+      detail: `Needs 3+ comparable body-part measurements. ${changes.length}/3 found.`
     };
   }
 
-  const [lowestMuscle, setCount] = trainedMuscles.sort((a, b) => a[1] - b[1])[0];
+  const weakest = changes.sort((a, b) => a.change - b.change)[0];
   return {
     done: true,
-    label: "Weak-point volume reviewed",
-    detail: `Lowest weekly volume: ${titleCase(lowestMuscle)} at ${setCount} logged sets.`
+    label: "Weak-point measurements reviewed",
+    detail: `Lowest change since baseline: ${weakest.label} ${weakest.change >= 0 ? "+" : ""}${weakest.change.toFixed(1)} in.`
   };
 }
 
-function estimatedOneRepMax(weight, reps) {
-  const load = Number(weight);
-  const repCount = Number(reps);
-  if (!load || !repCount || load <= 0 || repCount <= 0) return 0;
-  return load * (1 + repCount / 30);
-}
-
-function topLiftProgressStatus() {
-  const liftSets = state.workoutLogs
-    .flatMap((log) => {
-      const timestamp = new Date(log.date).getTime();
-      if (!Number.isFinite(timestamp)) return [];
-      return (log.sets || []).map((set) => {
-        const estimate = estimatedOneRepMax(set.weight, set.reps);
-        return { ...set, timestamp, estimate };
-      });
-    })
-    .filter((set) => trackedTopLifts.has(set.exercise) && set.estimate > 0)
-    .sort((a, b) => a.timestamp - b.timestamp);
-
-  if (!liftSets.length) {
+function physiqueMeasurementProgressStatus() {
+  const logs = sortedMeasurementLogs();
+  if (logs.length < 2) {
     return {
       done: false,
-      label: "Top lifts progressing",
-      detail: "Log weight and reps on a tracked compound lift to start the comparison."
+      label: "Body measurements progressing",
+      detail: `Needs 2 measurement check-ins to compare progress. ${logs.length}/2 logged.`
     };
   }
 
-  const byExercise = liftSets.reduce((groups, set) => {
-    if (!groups.has(set.exercise)) groups.set(set.exercise, []);
-    groups.get(set.exercise).push(set);
-    return groups;
-  }, new Map());
+  const latest = logs[logs.length - 1];
+  const previous = logs[logs.length - 2];
+  const changes = comparableMeasurementChanges(latest, previous, measurementMetrics.map((metric) => metric.key));
 
-  let comparableLifts = 0;
-  let bestProgress = null;
+  if (!changes.length) {
+    return {
+      done: false,
+      label: "Body measurements progressing",
+      detail: "Needs matching measurements across two check-ins."
+    };
+  }
 
-  byExercise.forEach((sets, exercise) => {
-    const latestTimestamp = sets[sets.length - 1].timestamp;
-    const latestBest = Math.max(...sets.filter((set) => set.timestamp === latestTimestamp).map((set) => set.estimate));
-    const priorSets = sets.filter((set) => set.timestamp < latestTimestamp);
-    if (!priorSets.length) return;
-    comparableLifts += 1;
-    const priorBest = Math.max(...priorSets.map((set) => set.estimate));
-    const gain = latestBest - priorBest;
-    const threshold = Math.max(1, priorBest * 0.01);
-    if (gain >= threshold && (!bestProgress || gain > bestProgress.gain)) {
-      bestProgress = { exercise, gain };
-    }
-  });
+  const ranked = changes.map((change) => {
+    const metric = measurementMetrics.find((item) => item.key === change.key);
+    const progress = metric?.direction === "down" ? -change.change : change.change;
+    return { ...change, progress, direction: metric?.direction || "up" };
+  }).sort((a, b) => b.progress - a.progress);
 
-  if (bestProgress) {
+  const best = ranked[0];
+  if (best.progress >= 0.1) {
+    const unit = best.key === "bodyFat" ? "%" : "in";
     return {
       done: true,
-      label: "Top lifts progressing",
-      detail: `Latest best set is +${bestProgress.gain.toFixed(1)} lb estimated 1RM on ${bestProgress.exercise}.`
-    };
-  }
-
-  if (!comparableLifts) {
-    return {
-      done: false,
-      label: "Top lifts progressing",
-      detail: "Needs the same tracked lift logged in 2 separate workouts."
+      label: "Body measurements progressing",
+      detail: `${best.label} ${best.change >= 0 ? "+" : ""}${best.change.toFixed(1)} ${unit} since last check-in.`
     };
   }
 
   return {
     done: false,
-    label: "Top lifts progressing",
-    detail: "Progress means beating the prior best estimated 1RM by at least 1 lb or 1%."
+    label: "Body measurements progressing",
+    detail: "Progress means a target measurement improves by 0.1+ since the prior check-in."
   };
 }
 
@@ -1620,8 +1575,8 @@ function stageChecklist(timeline) {
 
   return [
     ...base,
-    weakPointVolumeStatus(),
-    topLiftProgressStatus()
+    weakPointMeasurementStatus(),
+    physiqueMeasurementProgressStatus()
   ];
 }
 
