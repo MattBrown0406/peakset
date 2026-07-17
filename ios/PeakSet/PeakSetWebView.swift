@@ -35,12 +35,24 @@ struct PeakSetWebView: UIViewRepresentable {
         for handler in ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit"] {
             uiView.configuration.userContentController.removeScriptMessageHandler(forName: handler)
         }
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
+        coordinator.webView = nil
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         private var bellPlayer: AVAudioPlayer?
-        private let isoFormatter = ISO8601DateFormatter()
+        private let fractionalISOFormatter: ISO8601DateFormatter = {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter
+        }()
+        private let fallbackISOFormatter = ISO8601DateFormatter()
+
+        private func parseISODate(_ value: String) -> Date? {
+            fractionalISOFormatter.date(from: value) ?? fallbackISOFormatter.date(from: value)
+        }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
@@ -63,6 +75,14 @@ struct PeakSetWebView: UIViewRepresentable {
                 PeakSetTimerService.shared.cancel()
                 return
             }
+            if action == "reconcile" {
+                PeakSetTimerService.shared.reconcile { [weak self] delivered in
+                    DispatchQueue.main.async {
+                        self?.webView?.evaluateJavaScript("window.handleNativeTimerReconcile?.({ delivered: \(delivered ? "true" : "false") });")
+                    }
+                }
+                return
+            }
             if action == "start", let seconds = payload["seconds"] as? Double {
                 PeakSetTimerService.shared.start(seconds: seconds)
             } else if action == "start", let seconds = payload["seconds"] as? Int {
@@ -77,29 +97,40 @@ struct PeakSetWebView: UIViewRepresentable {
             switch action {
             case "authorize":
                 service.requestAuthorization { [weak self] result in
-                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "connected", "message": value] })
+                    self?.sendHealthKitResult(result.map { summary -> [String: Any] in [
+                        "status": "authorizationCompleted",
+                        "message": "Apple Health authorization request completed",
+                        "weightWrite": summary.bodyMassWrite,
+                        "workoutWrite": summary.workoutWrite
+                    ] })
                 }
             case "readSteps":
                 service.readTodaySteps { [weak self] result in
-                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "connected", "message": "Today's steps imported", "steps": value] })
+                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "stepsImported", "message": "Today's steps imported", "steps": value] })
                 }
             case "syncWeight":
-                guard let weight = Self.doubleValue(payload["weight"]), weight > 0 else {
-                    sendHealthKitResult(.failure(PeakSetHealthKitService.ServiceError.saveFailed))
+                guard let weight = Self.doubleValue(payload["weight"]), weight.isFinite, weight > 0,
+                      let dateText = payload["date"] as? String,
+                      let date = parseISODate(dateText) else {
+                    sendHealthKitResult(.failure(PeakSetHealthKitService.ServiceError.invalidPayload))
                     return
                 }
-                let date = (payload["date"] as? String).flatMap { self.isoFormatter.date(from: $0) } ?? Date()
                 service.saveWeight(pounds: weight, date: date) { [weak self] result in
-                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "connected", "message": value] })
+                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "weightSaved", "message": value] })
                 }
             case "saveWorkout":
                 let title = payload["title"] as? String ?? "PeakSet Workout"
+                let workoutID = payload["id"] as? String ?? UUID().uuidString
                 guard let startText = payload["startedAt"] as? String,
                       let endText = payload["endedAt"] as? String,
-                      let start = isoFormatter.date(from: startText),
-                      let end = isoFormatter.date(from: endText) else { return }
-                service.saveWorkout(title: title, start: start, end: end) { [weak self] result in
-                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "connected", "message": value] })
+                      let start = parseISODate(startText),
+                      let end = parseISODate(endText),
+                      end > start else {
+                    sendHealthKitResult(.failure(PeakSetHealthKitService.ServiceError.invalidPayload))
+                    return
+                }
+                service.saveWorkout(id: workoutID, title: title, start: start, end: end) { [weak self] result in
+                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "workoutSaved", "message": value] })
                 }
             default:
                 break
@@ -164,7 +195,13 @@ struct PeakSetWebView: UIViewRepresentable {
         private func presentShareSheet(for fileURL: URL) {
             DispatchQueue.main.async {
                 let activityController = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
-                guard let presenter = Self.topViewController() else { return }
+                guard let presenter = Self.topViewController() else {
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return
+                }
+                activityController.completionWithItemsHandler = { _, _, _, _ in
+                    try? FileManager.default.removeItem(at: fileURL)
+                }
                 if let popover = activityController.popoverPresentationController {
                     popover.sourceView = presenter.view
                     popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0)

@@ -1022,7 +1022,7 @@ textarea {
 }
 
 .progression-callout {
-  color: var(--ink);
+  color: var(--text);
   border-left: 3px solid var(--green);
 }
 
@@ -1056,7 +1056,7 @@ textarea {
   padding: 7px 9px;
   border-radius: 9px;
   background: rgba(255, 255, 255, 0.06);
-  color: var(--ink);
+  color: var(--text);
   border: 1px solid var(--line);
 }
 
@@ -1101,6 +1101,17 @@ textarea {
 }
 
 @media (max-width: 560px) {
+  .toolkit-exercise-controls .actions,
+  .topbar .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .toolkit-exercise-controls select,
+  .topbar select {
+    width: 100%;
+    min-width: 0;
+  }
+
   .toolkit-set-row,
   .toolkit-set-row.reps-only {
     grid-template-columns: 40px 1fr;

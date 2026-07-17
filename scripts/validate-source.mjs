@@ -78,6 +78,12 @@ assert(toolkit.includes("peaksetTimer"), "Web timer is not connected to the nati
 assert(nativeServices.includes("UNTimeIntervalNotificationTrigger"), "Native background timer notification is missing");
 assert(nativeServices.includes("HKStatisticsQuery"), "HealthKit step import is missing");
 assert(nativeServices.includes("traditionalStrengthTraining"), "HealthKit workout export is missing");
+assert(nativeServices.includes("HKWorkoutBuilder"), "HealthKit workout export is not using the iOS 17 workout builder");
+assert(swiftWebView.includes("withFractionalSeconds"), "HealthKit bridge cannot parse JavaScript ISO timestamps");
+assert(toolkit.includes("builderFormDraft"), "Builder form state is not preserved across draft edits");
+assert(toolkit.includes("buildToolkitCoachReportLines"), "Check-ins and prep activity are missing from coach PDFs");
+assert(toolkit.includes("handleNativeTimerReconcile"), "Background timer reconciliation is missing");
+assert(app.includes('postMessage({ action: "reconcile" })'), "Foreground timer reconciliation is missing");
 assert(xcodeProject.includes("PeakSetNativeServices.swift in Sources"), "Native services are not in the Xcode source phase");
 assert(xcodeProject.includes("CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements"), "HealthKit entitlements are not configured for signing");
 assert(infoPlist.includes("NSHealthShareUsageDescription") && infoPlist.includes("NSHealthUpdateUsageDescription"), "HealthKit privacy descriptions are missing");

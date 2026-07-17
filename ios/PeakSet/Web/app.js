@@ -2231,6 +2231,7 @@ function ensureTimerTick() {
     if (left <= 0) {
       state.timer.running = false;
       state.timer.left = 0;
+      if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel" });
       playBoxingBell();
       if (state.timer.fullscreen) {
         saveState();
@@ -2691,9 +2692,13 @@ function render() {
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && state.timer.running) {
+  if (document.hidden && timerTick) {
+    clearInterval(timerTick);
+    timerTick = null;
+  } else if (!document.hidden && state.timer.running) {
     primeTimerAudio();
-    ensureTimerTick();
+    if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "reconcile" });
+    else ensureTimerTick();
   }
 });
 

@@ -17,9 +17,11 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.healthcare-fitness</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
@@ -30,7 +32,7 @@
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>NSHealthShareUsageDescription</key>
-	<string>PeakSet reads steps and workout information to keep bodybuilding check-ins and training history together.</string>
+	<string>PeakSet reads your step count when you choose to import it into a check-in.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>PeakSet writes body weight and completed strength workouts to Apple Health when you choose to sync them.</string>
 	<key>UISupportedInterfaceOrientations</key>
