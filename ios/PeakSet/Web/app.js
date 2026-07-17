@@ -681,6 +681,8 @@ const defaultState = {
 let state = loadState();
 let timerTick = null;
 let audioContext = null;
+let bellAudio = null;
+let bellPlaybackStatus = { mode: "idle", error: "" };
 
 function loadState() {
   try {
@@ -839,11 +841,65 @@ function getAudioContext() {
   if (typeof window === "undefined") return null;
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) return null;
-  if (!audioContext) audioContext = new AudioContextClass();
+  if (!audioContext || audioContext.state === "closed") audioContext = new AudioContextClass();
   if (audioContext.state === "suspended") {
     audioContext.resume().catch(() => {});
   }
   return audioContext;
+}
+
+function getBellAudio() {
+  if (typeof Audio === "undefined") return null;
+  if (!bellAudio) {
+    bellAudio = new Audio("assets/boxing-bell.wav");
+    bellAudio.preload = "auto";
+    bellAudio.volume = 1;
+    bellAudio.load();
+  }
+  return bellAudio;
+}
+
+async function awaitWithTimeout(promise, timeoutMs, label) {
+  let timeoutId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const error = new Error(`${label} timed out`);
+          error.name = "TimeoutError";
+          reject(error);
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function primeTimerAudio() {
+  const context = getAudioContext();
+  if (context?.state === "suspended") context.resume().catch(() => {});
+
+  const audio = getBellAudio();
+  if (!audio || !audio.paused) return;
+  audio.muted = true;
+  audio.currentTime = 0;
+  const playAttempt = audio.play();
+  if (playAttempt?.then) {
+    let reset = false;
+    const resetPrime = () => {
+      if (reset) return;
+      reset = true;
+      audio.pause();
+      try { audio.currentTime = 0; } catch (_) {}
+      audio.muted = false;
+    };
+    setTimeout(resetPrime, 800);
+    playAttempt
+      .then(resetPrime)
+      .catch(resetPrime);
+  }
 }
 
 function playBellStrike(context, startTime, duration = 1.35) {
@@ -883,9 +939,43 @@ function playBellStrike(context, startTime, duration = 1.35) {
   });
 }
 
-function playBoxingBell() {
+async function playBoxingBell() {
+  const nativeBell = window.webkit?.messageHandlers?.peaksetPlayBell;
+  if (nativeBell) {
+    nativeBell.postMessage({});
+    bellPlaybackStatus = { mode: "native", error: "" };
+    return;
+  }
+
+  const audio = getBellAudio();
+  if (audio) {
+    try {
+      if (!audio.paused) audio.pause();
+      try { audio.currentTime = 0; } catch (_) {}
+      audio.muted = false;
+      audio.volume = 1;
+      await awaitWithTimeout(audio.play(), 800, "Bell audio playback");
+      if (audio.paused) throw new Error("Bell audio did not start");
+      bellPlaybackStatus = { mode: "asset", error: "" };
+      return;
+    } catch (error) {
+      audio.pause();
+      bellPlaybackStatus = { mode: "fallback", error: error?.name || "media-playback-failed" };
+      // Fall through to synthesized audio if media playback was interrupted.
+    }
+  }
+
   const context = getAudioContext();
   if (!context) return;
+  if (context.state === "suspended") {
+    try {
+      await awaitWithTimeout(context.resume(), 800, "Audio context resume");
+    } catch (_) {
+      return;
+    }
+  }
+  if (context.state !== "running") return;
+  bellPlaybackStatus = { mode: "synthesized", error: bellPlaybackStatus.error };
   const now = context.currentTime + 0.02;
   playBellStrike(context, now);
   playBellStrike(context, now + 0.38, 1.2);
@@ -2095,7 +2185,7 @@ function adjustRest(seconds) {
 }
 
 function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null) {
-  getAudioContext();
+  primeTimerAudio();
   const now = Date.now();
   const duration = Math.max(15, Math.min(300, Number(seconds) || DEFAULT_REST_SECONDS));
   if (state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
@@ -2226,6 +2316,7 @@ function renderRestOverlay(left, progress) {
             ${restPresetButtons(true)}
           </div>
           <button class="primary-btn" onclick="closeRestOverlay()">${state.timer.running ? "Return to Workout" : "Next Set"}</button>
+          <button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button>
           <button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button>
         </div>
       </div>
@@ -2338,6 +2429,7 @@ function renderSession() {
             ${restPresetButtons(false)}
           </div>
           <p class="muted" style="margin: 0; text-align: center; font-size: 12px;">Bell plays through the current device audio output.</p>
+          <button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button>
           <button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button>
         </div>
       </aside>
@@ -2597,5 +2689,12 @@ function render() {
   `;
   updateTimerDom();
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && state.timer.running) {
+    primeTimerAudio();
+    ensureTimerTick();
+  }
+});
 
 render();

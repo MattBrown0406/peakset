@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import WebKit
+import AVFoundation
 
 struct PeakSetWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
@@ -10,7 +11,10 @@ struct PeakSetWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(context.coordinator, name: "peaksetSharePdf")
+        configuration.userContentController.add(context.coordinator, name: "peaksetPlayBell")
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -28,12 +32,19 @@ struct PeakSetWebView: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: "peaksetSharePdf")
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "peaksetPlayBell")
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
+        private var bellPlayer: AVAudioPlayer?
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "peaksetPlayBell" {
+                playBell()
+                return
+            }
+
             guard message.name == "peaksetSharePdf",
                   let payload = message.body as? [String: Any],
                   let filename = payload["filename"] as? String,
@@ -50,6 +61,26 @@ struct PeakSetWebView: UIViewRepresentable {
                 presentShareSheet(for: fileURL)
             } catch {
                 webView?.evaluateJavaScript("toast('PDF export failed.')")
+            }
+        }
+
+        private func playBell() {
+            guard let bellURL = Bundle.main.url(
+                forResource: "boxing-bell",
+                withExtension: "wav",
+                subdirectory: "Web/assets"
+            ) else {
+                webView?.evaluateJavaScript("toast('Bell audio is unavailable.')")
+                return
+            }
+
+            do {
+                bellPlayer = try AVAudioPlayer(contentsOf: bellURL)
+                bellPlayer?.volume = 1
+                bellPlayer?.prepareToPlay()
+                bellPlayer?.play()
+            } catch {
+                webView?.evaluateJavaScript("toast('Bell audio could not play.')")
             }
         }
 
