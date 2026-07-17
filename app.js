@@ -53,6 +53,8 @@ const exerciseLibrary = [
   { id: "decline-barbell-press", name: "Decline Barbell Press", muscle: "chest", equipment: "Barbell, decline bench", hotel: false, cue: "Lower chest pressing with less shoulder demand." },
   { id: "smith-incline-press", name: "Smith Machine Incline Press", muscle: "chest", equipment: "Smith machine", hotel: false, cue: "Lock in the path and push close to failure." },
   { id: "machine-chest-press", name: "Machine Chest Press", muscle: "chest", equipment: "Chest press machine", hotel: false, cue: "Stable pressing for hard top sets and drop sets." },
+  { id: "machine-decline-chest-press", name: "Machine Decline Chest Press", muscle: "chest", equipment: "Decline chest press machine", hotel: false, cue: "Keep shoulder blades pinned and press through the lower-chest line." },
+  { id: "machine-incline-chest-press", name: "Machine Incline Chest Press", muscle: "chest", equipment: "Incline chest press machine", hotel: false, cue: "Set the seat for an upper-chest path and keep the shoulders down." },
   { id: "pec-deck", name: "Pec Deck Fly", muscle: "chest", equipment: "Pec deck", hotel: false, cue: "Drive elbows together and pause the squeeze." },
   { id: "high-cable-fly", name: "High Cable Fly", muscle: "chest", equipment: "Cable crossover", hotel: true, cue: "High-to-low path for lower chest finish." },
   { id: "mid-cable-fly", name: "Mid Cable Fly", muscle: "chest", equipment: "Cable crossover", hotel: true, cue: "Keep tension even through the midline." },
@@ -99,6 +101,7 @@ const exerciseLibrary = [
 
   { id: "barbell-curl", name: "Barbell Curl", muscle: "arms", equipment: "Barbell", hotel: false, cue: "Classic heavy biceps overload." },
   { id: "preacher-curl", name: "Preacher Curl", muscle: "arms", equipment: "Preacher bench", hotel: false, cue: "Lock elbows and own the stretch." },
+  { id: "machine-preacher-curl", name: "Machine Preacher Curl", muscle: "arms", equipment: "Preacher curl machine", hotel: false, cue: "Keep the upper arms planted and control the lengthened position." },
   { id: "incline-db-curl", name: "Incline Dumbbell Curl", muscle: "arms", equipment: "Dumbbells, incline bench", hotel: true, cue: "Long-head biceps stretch." },
   { id: "spider-curl", name: "Spider Curl", muscle: "arms", equipment: "Incline bench, dumbbells", hotel: true, cue: "Chest down, strict biceps squeeze." },
   { id: "cable-curl", name: "Cable Curl", muscle: "arms", equipment: "Cable bar or handles", hotel: true, cue: "Constant tension through the full rep." },
@@ -107,6 +110,7 @@ const exerciseLibrary = [
   { id: "concentration-curl", name: "Concentration Curl", muscle: "arms", equipment: "Dumbbell", hotel: true, cue: "Slow squeeze, no shoulder movement." },
   { id: "close-grip-bench", name: "Close-Grip Bench Press", muscle: "arms", equipment: "Barbell, bench", hotel: false, cue: "Heavy triceps compound." },
   { id: "skull-crusher", name: "Skull Crusher", muscle: "arms", equipment: "EZ bar or dumbbells", hotel: true, cue: "Let elbows travel slightly back for stretch." },
+  { id: "decline-skull-crusher", name: "Decline Skull Crusher", muscle: "arms", equipment: "EZ bar or dumbbells, decline bench", hotel: false, cue: "Keep the upper arms stable and lower behind the forehead under control." },
   { id: "crossbody-triceps-extension", name: "Crossbody Cable Triceps Extension", muscle: "arms", equipment: "Cable handle", hotel: true, cue: "Finish across the body for lateral-head work." },
   { id: "single-arm-pushdown", name: "Single-Arm Cable Pushdown", muscle: "arms", equipment: "Cable handle", hotel: true, cue: "Lock down the elbow and extend hard." },
   { id: "dip-triceps", name: "Triceps Dip", muscle: "arms", equipment: "Dip bars", hotel: false, cue: "Upright torso to bias triceps." },
@@ -124,12 +128,15 @@ const exerciseLibrary = [
   { id: "seated-leg-curl", name: "Seated Leg Curl", muscle: "legs", equipment: "Leg curl machine", hotel: false, cue: "Great lengthened hamstring tension." },
   { id: "nordic-curl", name: "Nordic Curl", muscle: "legs", equipment: "Anchor or partner", hotel: false, cue: "Advanced eccentric hamstring work." },
   { id: "hip-thrust", name: "Hip Thrust", muscle: "legs", equipment: "Barbell or dumbbell, bench", hotel: true, cue: "Posterior pelvic tilt and hard glute lockout." },
+  { id: "machine-hip-thrust", name: "Machine Hip Thrust", muscle: "legs", equipment: "Hip thrust machine", hotel: false, cue: "Brace the torso and finish with a controlled glute contraction." },
   { id: "cable-pull-through", name: "Cable Pull-Through", muscle: "legs", equipment: "Cable, rope", hotel: true, cue: "Hinge through the hips and squeeze glutes." },
-  { id: "seated-calf-raise", name: "Seated Calf Raise", muscle: "legs", equipment: "Seated calf machine", hotel: false, cue: "Soleus-focused calf work." },
+  { id: "seated-calf-raise", name: "Seated Calf Raises", muscle: "legs", equipment: "Seated calf machine", hotel: false, cue: "Soleus-focused calf work with a full stretch and controlled top position." },
+  { id: "standing-machine-calf-raise", name: "Standing Machine Calf Raises", muscle: "legs", equipment: "Standing calf raise machine", hotel: false, cue: "Keep the knees softly extended and use a full ankle range without bouncing." },
   { id: "leg-press-calf-raise", name: "Leg Press Calf Raise", muscle: "legs", equipment: "Leg press", hotel: false, cue: "Deep stretch and full plantar flexion." },
   { id: "cable-hip-abduction", name: "Cable Hip Abduction", muscle: "legs", equipment: "Cable, ankle cuff", hotel: true, cue: "Glute medius shape and hip stability." },
 
   { id: "cable-crunch", name: "Cable Crunch", muscle: "abs", equipment: "Cable, rope", hotel: true, cue: "Round the spine down and squeeze the abs, not the hips." },
+  { id: "stability-ball-crunch", name: "Stability Ball Crunches", muscle: "abs", equipment: "Stability ball", hotel: false, cue: "Let the torso extend over the ball, then shorten the ribs toward the pelvis." },
   { id: "hanging-leg-raise", name: "Hanging Leg Raise", muscle: "abs", equipment: "Pull-up bar or captain chair", hotel: false, cue: "Posteriorly tilt the pelvis before lifting the legs." },
   { id: "captains-chair-knee-raise", name: "Captain's Chair Knee Raise", muscle: "abs", equipment: "Captain chair", hotel: false, cue: "Curl knees up toward the ribs without swinging." },
   { id: "decline-sit-up", name: "Decline Sit-Up", muscle: "abs", equipment: "Decline bench", hotel: false, cue: "Control the lowering phase and avoid yanking the neck." },
@@ -186,7 +193,8 @@ const planTemplates = [
       ["db-shoulder-press", 4, "8-10", 105],
       ["db-lateral-raise", 5, "12-20", 45],
       ["cable-lateral-raise", 3, "15-20", 45],
-      ["rear-delt-fly", 4, "12-20", 60]
+      ["rear-delt-fly", 4, "12-20", 60],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -372,7 +380,8 @@ const planTemplates = [
       ["barbell-overhead-press", 4, "5-8", 150],
       ["machine-press", 4, "8-10", 105],
       ["machine-lateral-raise", 4, "12-15", 60],
-      ["reverse-pec-deck", 4, "12-20", 60]
+      ["reverse-pec-deck", 4, "12-20", 60],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -386,7 +395,8 @@ const planTemplates = [
       ["seated-lateral-raise", 4, "12-20", 45],
       ["lean-away-lateral-raise", 4, "12-20 each", 40],
       ["cable-lateral-raise", 3, "15-25", 35],
-      ["upright-row", 3, "12-15", 50]
+      ["upright-row", 3, "12-15", 50],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -414,7 +424,8 @@ const planTemplates = [
       ["arnold-press", 4, "10-12", 60],
       ["db-lateral-raise", 5, "15-25", 35],
       ["cable-lateral-raise", 4, "15-25", 35],
-      ["rear-delt-fly", 4, "15-20", 40]
+      ["rear-delt-fly", 4, "15-20", 40],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -583,7 +594,8 @@ const planTemplates = [
       ["wide-pulldown", 4, "10-12", 60],
       ["lean-away-lateral-raise", 4, "12-20 each", 40],
       ["straight-arm-pulldown", 3, "12-15", 40],
-      ["cable-lateral-raise", 3, "15-25", 35]
+      ["cable-lateral-raise", 3, "15-25", 35],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -722,6 +734,10 @@ function escapeHtml(value) {
 
 function exerciseById(id) {
   return exerciseLibrary.find((item) => item.id === id) || exerciseLibrary[0];
+}
+
+function isRepsOnlyExercise(exercise) {
+  return Boolean(exercise?.repsOnly || exerciseById(exercise?.id).muscle === "abs");
 }
 
 function divisionSelect(id, selected = "") {
@@ -2006,9 +2022,11 @@ function beginWorkoutFromPlan(plan) {
     startedAt: new Date().toISOString(),
     exercises: plan.exercises.map(([id, sets, reps, rest, dropSets = 0]) => {
       const drops = Math.max(0, Math.min(4, Number(dropSets) || 0));
+      const libraryExercise = exerciseById(id);
       return {
         id,
-        name: exerciseById(id).name,
+        name: libraryExercise.name,
+        repsOnly: libraryExercise.muscle === "abs",
         targetSets: Number(sets),
         targetDropSets: drops,
         targetReps: String(reps),
@@ -2053,8 +2071,9 @@ function updateSet(exIndex, setIndex, field, value) {
 function completeSet(exIndex, setIndex) {
   const ex = state.activeWorkout.exercises[exIndex];
   const set = ex.sets[setIndex];
-  if (!set.weight || !set.reps) {
-    toast("Enter weight and reps before completing the set.");
+  const repsOnly = isRepsOnlyExercise(ex);
+  if (!set.reps || (!repsOnly && !set.weight)) {
+    toast(repsOnly ? "Enter reps before completing the set." : "Enter weight and reps before completing the set.");
     return;
   }
   set.done = !set.done;
@@ -2169,7 +2188,8 @@ function formatTime(seconds) {
 }
 
 function setLogSummary(set) {
-  return `${set.dropSet ? "Drop " : ""}${set.weight || "--"} x ${set.reps || "--"}`;
+  if (set.repsOnly || !set.weight) return `${set.dropSet ? "Drop " : ""}${set.reps || "--"} reps`;
+  return `${set.dropSet ? "Drop " : ""}${set.weight} x ${set.reps || "--"}`;
 }
 
 function restPresetButtons(fullscreen = false) {
@@ -2219,7 +2239,7 @@ function finishWorkout() {
   const sets = workout.exercises.flatMap((exercise) =>
     exercise.sets
       .filter((set) => set.done)
-      .map((set) => ({ exercise: exercise.name, weight: set.weight, reps: set.reps, dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
+      .map((set) => ({ exercise: exercise.name, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps, repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
   );
   if (sets.length === 0) {
     toast("Complete at least one set before saving.");
@@ -2290,9 +2310,9 @@ function renderSession() {
             </div>
             <div class="set-table">
               ${exercise.sets.map((set, setIndex) => `
-                <div class="set-row">
+                <div class="set-row ${isRepsOnlyExercise(exercise) ? "reps-only" : ""}">
                   <div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>
-                  <input type="number" inputmode="decimal" placeholder="Weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />
+                  ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" placeholder="Weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
                   <input type="number" inputmode="numeric" placeholder="Reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
                   <button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
                 </div>

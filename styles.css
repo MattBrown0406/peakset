@@ -753,6 +753,10 @@ textarea:focus {
   background: rgba(255, 255, 255, 0.045);
 }
 
+.set-row.reps-only {
+  grid-template-columns: 54px minmax(0, 1fr) 112px;
+}
+
 .set-number {
   display: grid;
   place-items: center;
@@ -940,6 +944,10 @@ textarea:focus {
 
 .set-row {
   grid-template-columns: 46px 1fr 1fr;
+}
+
+.set-row.reps-only {
+  grid-template-columns: 46px 1fr;
 }
 
 .set-row .primary-btn,

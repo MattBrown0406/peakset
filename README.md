@@ -14,7 +14,10 @@ Before making an Xcode build after web changes, run:
 
 ```bash
 scripts/sync-ios-web.sh
+node scripts/validate-source.mjs
 ```
+
+The validator checks exercise IDs and required library entries, confirms Incline Y-Raise is included in every shoulder workout template, verifies reps-only abs logging, confirms shake-to-undo remains disabled, and ensures the web files are synchronized into the iOS bundle.
 
 The Logbook PDF export uses a native iOS share sheet in the Xcode build, so users can text or email the PDF from the device.
 
