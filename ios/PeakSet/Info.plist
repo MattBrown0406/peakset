@@ -29,6 +29,10 @@
 	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>NSHealthShareUsageDescription</key>
+	<string>PeakSet reads steps and workout information to keep bodybuilding check-ins and training history together.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>PeakSet writes body weight and completed strength workouts to Apple Health when you choose to sync them.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

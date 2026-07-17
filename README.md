@@ -17,7 +17,7 @@ scripts/sync-ios-web.sh
 node scripts/validate-source.mjs
 ```
 
-The validator checks exercise IDs and required library entries, confirms Incline Y-Raise is included in every shoulder workout template, verifies reps-only abs logging, confirms shake-to-undo remains disabled, and ensures the web files are synchronized into the iOS bundle.
+The validator checks exercise IDs and required library entries, confirms Incline Y-Raise is included in every shoulder workout template, verifies reps-only abs logging, validates the Bodybuilder Toolkit and native bridges, confirms HealthKit signing/privacy configuration, confirms shake-to-undo remains disabled, and ensures the web files are synchronized into the iOS bundle.
 
 The Logbook PDF export uses a native iOS share sheet in the Xcode build, so users can text or email the PDF from the device.
 
@@ -32,10 +32,16 @@ The Logbook PDF export uses a native iOS share sheet in the Xcode build, so user
 - Abs exercise library with ab finishers mixed into many plans instead of a standalone abs day
 - Road Gym mode for hotel gyms with a bench, dumbbells up to 50 lb, cable handles, rope, and ankle cuffs
 - 30+ pre-planned body-part, prep, weak-point, and Road Gym workouts
-- Custom workout builder that filters exercises by body part, allows Abs add-ons, and starts sessions immediately
-- Set-by-set logging for weight and reps
-- Adjustable rest timer that defaults to 3 minutes and plays a boxing-style bell when rest ends
-- Separate body weight logs and body measurement check-ins
+- Advanced workout builder with equipment profiles, scheduling, reordering, duplication, supersets, set types, and reusable templates
+- Live-workout editing for adding, removing, reordering, substituting, or changing the planned set count
+- Set-by-set logging for weight, reps, RIR, and bodybuilding set type
+- Previous-performance display, Copy Last, exercise history, PR statistics, and deterministic double-progression guidance
+- Searchable exercise library with favorites, persistent setup notes, pain flags, and equipment-aware substitutions
+- Native-backed rest timer with a boxing-style bell and local notification when iOS backgrounds the app
+- Expanded body measurements and selectable physique trend charts
+- Weekly recovery check-ins plus cardio, steps, and posing adherence logs
+- Apple Health authorization, step import, weight export, and completed strength-workout export
+- A Codable shared workout model that can be reused by a future watchOS companion target
 - Coach-ready Logbook tab with PDF export for body weight, measurements, and workout logs
 - Local progress history stored in browser localStorage
 

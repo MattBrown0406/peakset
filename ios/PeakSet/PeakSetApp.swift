@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import UserNotifications
 
 private enum PeakSetAudioSession {
     static func activate() {
@@ -10,8 +11,30 @@ private enum PeakSetAudioSession {
     }
 }
 
+final class PeakSetAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        // JavaScript plays the native bell while PeakSet is foregrounded.
+        // The local notification supplies the bell only when iOS suspends the app.
+        completionHandler([])
+    }
+}
+
 @main
 struct PeakSetApp: App {
+    @UIApplicationDelegateAdaptor(PeakSetAppDelegate.self) private var appDelegate
+
     init() {
         // Prevent iOS from presenting the system Undo/Redo prompt when the
         // device is shaken while PeakSet is running.

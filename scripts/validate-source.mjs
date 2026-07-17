@@ -7,9 +7,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 const readBuffer = (relativePath) => fs.readFileSync(path.join(root, relativePath));
 const app = read("app.js");
+const toolkit = read("toolkit.js");
 const styles = read("styles.css");
 const swiftApp = read("ios/PeakSet/PeakSetApp.swift");
 const swiftWebView = read("ios/PeakSet/PeakSetWebView.swift");
+const nativeServices = read("ios/PeakSet/PeakSetNativeServices.swift");
+const xcodeProject = read("ios/PeakSet.xcodeproj/project.pbxproj");
+const infoPlist = read("ios/PeakSet/Info.plist");
+const entitlements = read("ios/PeakSet/PeakSet.entitlements");
 
 function literalBetween(source, start, end) {
   const startIndex = source.indexOf(start);
@@ -59,15 +64,33 @@ assert(app.includes('document.addEventListener("visibilitychange"'), "Timer audi
 assert(swiftApp.includes("AVAudioSession.sharedInstance()"), "Native audio session is not configured");
 assert(swiftApp.includes("UIApplication.didBecomeActiveNotification"), "Native audio session is not restored after foregrounding");
 assert(swiftWebView.includes("mediaTypesRequiringUserActionForPlayback = []"), "WKWebView media playback is still gesture-restricted");
-assert(swiftWebView.includes('name: "peaksetPlayBell"'), "Native bell message handler is not registered");
+assert(swiftWebView.includes('"peaksetPlayBell"'), "Native bell message handler is not registered");
 assert(swiftWebView.includes("AVAudioPlayer(contentsOf: bellURL)"), "Native bell player is not configured");
+for (const feature of [
+  "lastExercisePerformance", "progressionSuggestion", "renderExerciseHistoryPanel",
+  "substituteActiveExercise", "equipmentProfiles", "Superset", "setTypeOptions",
+  "saveWeeklyCheckIn", "savePrepLog", "measurementDefinitions", "requestHealthKit",
+  "favoriteExercises", "saveExerciseSetting"
+]) {
+  assert(toolkit.includes(feature), `Bodybuilder toolkit feature is missing: ${feature}`);
+}
+assert(toolkit.includes("peaksetTimer"), "Web timer is not connected to the native background timer");
+assert(nativeServices.includes("UNTimeIntervalNotificationTrigger"), "Native background timer notification is missing");
+assert(nativeServices.includes("HKStatisticsQuery"), "HealthKit step import is missing");
+assert(nativeServices.includes("traditionalStrengthTraining"), "HealthKit workout export is missing");
+assert(xcodeProject.includes("PeakSetNativeServices.swift in Sources"), "Native services are not in the Xcode source phase");
+assert(xcodeProject.includes("CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements"), "HealthKit entitlements are not configured for signing");
+assert(infoPlist.includes("NSHealthShareUsageDescription") && infoPlist.includes("NSHealthUpdateUsageDescription"), "HealthKit privacy descriptions are missing");
+assert(entitlements.includes("com.apple.developer.healthkit"), "HealthKit entitlement is missing");
 
-for (const filename of ["app.js", "styles.css", "index.html"]) {
+for (const filename of ["app.js", "toolkit.js", "styles.css", "index.html"]) {
   assert.equal(read(filename), read(`ios/PeakSet/Web/${filename}`), `${filename} is not synced into the iOS bundle`);
 }
 assert.deepEqual(readBuffer("assets/boxing-bell.wav"), readBuffer("ios/PeakSet/Web/assets/boxing-bell.wav"), "Boxing bell audio is not synced into the iOS bundle");
+assert.deepEqual(readBuffer("assets/boxing-bell.wav"), readBuffer("ios/PeakSet/boxing-bell.wav"), "Native notification bell is not synced");
 
 console.log(`Validated ${exercises.length} exercises and ${plans.length} workout templates.`);
 console.log(`Incline Y-Raise is present in ${shoulderPlans.length} shoulder workout templates.`);
 console.log("Abs session rows are reps-only and shake-to-undo is disabled.");
 console.log("Timer bell asset, audio unlock, and iOS audio-session recovery are configured.");
+console.log("Bodybuilder toolkit, native background timer, and HealthKit bridges are configured.");

@@ -1,0 +1,36 @@
+name: iOS Build
+
+on:
+  push:
+    branches:
+      - main
+      - feature/bodybuilder-toolkit
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Sync bundled web app
+        run: bash scripts/sync-ios-web.sh
+
+      - name: Validate web and native integration
+        run: |
+          node --check app.js
+          node --check toolkit.js
+          node scripts/validate-source.mjs
+          git diff --exit-code
+
+      - name: Build iOS Simulator app
+        run: |
+          xcodebuild \
+            -project ios/PeakSet.xcodeproj \
+            -target PeakSet \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            CODE_SIGNING_ALLOWED=NO \
+            build

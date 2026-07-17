@@ -11,6 +11,8 @@
 		1A2B3C4D5E6F700000000002 /* PeakSetWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000102 /* PeakSetWebView.swift */; };
 		1A2B3C4D5E6F700000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000103 /* Assets.xcassets */; };
 		1A2B3C4D5E6F700000000004 /* Web in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000104 /* Web */; };
+		1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */; };
+		1A2B3C4D5E6F700000000006 /* boxing-bell.wav in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000108 /* boxing-bell.wav */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +22,9 @@
 		1A2B3C4D5E6F700000000103 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000104 /* Web */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Web; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000105 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetNativeServices.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000107 /* PeakSet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PeakSet.entitlements; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000108 /* boxing-bell.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "boxing-bell.wav"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -49,6 +54,9 @@
 				1A2B3C4D5E6F700000000103 /* Assets.xcassets */,
 				1A2B3C4D5E6F700000000104 /* Web */,
 				1A2B3C4D5E6F700000000105 /* Info.plist */,
+				1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */,
+				1A2B3C4D5E6F700000000107 /* PeakSet.entitlements */,
+				1A2B3C4D5E6F700000000108 /* boxing-bell.wav */,
 			);
 			path = PeakSet;
 			sourceTree = "<group>";
@@ -93,6 +101,11 @@
 				TargetAttributes = {
 					1A2B3C4D5E6F700000000400 = {
 						CreatedOnToolsVersion = 26.5;
+						SystemCapabilities = {
+							com.apple.HealthKit = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -121,6 +134,7 @@
 			files = (
 				1A2B3C4D5E6F700000000003 /* Assets.xcassets in Resources */,
 				1A2B3C4D5E6F700000000004 /* Web in Resources */,
+				1A2B3C4D5E6F700000000006 /* boxing-bell.wav in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -133,6 +147,7 @@
 			files = (
 				1A2B3C4D5E6F700000000001 /* PeakSetApp.swift in Sources */,
 				1A2B3C4D5E6F700000000002 /* PeakSetWebView.swift in Sources */,
+				1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -257,6 +272,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
@@ -283,6 +299,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
