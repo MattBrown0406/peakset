@@ -274,11 +274,11 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PeakSet/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Stage Forge";
+				INFOPLIST_KEY_CFBundleDisplayName = "Mass Method";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -301,11 +301,11 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PeakSet/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Stage Forge";
+				INFOPLIST_KEY_CFBundleDisplayName = "Mass Method";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

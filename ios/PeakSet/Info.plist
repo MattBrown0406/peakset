@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Stage Forge</string>
+	<string>Mass Method</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>Mass Method</string>
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
@@ -32,9 +32,9 @@
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>NSHealthShareUsageDescription</key>
-	<string>Stage Forge reads your step count when you choose to import it into a check-in.</string>
+	<string>Mass Method reads your step count when you choose to import it into a check-in.</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>Stage Forge writes body weight and completed strength workouts to Apple Health when you choose to sync them.</string>
+	<string>Mass Method writes body weight and completed strength workouts to Apple Health when you choose to sync them.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

@@ -192,7 +192,7 @@ final class PeakSetHealthKitService {
             case .healthDataUnavailable: return "Apple Health is unavailable on this device."
             case .authorizationDeclined: return "Apple Health authorization was not granted."
             case .saveFailed: return "Apple Health could not save this entry."
-            case .invalidPayload: return "Stage Forge could not validate the Apple Health entry."
+            case .invalidPayload: return "Mass Method could not validate the Apple Health entry."
             }
         }
     }

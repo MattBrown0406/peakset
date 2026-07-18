@@ -119,7 +119,7 @@ struct PeakSetWebView: UIViewRepresentable {
                     self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "weightSaved", "message": value] })
                 }
             case "saveWorkout":
-                let title = payload["title"] as? String ?? "PeakSet Workout"
+                let title = payload["title"] as? String ?? "Mass Method Workout"
                 let workoutID = payload["id"] as? String ?? UUID().uuidString
                 guard let startText = payload["startedAt"] as? String,
                       let endText = payload["endedAt"] as? String,

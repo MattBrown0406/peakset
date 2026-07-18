@@ -15,7 +15,7 @@ const nativeServices = read("ios/PeakSet/PeakSetNativeServices.swift");
 const xcodeProject = read("ios/PeakSet.xcodeproj/project.pbxproj");
 const infoPlist = read("ios/PeakSet/Info.plist");
 const entitlements = read("ios/PeakSet/PeakSet.entitlements");
-const appIcon = readBuffer("ios/PeakSet/Assets.xcassets/AppIcon.appiconset/StageForgeIcon.png");
+const appIcon = readBuffer("ios/PeakSet/Assets.xcassets/AppIcon.appiconset/MassMethodIcon.png");
 
 function literalBetween(source, start, end) {
   const startIndex = source.indexOf(start);
@@ -89,12 +89,13 @@ assert(xcodeProject.includes("PeakSetNativeServices.swift in Sources"), "Native 
 assert(xcodeProject.includes("CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements"), "HealthKit entitlements are not configured for signing");
 assert(infoPlist.includes("NSHealthShareUsageDescription") && infoPlist.includes("NSHealthUpdateUsageDescription"), "HealthKit privacy descriptions are missing");
 assert(entitlements.includes("com.apple.developer.healthkit"), "HealthKit entitlement is missing");
-assert(app.includes('const APP_NAME = "Stage Forge"'), "Visible app branding is not Stage Forge");
-assert(infoPlist.includes("<string>Stage Forge</string>"), "iOS display name is not Stage Forge");
-assert(xcodeProject.includes('INFOPLIST_KEY_CFBundleDisplayName = "Stage Forge"'), "Xcode display name is not Stage Forge");
-assert.equal(appIcon.readUInt32BE(16), 1024, "Stage Forge app icon must be 1024 px wide");
-assert.equal(appIcon.readUInt32BE(20), 1024, "Stage Forge app icon must be 1024 px tall");
-assert.equal(appIcon[25], 2, "Stage Forge app icon must be opaque RGB without alpha");
+assert(app.includes('const APP_NAME = "Mass Method"'), "Visible app branding is not Mass Method");
+assert(infoPlist.includes("<string>Mass Method</string>"), "iOS display name is not Mass Method");
+assert(xcodeProject.includes('INFOPLIST_KEY_CFBundleDisplayName = "Mass Method"'), "Xcode display name is not Mass Method");
+assert(xcodeProject.includes("CURRENT_PROJECT_VERSION = 3"), "Mass Method build number is not 3");
+assert.equal(appIcon.readUInt32BE(16), 1024, "Mass Method app icon must be 1024 px wide");
+assert.equal(appIcon.readUInt32BE(20), 1024, "Mass Method app icon must be 1024 px tall");
+assert.equal(appIcon[25], 2, "Mass Method app icon must be opaque RGB without alpha");
 
 for (const filename of ["app.js", "toolkit.js", "styles.css", "index.html"]) {
   assert.equal(read(filename), read(`ios/PeakSet/Web/${filename}`), `${filename} is not synced into the iOS bundle`);

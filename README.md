@@ -1,6 +1,6 @@
-# Stage Forge Bodybuilding
+# Mass Method Bodybuilding
 
-Stage Forge is a standalone bodybuilding training and physique logbook. It does not use Virex code and does not include AI features.
+Mass Method is a standalone bodybuilding training and physique logbook. It does not use Virex code and does not include AI features.
 
 ## Open
 
@@ -8,7 +8,7 @@ Open `index.html` in a browser.
 
 ## Xcode
 
-Open `ios/PeakSet.xcodeproj` in Xcode and run the internal `PeakSet` scheme. The visible product name is Stage Forge; the existing target and bundle ID remain unchanged for build and data continuity. The iOS target is a native SwiftUI shell that loads the bundled Stage Forge web app through `WKWebView`.
+Open `ios/PeakSet.xcodeproj` in Xcode and run the internal `PeakSet` scheme. The visible product name is Mass Method; the existing target and bundle ID remain unchanged for build and data continuity. The iOS target is a native SwiftUI shell that loads the bundled Mass Method web app through `WKWebView`.
 
 Before making an Xcode build after web changes, run:
 

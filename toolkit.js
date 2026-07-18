@@ -595,7 +595,7 @@ function saveActiveWorkoutAsTemplate() {
     muscle: exerciseById(workout.exercises[0].id).muscle,
     phase: workout.phase || state.phase,
     rest: DEFAULT_REST_SECONDS,
-    note: "Saved from an active Stage Forge workout.",
+    note: "Saved from an active Mass Method workout.",
     scheduleDay: "",
     equipmentProfileId: state.activeEquipmentProfileId,
     exercises: workout.exercises.map((exercise) => [
