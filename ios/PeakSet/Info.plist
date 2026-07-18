@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>PeakSet</string>
+	<string>Stage Forge</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -32,9 +32,9 @@
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>NSHealthShareUsageDescription</key>
-	<string>PeakSet reads your step count when you choose to import it into a check-in.</string>
+	<string>Stage Forge reads your step count when you choose to import it into a check-in.</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>PeakSet writes body weight and completed strength workouts to Apple Health when you choose to sync them.</string>
+	<string>Stage Forge writes body weight and completed strength workouts to Apple Health when you choose to sync them.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

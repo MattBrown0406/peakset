@@ -278,7 +278,7 @@
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PeakSet/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = PeakSet;
+				INFOPLIST_KEY_CFBundleDisplayName = "Stage Forge";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -305,7 +305,7 @@
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PeakSet/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = PeakSet;
+				INFOPLIST_KEY_CFBundleDisplayName = "Stage Forge";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

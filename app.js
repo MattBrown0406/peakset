@@ -1,5 +1,5 @@
 const STORE_KEY = "stageforge-v1";
-const APP_NAME = "PeakSet";
+const APP_NAME = "Stage Forge";
 const DEFAULT_REST_SECONDS = 180;
 
 const muscles = ["chest", "back", "shoulders", "arms", "legs"];
@@ -1404,7 +1404,7 @@ async function exportLogbookPdf() {
   const note = document.getElementById("coachNote")?.value || "";
   const lines = buildCoachReportLines(days, note);
   const blob = createPdfBlob(lines);
-  const filename = `${APP_NAME.toLowerCase()}-coach-log-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const filename = `stage-forge-coach-log-${new Date().toISOString().slice(0, 10)}.pdf`;
 
   if (await shareNativePdf(blob, filename)) {
     toast("PDF ready to send.");
@@ -2670,7 +2670,7 @@ function render() {
     <div class="app">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">PS</div>
+          <div class="brand-mark">SF</div>
           <div>
             <p class="brand-title">${APP_NAME}</p>
             <p class="brand-subtitle">Bodybuilding logbook</p>
