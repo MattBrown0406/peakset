@@ -666,17 +666,36 @@ const defaultState = {
   timer: { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null }
 };
 
+function freshDefaultState() {
+  return {
+    ...defaultState,
+    customPlans: [],
+    workoutLogs: [],
+    weightLogs: [],
+    measurements: [],
+    timer: { ...defaultState.timer }
+  };
+}
+
 let state = loadState();
 let timerTick = null;
 let audioContext = null;
+let coachNoteDraft = "";
+
+function clampRestSeconds(value) {
+  return Math.max(15, Math.min(300, Number(value) || DEFAULT_REST_SECONDS));
+}
 
 function loadState() {
   try {
-    const stored = JSON.parse(localStorage.getItem(STORE_KEY)) || {};
-    const next = { ...defaultState, ...stored };
-    if (!Array.isArray(next.weightLogs)) next.weightLogs = [];
+    const parsed = JSON.parse(localStorage.getItem(STORE_KEY));
+    const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    const next = { ...freshDefaultState(), ...stored };
+    ["customPlans", "workoutLogs", "weightLogs", "measurements"].forEach((key) => {
+      next[key] = Array.isArray(next[key]) ? [...next[key]] : [];
+    });
     if (next.weightLogs.length === 0) {
-      const migratedWeights = (next.measurements || [])
+      const migratedWeights = next.measurements
         .filter((entry) => entry.bodyweight)
         .map((entry) => ({
           id: `migrated-${entry.id || entry.date}`,
@@ -695,15 +714,34 @@ function loadState() {
         }];
       }
     }
-    if (!next.timer?.running) {
-      next.timer = { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null };
+    const savedTimer = next.timer && typeof next.timer === "object" ? next.timer : {};
+    const seconds = clampRestSeconds(savedTimer.seconds);
+    const endsAt = Number(savedTimer.endsAt);
+    if (savedTimer.running && Number.isFinite(endsAt) && endsAt > Date.now()) {
+      next.timer = {
+        seconds,
+        left: Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)),
+        running: true,
+        startedAt: Number(savedTimer.startedAt) || null,
+        endsAt,
+        fullscreen: Boolean(savedTimer.fullscreen),
+        exerciseIndex: Number.isInteger(savedTimer.exerciseIndex) ? savedTimer.exerciseIndex : null
+      };
     } else {
-      next.timer = { fullscreen: false, exerciseIndex: null, ...next.timer };
+      next.timer = {
+        seconds,
+        left: 0,
+        running: false,
+        startedAt: null,
+        endsAt: null,
+        fullscreen: Boolean(savedTimer.running && savedTimer.fullscreen),
+        exerciseIndex: Number.isInteger(savedTimer.exerciseIndex) ? savedTimer.exerciseIndex : null
+      };
     }
-    next.measurements = (next.measurements || []).map(({ bodyweight, ...entry }) => entry);
+    next.measurements = next.measurements.map(({ bodyweight, ...entry }) => entry);
     return next;
   } catch {
-    return { ...defaultState };
+    return freshDefaultState();
   }
 }
 
@@ -806,7 +844,9 @@ function setChoice(inputId, value, button) {
   if (!input) return;
   input.value = value;
   document.querySelectorAll(`[data-choice="${inputId}"]`).forEach((item) => item.classList.remove("active"));
+  document.querySelectorAll(`[data-choice="${inputId}"]`).forEach((item) => item.setAttribute("aria-pressed", "false"));
   button.classList.add("active");
+  button.setAttribute("aria-pressed", "true");
 }
 
 function toast(message) {
@@ -814,6 +854,8 @@ function toast(message) {
   if (old) old.remove();
   const el = document.createElement("div");
   el.className = "toast";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
   el.textContent = message;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2600);
@@ -911,12 +953,15 @@ function saveProfile() {
     bodyweight: profile.bodyweight,
     note: "Starting profile"
   });
-  state.measurements.unshift({
-    id: crypto.randomUUID(),
-    date: new Date().toISOString(),
-    ...measurements,
-    note: "Starting profile"
-  });
+  const hasMeasurements = Object.values(measurements).some((value) => value !== null && Number.isFinite(value));
+  if (hasMeasurements) {
+    state.measurements.unshift({
+      id: crypto.randomUUID(),
+      date: new Date().toISOString(),
+      ...measurements,
+      note: "Starting profile"
+    });
+  }
   saveState();
   toast("Profile created. Time to train.");
   render();
@@ -1009,7 +1054,7 @@ function navHtml() {
     ["logbook", "Logbook"]
   ];
   return items.map(([id, label]) => `
-    <button class="${state.view === id ? "active" : ""}" onclick="setView('${id}')">${label}</button>
+    <button class="${state.view === id ? "active" : ""}" ${state.view === id ? 'aria-current="page"' : ""} onclick="setView('${id}')">${label}</button>
   `).join("");
 }
 
@@ -1069,11 +1114,15 @@ function stats() {
 
 function isWithinDays(dateString, days) {
   const timestamp = new Date(dateString).getTime();
-  return Number.isFinite(timestamp) && Date.now() - timestamp < days * 86400000;
+  const age = Date.now() - timestamp;
+  return Number.isFinite(timestamp) && age >= 0 && age < days * 86400000;
 }
 
 function formatShortDate(dateString) {
-  const date = new Date(dateString);
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateString || ""));
+  const date = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : new Date(dateString);
   return Number.isFinite(date.getTime()) ? date.toLocaleDateString() : "No date";
 }
 
@@ -1106,8 +1155,8 @@ function coachReportData(days) {
     measurements,
     volume,
     weightDelta,
-    latestWeight: state.weightLogs[0],
-    latestMeasurement: state.measurements[0]
+    latestWeight: weights[0],
+    latestMeasurement: measurements[0]
   };
 }
 
@@ -1295,7 +1344,8 @@ async function shareNativePdf(blob, filename) {
 
 async function exportLogbookPdf() {
   const days = Number(state.logbookRange || 7);
-  const note = document.getElementById("coachNote")?.value || "";
+  const note = document.getElementById("coachNote")?.value ?? coachNoteDraft;
+  coachNoteDraft = note;
   const lines = buildCoachReportLines(days, note);
   const blob = createPdfBlob(lines);
   const filename = `${APP_NAME.toLowerCase()}-coach-log-${new Date().toISOString().slice(0, 10)}.pdf`;
@@ -1922,9 +1972,9 @@ let builderDraft = [];
 
 function addBuilderExercise() {
   const id = document.getElementById("customExercise").value;
-  const sets = Number(document.getElementById("customSets").value) || 3;
-  const reps = document.getElementById("customReps").value || "8-12";
-  const rest = Number(document.getElementById("customRest").value) || DEFAULT_REST_SECONDS;
+  const sets = Math.max(1, Math.min(10, Number(document.getElementById("customSets").value) || 3));
+  const reps = document.getElementById("customReps").value.trim() || "8-12";
+  const rest = clampRestSeconds(document.getElementById("customRest").value);
   const dropSets = Math.max(0, Math.min(4, Number(document.getElementById("customDropSets").value) || 0));
   builderDraft.push([id, sets, reps, rest, dropSets]);
   document.getElementById("builderDraft").innerHTML = renderBuilderDraft();
@@ -1957,7 +2007,8 @@ function startCustomWorkout() {
     toast("Add at least one exercise.");
     return;
   }
-  const title = `${phaseLabel(muscle)} Custom Session`;
+  const muscleLabel = muscle === "travel" ? "Road Gym" : `${muscle[0].toUpperCase()}${muscle.slice(1)}`;
+  const title = `${muscleLabel} Custom Session`;
 
   const plan = {
     id: `builder-${Date.now()}`,
@@ -1969,9 +2020,10 @@ function startCustomWorkout() {
     exercises: builderDraft
   };
 
-  builderDraft = [];
-  beginWorkoutFromPlan(plan);
-  toast("Workout started.");
+  if (beginWorkoutFromPlan(plan)) {
+    builderDraft = [];
+    toast("Workout started.");
+  }
 }
 
 function workoutSetRows(sets, dropSets = 0) {
@@ -1998,6 +2050,13 @@ function workoutSetRows(sets, dropSets = 0) {
 }
 
 function beginWorkoutFromPlan(plan) {
+  if (state.activeWorkout) {
+    state.view = "session";
+    saveState();
+    render();
+    toast("Finish or cancel your current workout before starting another.");
+    return false;
+  }
   state.activeWorkout = {
     id: crypto.randomUUID(),
     planId: plan.id,
@@ -2012,9 +2071,7 @@ function beginWorkoutFromPlan(plan) {
         targetSets: Number(sets),
         targetDropSets: drops,
         targetReps: String(reps),
-        rest: plan.id.startsWith("custom-") || plan.id.startsWith("quick-") || plan.id.startsWith("builder-")
-          ? Number(rest || plan.rest || DEFAULT_REST_SECONDS)
-          : DEFAULT_REST_SECONDS,
+        rest: clampRestSeconds(rest ?? plan.rest ?? DEFAULT_REST_SECONDS),
         sets: workoutSetRows(sets, drops)
       };
     })
@@ -2023,17 +2080,18 @@ function beginWorkoutFromPlan(plan) {
   state.timer = { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null };
   saveState();
   render();
+  return true;
 }
 
 function startWorkout(planId) {
   const plan = allPlans().find((item) => item.id === planId);
-  if (!plan) return;
-  beginWorkoutFromPlan(plan);
+  if (!plan) return false;
+  return beginWorkoutFromPlan(plan);
 }
 
 function quickStartExercise(id) {
   const ex = exerciseById(id);
-  state.customPlans.unshift({
+  return beginWorkoutFromPlan({
     id: `quick-${Date.now()}`,
     title: `${ex.name} Quick Log`,
     muscle: ex.muscle,
@@ -2042,19 +2100,24 @@ function quickStartExercise(id) {
     note: "Single-exercise quick session.",
     exercises: [[id, 4, "8-12", DEFAULT_REST_SECONDS]]
   });
-  startWorkout(state.customPlans[0].id);
 }
 
 function updateSet(exIndex, setIndex, field, value) {
-  state.activeWorkout.exercises[exIndex].sets[setIndex][field] = value;
+  const set = state.activeWorkout?.exercises?.[exIndex]?.sets?.[setIndex];
+  if (!set || !["weight", "reps"].includes(field)) return;
+  if (set.done && set[field] !== value) set.done = false;
+  set[field] = value;
   saveState();
 }
 
 function completeSet(exIndex, setIndex) {
-  const ex = state.activeWorkout.exercises[exIndex];
-  const set = ex.sets[setIndex];
-  if (!set.weight || !set.reps) {
-    toast("Enter weight and reps before completing the set.");
+  const ex = state.activeWorkout?.exercises?.[exIndex];
+  const set = ex?.sets?.[setIndex];
+  if (!ex || !set) return;
+  const weight = Number(set.weight);
+  const reps = Number(set.reps);
+  if (set.weight === "" || set.reps === "" || !Number.isFinite(weight) || weight < 0 || !Number.isInteger(reps) || reps <= 0) {
+    toast("Enter a non-negative weight and whole-number reps before completing the set.");
     return;
   }
   set.done = !set.done;
@@ -2078,7 +2141,7 @@ function adjustRest(seconds) {
 function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null) {
   getAudioContext();
   const now = Date.now();
-  const duration = Math.max(15, Math.min(300, Number(seconds) || DEFAULT_REST_SECONDS));
+  const duration = clampRestSeconds(seconds);
   if (state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
     state.activeWorkout.exercises[exerciseIndex].rest = duration;
   }
@@ -2175,7 +2238,7 @@ function setLogSummary(set) {
 function restPresetButtons(fullscreen = false) {
   const exerciseIndex = state.timer.exerciseIndex ?? null;
   return [60, 90, 120, 180, 240].map((seconds) => `
-    <button class="chip ${seconds === state.timer.seconds ? "active" : ""}" onclick="startTimer(${seconds}, ${fullscreen}, ${exerciseIndex === null ? "null" : exerciseIndex})">${seconds}s</button>
+    <button class="chip ${seconds === state.timer.seconds ? "active" : ""}" aria-pressed="${seconds === state.timer.seconds}" onclick="startTimer(${seconds}, ${fullscreen}, ${exerciseIndex === null ? "null" : exerciseIndex})">${seconds}s</button>
   `).join("");
 }
 
@@ -2184,10 +2247,10 @@ function renderRestOverlay(left, progress) {
   const workout = state.activeWorkout;
   const exercise = workout && state.timer.exerciseIndex !== null ? workout.exercises[state.timer.exerciseIndex] : null;
   return `
-    <div class="rest-overlay">
+    <div class="rest-overlay" role="dialog" aria-modal="true" aria-labelledby="restTimerTitle">
       <div class="rest-overlay-inner">
         <div class="rest-overlay-head">
-          <p class="eyebrow">Rest timer</p>
+          <p class="eyebrow" id="restTimerTitle">Rest timer</p>
           <button class="ghost-btn" onclick="closeRestOverlay()">Back to Workout</button>
         </div>
         <p class="muted" style="margin: 0;">${exercise ? escapeHtml(exercise.name) : "Next set"}</p>
@@ -2243,6 +2306,10 @@ function finishWorkout() {
 }
 
 function cancelWorkout() {
+  const hasProgress = state.activeWorkout?.exercises?.some((exercise) =>
+    exercise.sets.some((set) => set.done || set.weight !== "" || set.reps !== "")
+  );
+  if (hasProgress && !window.confirm("Cancel this workout and discard the entered sets?")) return;
   state.activeWorkout = null;
   state.view = "today";
   stopTimer();
@@ -2292,8 +2359,8 @@ function renderSession() {
               ${exercise.sets.map((set, setIndex) => `
                 <div class="set-row">
                   <div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>
-                  <input type="number" inputmode="decimal" placeholder="Weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />
-                  <input type="number" inputmode="numeric" placeholder="Reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
+                  <input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />
+                  <input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
                   <button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
                 </div>
               `).join("")}
@@ -2410,7 +2477,7 @@ function renderLogbook() {
         </div>
         <div class="field">
           <label for="coachNote">Optional Coach Note</label>
-          <input id="coachNote" placeholder="Energy, appetite, joints, posing, cardio..." />
+          <input id="coachNote" placeholder="Energy, appetite, joints, posing, cardio..." value="${escapeHtml(coachNoteDraft)}" oninput="coachNoteDraft = this.value" />
         </div>
       </div>
       <div class="actions" style="margin-top: 14px;">
@@ -2544,10 +2611,28 @@ function renderContent() {
   return renderToday();
 }
 
+function renderActiveWorkoutBanner() {
+  if (!state.activeWorkout || state.view === "session") return "";
+  const completed = state.activeWorkout.exercises
+    .flatMap((exercise) => exercise.sets)
+    .filter((set) => set.done).length;
+  return `
+    <section class="card pad resume-workout" aria-label="Workout in progress">
+      <div>
+        <p class="eyebrow">Workout in progress</p>
+        <strong>${escapeHtml(state.activeWorkout.title)}</strong>
+        <p class="muted">${completed} completed ${completed === 1 ? "set" : "sets"}. Your session is saved on this device.</p>
+      </div>
+      <button class="primary-btn" onclick="setView('session')">Resume Workout</button>
+    </section>
+  `;
+}
+
 function resetDemoData() {
   localStorage.removeItem(STORE_KEY);
-  state = { ...defaultState };
+  state = freshDefaultState();
   builderDraft = [];
+  coachNoteDraft = "";
   render();
 }
 
@@ -2570,7 +2655,7 @@ function render() {
           <p class="muted">Hotel bench, dumbbells to 50, cable handles, rope, and ankle cuffs.</p>
         </div>
       </aside>
-      <main class="main">${renderContent()}</main>
+      <main class="main">${renderActiveWorkoutBanner()}${renderContent()}</main>
       <nav class="mobile-bar">${navHtml()}</nav>
     </div>
     ${renderOnboarding()}
@@ -2579,3 +2664,4 @@ function render() {
 }
 
 render();
+if (state.timer.running) ensureTimerTick();
