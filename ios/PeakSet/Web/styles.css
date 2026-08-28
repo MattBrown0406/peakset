@@ -48,6 +48,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .app {
   width: min(100%, 430px);
   min-height: 100svh;
@@ -744,6 +749,65 @@ textarea:focus {
   gap: 16px;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.live-workout-customizer {
+  margin-bottom: 16px;
+}
+
+.live-workout-customizer summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.live-add-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.live-add-exercise {
+  grid-column: 1 / -1;
+}
+
+.live-exercise-controls {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.live-order-controls,
+.live-substitute-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.live-order-controls button {
+  min-height: 38px;
+  padding: 8px 12px;
+}
+
+.live-substitute-controls select {
+  min-width: 0;
+  flex: 1;
+}
+
 .session-shell {
   display: grid;
   grid-template-columns: 1fr;
@@ -963,6 +1027,17 @@ textarea:focus {
 
 @media (max-width: 560px) {
   .resume-workout {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+
+  .live-order-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .live-substitute-controls {
     align-items: stretch;
     flex-direction: column;
   }

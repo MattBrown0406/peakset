@@ -681,6 +681,7 @@ let state = loadState();
 let timerTick = null;
 let audioContext = null;
 let coachNoteDraft = "";
+let liveCustomizerOpen = false;
 
 function clampRestSeconds(value) {
   return Math.max(15, Math.min(300, Number(value) || DEFAULT_REST_SECONDS));
@@ -1972,10 +1973,10 @@ let builderDraft = [];
 
 function addBuilderExercise() {
   const id = document.getElementById("customExercise").value;
-  const sets = Math.max(1, Math.min(10, Number(document.getElementById("customSets").value) || 3));
+  const sets = Math.max(1, Math.min(10, Math.trunc(Number(document.getElementById("customSets").value) || 3)));
   const reps = document.getElementById("customReps").value.trim() || "8-12";
   const rest = clampRestSeconds(document.getElementById("customRest").value);
-  const dropSets = Math.max(0, Math.min(4, Number(document.getElementById("customDropSets").value) || 0));
+  const dropSets = Math.max(0, Math.min(4, Math.trunc(Number(document.getElementById("customDropSets").value) || 0)));
   builderDraft.push([id, sets, reps, rest, dropSets]);
   document.getElementById("builderDraft").innerHTML = renderBuilderDraft();
 }
@@ -2100,6 +2101,116 @@ function quickStartExercise(id) {
     note: "Single-exercise quick session.",
     exercises: [[id, 4, "8-12", DEFAULT_REST_SECONDS]]
   });
+}
+
+function activeWorkoutExerciseOptions(currentExerciseId = null) {
+  const current = currentExerciseId ? exerciseLibrary.find((exercise) => exercise.id === currentExerciseId) : null;
+  const existingIds = new Set((state.activeWorkout?.exercises || []).map((exercise) => exercise.id));
+  return exerciseLibrary.filter((exercise) => {
+    if (exercise.id === currentExerciseId) return false;
+    if (existingIds.has(exercise.id)) return false;
+    if (state.activeWorkout?.phase === "travel" && !exercise.hotel) return false;
+    return !current || exercise.muscle === current.muscle;
+  });
+}
+
+function renderActiveExerciseOptions(currentExerciseId = null) {
+  return activeWorkoutExerciseOptions(currentExerciseId).map((exercise) => `
+    <option value="${exercise.id}">${escapeHtml(exercise.name)} — ${escapeHtml(exercise.muscle)} — ${escapeHtml(exercise.equipment)}</option>
+  `).join("");
+}
+
+function exerciseHasProgress(exercise) {
+  return exercise.sets.some((set) => set.done || set.weight !== "" || set.reps !== "");
+}
+
+function addExerciseToActiveWorkout() {
+  if (!state.activeWorkout) return false;
+  const id = document.getElementById("activeExerciseToAdd")?.value;
+  const exercise = exerciseLibrary.find((item) => item.id === id);
+  if (!exercise) return false;
+  if (state.activeWorkout.exercises.some((item) => item.id === exercise.id)) {
+    toast(`${exercise.name} is already in this workout.`);
+    return false;
+  }
+  const sets = Math.max(1, Math.min(10, Math.trunc(Number(document.getElementById("activeExerciseSets")?.value) || 3)));
+  const reps = document.getElementById("activeExerciseReps")?.value.trim() || "8-12";
+  const rest = clampRestSeconds(document.getElementById("activeExerciseRest")?.value);
+  const dropSets = Math.max(0, Math.min(4, Math.trunc(Number(document.getElementById("activeExerciseDropSets")?.value) || 0)));
+  state.activeWorkout.exercises.push({
+    id: exercise.id,
+    name: exercise.name,
+    targetSets: sets,
+    targetDropSets: dropSets,
+    targetReps: reps,
+    rest,
+    sets: workoutSetRows(sets, dropSets)
+  });
+  saveState();
+  render();
+  toast(`${exercise.name} added to this workout.`);
+  return true;
+}
+
+function moveActiveWorkoutExercise(index, direction) {
+  const exercises = state.activeWorkout?.exercises;
+  const target = index + direction;
+  if (!exercises || target < 0 || target >= exercises.length) return false;
+  [exercises[index], exercises[target]] = [exercises[target], exercises[index]];
+  if (state.timer.exerciseIndex === index) state.timer.exerciseIndex = target;
+  else if (state.timer.exerciseIndex === target) state.timer.exerciseIndex = index;
+  saveState();
+  render();
+  return true;
+}
+
+function removeActiveWorkoutExercise(index) {
+  const exercises = state.activeWorkout?.exercises;
+  const exercise = exercises?.[index];
+  if (!exercise) return false;
+  if (exercises.length === 1) {
+    toast("A workout must keep at least one exercise.");
+    return false;
+  }
+  if (exerciseHasProgress(exercise)) {
+    toast("This exercise has entered sets. Clear them first so no workout data is lost.");
+    return false;
+  }
+  exercises.splice(index, 1);
+  if (state.timer.exerciseIndex === index) {
+    clearInterval(timerTick);
+    timerTick = null;
+    state.timer = { ...defaultState.timer };
+  } else if (state.timer.exerciseIndex > index) {
+    state.timer.exerciseIndex -= 1;
+  }
+  saveState();
+  render();
+  toast(`${exercise.name} removed.`);
+  return true;
+}
+
+function substituteActiveWorkoutExercise(index) {
+  const exercises = state.activeWorkout?.exercises;
+  const current = exercises?.[index];
+  if (!current) return false;
+  if (exerciseHasProgress(current)) {
+    toast("Completed or entered sets are protected. Add a replacement exercise instead.");
+    return false;
+  }
+  const replacementId = document.getElementById(`activeSubstitute-${index}`)?.value;
+  const replacement = activeWorkoutExerciseOptions(current.id).find((exercise) => exercise.id === replacementId);
+  if (!replacement) return false;
+  exercises[index] = {
+    ...current,
+    id: replacement.id,
+    name: replacement.name,
+    sets: workoutSetRows(current.targetSets, current.targetDropSets)
+  };
+  saveState();
+  render();
+  toast(`${current.name} substituted with ${replacement.name}.`);
+  return true;
 }
 
 function updateSet(exIndex, setIndex, field, value) {
@@ -2344,6 +2455,33 @@ function renderSession() {
         <button class="ghost-btn danger" onclick="cancelWorkout()">Cancel</button>
       </div>
     </div>
+    <details class="card pad live-workout-customizer" ${liveCustomizerOpen ? "open" : ""} ontoggle="liveCustomizerOpen = this.open">
+      <summary>Customize this workout</summary>
+      <p class="muted">Add an exercise without leaving your session. Road Gym workouts only suggest travel-ready movements.</p>
+      <div class="live-add-grid">
+        <div class="field live-add-exercise">
+          <label for="activeExerciseToAdd">Exercise</label>
+          <select id="activeExerciseToAdd">${renderActiveExerciseOptions()}</select>
+        </div>
+        <div class="field">
+          <label for="activeExerciseSets">Sets</label>
+          <input id="activeExerciseSets" type="number" value="3" min="1" max="10" />
+        </div>
+        <div class="field">
+          <label for="activeExerciseReps">Reps</label>
+          <input id="activeExerciseReps" value="8-12" />
+        </div>
+        <div class="field">
+          <label for="activeExerciseRest">Rest Seconds</label>
+          <input id="activeExerciseRest" type="number" value="90" min="15" max="300" step="15" />
+        </div>
+        <div class="field">
+          <label for="activeExerciseDropSets">Drop Sets</label>
+          <input id="activeExerciseDropSets" type="number" value="0" min="0" max="4" />
+        </div>
+      </div>
+      <button class="primary-btn" onclick="addExerciseToActiveWorkout()">Add to Workout</button>
+    </details>
     <div class="session-shell">
       <section class="session">
         ${workout.exercises.map((exercise, exIndex) => `
@@ -2354,6 +2492,18 @@ function renderSession() {
                 <h2 style="margin-top: 10px;">${escapeHtml(exercise.name)}</h2>
               </div>
               <span class="badge">${exercise.rest}s rest</span>
+            </div>
+            <div class="live-exercise-controls" aria-label="Customize ${escapeHtml(exercise.name)}">
+              <div class="live-order-controls">
+                <button class="ghost-btn" onclick="moveActiveWorkoutExercise(${exIndex}, -1)" ${exIndex === 0 ? "disabled" : ""} aria-label="Move ${escapeHtml(exercise.name)} earlier">Move Up</button>
+                <button class="ghost-btn" onclick="moveActiveWorkoutExercise(${exIndex}, 1)" ${exIndex === workout.exercises.length - 1 ? "disabled" : ""} aria-label="Move ${escapeHtml(exercise.name)} later">Move Down</button>
+                <button class="ghost-btn danger" onclick="removeActiveWorkoutExercise(${exIndex})">Remove</button>
+              </div>
+              <div class="live-substitute-controls">
+                <label class="sr-only" for="activeSubstitute-${exIndex}">Suggested substitute for ${escapeHtml(exercise.name)}</label>
+                <select id="activeSubstitute-${exIndex}">${renderActiveExerciseOptions(exercise.id)}</select>
+                <button class="secondary-btn" onclick="substituteActiveWorkoutExercise(${exIndex})">Substitute</button>
+              </div>
             </div>
             <div class="set-table">
               ${exercise.sets.map((set, setIndex) => `
