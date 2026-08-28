@@ -2133,6 +2133,10 @@ function addExerciseToActiveWorkout() {
     toast(`${exercise.name} is already in this workout.`);
     return false;
   }
+  if (state.activeWorkout.phase === "travel" && !exercise.hotel) {
+    toast(`${exercise.name} is not available for a Road Gym workout.`);
+    return false;
+  }
   const sets = Math.max(1, Math.min(10, Math.trunc(Number(document.getElementById("activeExerciseSets")?.value) || 3)));
   const reps = document.getElementById("activeExerciseReps")?.value.trim() || "8-12";
   const rest = clampRestSeconds(document.getElementById("activeExerciseRest")?.value);
@@ -2497,12 +2501,12 @@ function renderSession() {
               <div class="live-order-controls">
                 <button class="ghost-btn" onclick="moveActiveWorkoutExercise(${exIndex}, -1)" ${exIndex === 0 ? "disabled" : ""} aria-label="Move ${escapeHtml(exercise.name)} earlier">Move Up</button>
                 <button class="ghost-btn" onclick="moveActiveWorkoutExercise(${exIndex}, 1)" ${exIndex === workout.exercises.length - 1 ? "disabled" : ""} aria-label="Move ${escapeHtml(exercise.name)} later">Move Down</button>
-                <button class="ghost-btn danger" onclick="removeActiveWorkoutExercise(${exIndex})">Remove</button>
+                <button class="ghost-btn danger" onclick="removeActiveWorkoutExercise(${exIndex})" aria-label="Remove ${escapeHtml(exercise.name)} from workout">Remove</button>
               </div>
               <div class="live-substitute-controls">
                 <label class="sr-only" for="activeSubstitute-${exIndex}">Suggested substitute for ${escapeHtml(exercise.name)}</label>
                 <select id="activeSubstitute-${exIndex}">${renderActiveExerciseOptions(exercise.id)}</select>
-                <button class="secondary-btn" onclick="substituteActiveWorkoutExercise(${exIndex})">Substitute</button>
+                <button class="secondary-btn" onclick="substituteActiveWorkoutExercise(${exIndex})" aria-label="Substitute ${escapeHtml(exercise.name)}">Substitute</button>
               </div>
             </div>
             <div class="set-table">
