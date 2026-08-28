@@ -173,6 +173,50 @@ const travelCount = vm.runInContext("state.activeWorkout.exercises.length", trav
 assert.equal(vm.runInContext("addExerciseToActiveWorkout()", travel.context), false, "Road Gym must reject non-travel exercise IDs even when invoked directly");
 assert.equal(vm.runInContext("state.activeWorkout.exercises.length", travel.context), travelCount, "a rejected Road Gym exercise must not mutate the workout");
 
+const history = makeContext({
+  workoutLogs: [
+    {
+      id: "recent-workout",
+      title: "Recent Chest",
+      date: "2026-08-20T12:00:00Z",
+      sets: [
+        { exerciseId: "barbell-bench", exercise: "Barbell Bench Press", weight: "100", reps: "10" },
+        { exerciseId: "barbell-bench", exercise: "Barbell Bench Press", weight: "100", reps: "8", dropSet: true },
+        { exerciseId: "barbell-curl", exercise: "Barbell Curl", weight: "40", reps: "12" }
+      ]
+    },
+    {
+      id: "legacy-workout",
+      title: "Legacy Chest",
+      date: "2026-08-10T12:00:00Z",
+      sets: [
+        { exercise: "Barbell Bench Press", weight: "90", reps: "12" },
+        { exercise: "Barbell Bench Press", weight: "bad", reps: "bad" }
+      ]
+    }
+  ]
+});
+const benchHistory = JSON.parse(vm.runInContext("JSON.stringify(exerciseHistoryData('barbell-bench'))", history.context));
+assert.equal(benchHistory.sessionCount, 2, "exercise history must count distinct workout sessions");
+assert.equal(benchHistory.setCount, 4, "exercise history must include legacy name-only sets");
+assert.equal(benchHistory.totalVolume, 2880, "exercise history must total only finite positive load and rep pairs");
+assert.equal(benchHistory.bestWeight, 100, "exercise history must identify the heaviest load");
+assert.equal(benchHistory.bestReps, 12, "exercise history must identify the highest rep count");
+assert.equal(Math.round(benchHistory.estimatedOneRepMax * 10) / 10, 133.3, "exercise history must calculate Epley estimated one-rep max");
+assert.deepEqual(benchHistory.sessionVolumes.map((entry) => entry.volume), [1080, 1800], "exercise volume trend must be chronological");
+assert.match(vm.runInContext("renderExerciseHistory()", history.context), /Recent Chest/, "exercise history screen must render recent sessions");
+assert.equal(vm.runInContext("setExerciseHistory('missing-exercise')", history.context), false, "exercise history must reject unknown exercise selections");
+
+const emptyHistory = makeContext({ workoutLogs: [] });
+assert.match(vm.runInContext("renderExerciseHistory()", emptyHistory.context), /No saved sets for this exercise yet/, "exercise history must provide a useful empty state");
+
+const malformedNestedHistory = makeContext({ workoutLogs: [{ id: "bad-log", date: "2026-08-20T12:00:00Z", sets: { unexpected: true } }] });
+assert.match(vm.runInContext("renderExerciseHistory()", malformedNestedHistory.context), /No saved sets for this exercise yet/, "exercise history must ignore malformed nested set collections without crashing");
+
+const historySave = makeContext();
+vm.runInContext("startWorkout('chest-density'); state.activeWorkout.exercises[0].sets[0].weight = '100'; state.activeWorkout.exercises[0].sets[0].reps = '10'; state.activeWorkout.exercises[0].sets[0].done = true; finishWorkout()", historySave.context);
+assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].exerciseId", historySave.context), vm.runInContext("exerciseLibrary.find((item) => item.name === state.workoutLogs[0].sets[0].exercise).id", historySave.context), "new workout logs must retain stable exercise IDs");
+
 const malformed = makeContext({ profile: { bodyweight: 200 }, customPlans: null, workoutLogs: {}, weightLogs: "bad", measurements: null });
 assert.equal(vm.runInContext("Array.isArray(state.customPlans) && Array.isArray(state.workoutLogs) && Array.isArray(state.weightLogs) && Array.isArray(state.measurements)", malformed.context), true, "legacy collection fields must normalize without wiping the profile");
 assert.equal(vm.runInContext("state.profile.bodyweight", malformed.context), 200, "normalization must preserve valid profile data");

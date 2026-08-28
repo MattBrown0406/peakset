@@ -682,6 +682,7 @@ let timerTick = null;
 let audioContext = null;
 let coachNoteDraft = "";
 let liveCustomizerOpen = false;
+let exerciseHistorySelection = "";
 
 function clampRestSeconds(value) {
   return Math.max(15, Math.min(300, Number(value) || DEFAULT_REST_SECONDS));
@@ -1052,6 +1053,7 @@ function navHtml() {
     ["library", "Library"],
     ["builder", "Builder"],
     ["progress", "Progress"],
+    ["history", "History"],
     ["logbook", "Logbook"]
   ];
   return items.map(([id, label]) => `
@@ -1111,6 +1113,200 @@ function stats() {
     ? (Number(lastWeight.bodyweight || 0) - Number(firstWeight.bodyweight || 0)).toFixed(1)
     : "0.0";
   return { lastWeight, weeklyVolume, weightDelta, workouts: lastSeven.length };
+}
+
+function normalizedExerciseName(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function loggedExerciseId(set) {
+  const stableMatch = exerciseLibrary.find((exercise) => exercise.id === set?.exerciseId);
+  if (stableMatch) return stableMatch.id;
+  const loggedName = normalizedExerciseName(set?.exercise);
+  return exerciseLibrary.find((exercise) => normalizedExerciseName(exercise.name) === loggedName)?.id || null;
+}
+
+function workoutLogSets(log) {
+  return Array.isArray(log?.sets) ? log.sets : [];
+}
+
+function selectedExerciseHistoryId() {
+  if (exerciseLibrary.some((exercise) => exercise.id === exerciseHistorySelection)) return exerciseHistorySelection;
+  const recentId = [...state.workoutLogs]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .flatMap(workoutLogSets)
+    .map(loggedExerciseId)
+    .find(Boolean);
+  exerciseHistorySelection = recentId || exerciseLibrary[0]?.id || "";
+  return exerciseHistorySelection;
+}
+
+function setExerciseHistory(id) {
+  if (!exerciseLibrary.some((exercise) => exercise.id === id)) return false;
+  exerciseHistorySelection = id;
+  render();
+  return true;
+}
+
+function exerciseHistoryData(exerciseId) {
+  const exercise = exerciseLibrary.find((item) => item.id === exerciseId);
+  if (!exercise) return null;
+
+  const sessions = state.workoutLogs.map((log) => {
+    const sets = workoutLogSets(log)
+      .filter((set) => loggedExerciseId(set) === exerciseId)
+      .map((set) => {
+        const rawWeight = Number(set.weight);
+        const rawReps = Number(set.reps);
+        const weight = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : null;
+        const reps = Number.isFinite(rawReps) && rawReps > 0 ? rawReps : null;
+        const volume = weight !== null && reps !== null ? weight * reps : 0;
+        const estimatedOneRepMax = weight !== null && reps !== null && reps <= 30
+          ? weight * (1 + reps / 30)
+          : 0;
+        return {
+          weight,
+          reps,
+          volume,
+          estimatedOneRepMax,
+          dropSet: Boolean(set.dropSet),
+          label: set.label || ""
+        };
+      });
+    return {
+      id: log.id,
+      title: log.title || "Workout",
+      date: log.date,
+      sets,
+      volume: sets.reduce((sum, set) => sum + set.volume, 0)
+    };
+  })
+    .filter((session) => session.sets.length)
+    .sort((a, b) => {
+      const aTime = new Date(a.date).getTime();
+      const bTime = new Date(b.date).getTime();
+      return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+    });
+
+  const sets = sessions.flatMap((session) => session.sets.map((set) => ({ ...set, date: session.date, title: session.title })));
+  const bestSet = sets.reduce((best, set) => set.estimatedOneRepMax > (best?.estimatedOneRepMax || 0) ? set : best, null);
+  const sessionVolumes = sessions.slice(0, 12).reverse().map((session) => ({
+    date: session.date,
+    title: session.title,
+    volume: session.volume
+  }));
+  return {
+    exercise,
+    sessionCount: sessions.length,
+    setCount: sets.length,
+    totalVolume: sets.reduce((sum, set) => sum + set.volume, 0),
+    bestWeight: sets.reduce((best, set) => Math.max(best, set.weight || 0), 0),
+    bestReps: sets.reduce((best, set) => Math.max(best, set.reps || 0), 0),
+    estimatedOneRepMax: bestSet?.estimatedOneRepMax || 0,
+    bestSet,
+    bestSessionVolume: sessions.reduce((best, session) => Math.max(best, session.volume), 0),
+    sessionVolumes,
+    recentSessions: sessions.slice(0, 8)
+  };
+}
+
+function historyMetric(value, suffix = "") {
+  if (!Number.isFinite(value) || value <= 0) return "--";
+  return `${Number(value.toFixed(1)).toLocaleString()}${suffix}`;
+}
+
+function exerciseVolumeSparkline(entries, exerciseName) {
+  if (!entries.length) return '<div class="empty"><p class="muted">Complete this exercise in at least one saved workout to start the trend.</p></div>';
+  const width = 620;
+  const height = 104;
+  const values = entries.map((entry) => entry.volume);
+  const max = Math.max(1, ...values);
+  const coordinates = values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : (index / (values.length - 1)) * width;
+    const y = height - (value / max) * (height - 20) - 10;
+    return { x, y };
+  });
+  const points = coordinates.map(({ x, y }) => `${x},${y}`).join(" ");
+  const summary = entries.map((entry) => `${formatShortDate(entry.date)}: ${Math.round(entry.volume).toLocaleString()} pounds`).join(", ");
+  return `
+    <svg class="sparkline exercise-history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(exerciseName)} session volume trend. ${escapeHtml(summary)}">
+      <line x1="0" y1="${height - 8}" x2="${width}" y2="${height - 8}" stroke="rgba(255,255,255,0.12)" />
+      <polyline points="${points}" fill="none" stroke="#1ED8A5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+      ${coordinates.map(({ x, y }) => `<circle cx="${x}" cy="${y}" r="5" fill="#1ED8A5" />`).join("")}
+    </svg>
+  `;
+}
+
+function historySetSummary(set) {
+  const weight = set.weight === null ? "--" : `${Number(set.weight.toFixed(1)).toLocaleString()} lb`;
+  const reps = set.reps === null ? "-- reps" : `${Number(set.reps.toFixed(1)).toLocaleString()} reps`;
+  return `${set.dropSet ? "Drop · " : ""}${weight} × ${reps}`;
+}
+
+function renderExerciseHistory() {
+  const selectedId = selectedExerciseHistoryId();
+  const history = exerciseHistoryData(selectedId);
+  if (!history) return '<div class="empty"><p class="muted">No exercises are available.</p></div>';
+  const trainedIds = new Set(state.workoutLogs.flatMap((log) => workoutLogSets(log).map(loggedExerciseId).filter(Boolean)));
+  const options = [...exerciseLibrary].sort((a, b) => {
+    const trainedDifference = Number(trainedIds.has(b.id)) - Number(trainedIds.has(a.id));
+    return trainedDifference || a.name.localeCompare(b.name);
+  });
+  return `
+    <div class="topbar exercise-history-header">
+      <div>
+        <p class="eyebrow">Exercise history</p>
+        <h1>See what is actually moving.</h1>
+        <p class="muted">Personal records, recent sets, estimated strength, and session volume.</p>
+      </div>
+    </div>
+    <section class="card pad">
+      <div class="field">
+        <label for="exerciseHistorySelect">Exercise</label>
+        <select id="exerciseHistorySelect" onchange="setExerciseHistory(this.value)">
+          ${options.map((exercise) => `<option value="${exercise.id}" ${exercise.id === selectedId ? "selected" : ""}>${escapeHtml(exercise.name)}${trainedIds.has(exercise.id) ? "" : " · No history"}</option>`).join("")}
+        </select>
+      </div>
+    </section>
+    <div class="grid today-stats history-stats">
+      <article class="card stat"><p class="value">${history.sessionCount}</p><p class="label">Sessions</p></article>
+      <article class="card stat"><p class="value">${history.setCount}</p><p class="label">Logged sets</p></article>
+      <article class="card stat"><p class="value">${historyMetric(history.bestWeight)}</p><p class="label">Heaviest lb</p></article>
+      <article class="card stat"><p class="value">${historyMetric(history.estimatedOneRepMax)}</p><p class="label">Estimated 1RM lb</p></article>
+    </div>
+    <section class="card pad history-panel history-trend-card">
+      <div class="card-head">
+        <div><p class="eyebrow">Volume trend</p><h2>${escapeHtml(history.exercise.name)}</h2></div>
+        <span class="badge blue">Last ${history.sessionVolumes.length || 0} sessions</span>
+      </div>
+      ${exerciseVolumeSparkline(history.sessionVolumes, history.exercise.name)}
+      <div class="history-trend-labels">
+        <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes[0].date) : "First session"}</span>
+        <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes.at(-1).date) : "Latest session"}</span>
+      </div>
+    </section>
+    <section class="card pad history-panel">
+      <div class="card-head"><div><p class="eyebrow">Personal records</p><h2>Best performances</h2></div></div>
+      <div class="grid two history-records">
+        <article class="log-card card"><strong>Estimated 1RM</strong><p class="history-record-value">${historyMetric(history.estimatedOneRepMax, " lb")}</p><p class="muted">${history.bestSet ? `${historyMetric(history.bestSet.weight, " lb")} × ${historyMetric(history.bestSet.reps, " reps")} · ${formatShortDate(history.bestSet.date)}` : "No weighted sets yet."}</p></article>
+        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${historyMetric(history.bestSessionVolume, " lb")}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
+        <article class="log-card card"><strong>Highest reps</strong><p class="history-record-value">${historyMetric(history.bestReps)}</p><p class="muted">Highest recorded reps in one set.</p></article>
+        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${historyMetric(history.totalVolume, " lb")}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
+      </div>
+    </section>
+    <section class="card pad history-panel">
+      <div class="card-head"><div><p class="eyebrow">Recent work</p><h2>Sets by session</h2></div></div>
+      <div class="history-session-list">
+        ${history.recentSessions.map((session) => `
+          <article class="log-card card history-session">
+            <div class="card-head"><strong>${escapeHtml(session.title)}</strong><span class="badge">${formatShortDate(session.date)}</span></div>
+            <p class="muted">${session.sets.length} ${session.sets.length === 1 ? "set" : "sets"} · ${Math.round(session.volume).toLocaleString()} lb volume</p>
+            <div class="history-set-list">${session.sets.map((set) => `<span class="history-set">${escapeHtml(historySetSummary(set))}</span>`).join("")}</div>
+          </article>
+        `).join("") || '<div class="empty"><p class="muted">No saved sets for this exercise yet. Complete a workout and they will appear here.</p></div>'}
+      </div>
+    </section>
+  `;
 }
 
 function isWithinDays(dateString, days) {
@@ -2397,7 +2593,7 @@ function finishWorkout() {
   const sets = workout.exercises.flatMap((exercise) =>
     exercise.sets
       .filter((set) => set.done)
-      .map((set) => ({ exercise: exercise.name, weight: set.weight, reps: set.reps, dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
+      .map((set) => ({ exerciseId: exercise.id, exercise: exercise.name, weight: set.weight, reps: set.reps, dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
   );
   if (sets.length === 0) {
     toast("Complete at least one set before saving.");
@@ -2760,6 +2956,7 @@ function renderContent() {
   if (state.view === "library") return renderLibrary();
   if (state.view === "builder") return renderBuilder();
   if (state.view === "progress") return renderProgress();
+  if (state.view === "history") return renderExerciseHistory();
   if (state.view === "logbook") return renderLogbook();
   if (state.view === "session") return renderSession();
   return renderToday();

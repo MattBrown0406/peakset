@@ -929,6 +929,56 @@ textarea:focus {
   display: block;
 }
 
+.history-panel {
+  margin-top: 16px;
+}
+
+.exercise-history-chart {
+  height: 104px;
+  margin-top: 10px;
+}
+
+.history-trend-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.history-record-value {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.history-session-list {
+  display: grid;
+  gap: 10px;
+}
+
+.history-session .muted {
+  margin: 0;
+}
+
+.history-set-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.history-set {
+  padding: 7px 9px;
+  border: 1px solid rgba(30, 216, 165, 0.18);
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(30, 216, 165, 0.08);
+  font-size: 12px;
+  font-weight: 750;
+}
+
 .measurement-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -988,7 +1038,7 @@ textarea:focus {
   bottom: max(10px, env(safe-area-inset-bottom));
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
   padding: 7px;
   border: 1px solid rgba(255, 255, 255, 0.1);
