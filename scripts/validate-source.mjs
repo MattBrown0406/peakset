@@ -83,6 +83,16 @@ assert(nativeServices.includes("HKWorkoutBuilder"), "HealthKit workout export is
 assert(swiftWebView.includes("withFractionalSeconds"), "HealthKit bridge cannot parse JavaScript ISO timestamps");
 assert(toolkit.includes("builderFormDraft"), "Builder form state is not preserved across draft edits");
 assert(toolkit.includes("buildToolkitCoachReportLines"), "Check-ins and prep activity are missing from coach PDFs");
+{
+  // app.js destructures [label, value, unit] from measurementRows(); the toolkit override must return tuples.
+  const source = literalBetween(toolkit, "measurementRows = function toolkitMeasurementRows(entry) {", "\n};");
+  const measurementRows = Function("measurementDefinitions", "entry", source)
+    .bind(null, [["chest", "Chest"], ["bodyFat", "Body Fat %"]]);
+  const rows = measurementRows({ chest: 44, bodyFat: null });
+  assert.deepEqual(rows, [["Chest", 44, "in"]], "Toolkit measurementRows must return [label, value, unit] tuples");
+}
+assert(!app.includes("state.customPlans.unshift({\n    id: `quick-"), "Quick Start must not persist throwaway templates");
+assert(toolkit.includes('startsWith("quick-")'), "Legacy quick-start templates are not pruned on migration");
 assert(toolkit.includes("handleNativeTimerReconcile"), "Background timer reconciliation is missing");
 assert(app.includes('postMessage({ action: "reconcile" })'), "Foreground timer reconciliation is missing");
 assert(xcodeProject.includes("PeakSetNativeServices.swift in Sources"), "Native services are not in the Xcode source phase");
@@ -92,7 +102,10 @@ assert(entitlements.includes("com.apple.developer.healthkit"), "HealthKit entitl
 assert(app.includes('const APP_NAME = "Mass Method"'), "Visible app branding is not Mass Method");
 assert(infoPlist.includes("<string>Mass Method</string>"), "iOS display name is not Mass Method");
 assert(xcodeProject.includes('INFOPLIST_KEY_CFBundleDisplayName = "Mass Method"'), "Xcode display name is not Mass Method");
-assert(xcodeProject.includes("CURRENT_PROJECT_VERSION = 3"), "Mass Method build number is not 3");
+const buildNumbers = [...xcodeProject.matchAll(/CURRENT_PROJECT_VERSION = (\d+);/g)].map((match) => Number(match[1]));
+assert.equal(buildNumbers.length, 2, "Expected a CURRENT_PROJECT_VERSION in both the Debug and Release configurations");
+assert(buildNumbers.every((value) => Number.isInteger(value) && value > 0), "Build numbers must be positive integers");
+assert.equal(new Set(buildNumbers).size, 1, `Debug and Release build numbers differ: ${buildNumbers.join(", ")}`);
 assert.equal(appIcon.readUInt32BE(16), 1024, "Mass Method app icon must be 1024 px wide");
 assert.equal(appIcon.readUInt32BE(20), 1024, "Mass Method app icon must be 1024 px tall");
 assert.equal(appIcon[25], 2, "Mass Method app icon must be opaque RGB without alpha");

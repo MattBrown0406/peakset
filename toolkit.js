@@ -21,6 +21,17 @@ const measurementDefinitions = [
   ["bodyFat", "Body Fat %"]
 ];
 
+// app.js's stage checklist only knew the legacy arm/thigh keys. Register the
+// expanded left/right keys so measurement progress is not silently ignored.
+for (const [key, label, direction, growth] of [
+  ["leftArm", "Left Arm", "up", true], ["rightArm", "Right Arm", "up", true], ["forearm", "Forearm", "up", true],
+  ["leftThigh", "Left Thigh", "up", true], ["rightThigh", "Right Thigh", "up", true],
+  ["neck", "Neck", "up", false], ["waistNavel", "Waist at Navel", "down", false]
+]) {
+  if (!measurementMetrics.some((metric) => metric.key === key)) measurementMetrics.push({ key, label, direction });
+  if (growth && !growthMeasurementKeys.includes(key)) growthMeasurementKeys.push(key);
+}
+
 function defaultBuilderFormDraft() {
   return { title: "", muscle: "chest", exerciseFocus: "chest", exerciseId: "incline-db-press", sets: 3, reps: "8-12", rest: DEFAULT_REST_SECONDS, setType: "standard", group: "", dropSets: 0, scheduleDay: "", note: "" };
 }
@@ -46,7 +57,7 @@ function toolkitMigrateState() {
   if (typeof state.healthKitEnabled !== "boolean") state.healthKitEnabled = false;
   if (!state.healthKitPermissions || typeof state.healthKitPermissions !== "object") state.healthKitPermissions = { weightWrite: false, workoutWrite: false };
   if (!state.builderFormDraft || typeof state.builderFormDraft !== "object") state.builderFormDraft = defaultBuilderFormDraft();
-  state.customPlans = (state.customPlans || []).map((plan) => ({
+  state.customPlans = (state.customPlans || []).filter((plan) => !String(plan?.id || "").startsWith("quick-")).map((plan) => ({
     ...plan,
     exercises: (plan.exercises || []).map((draft) => {
       if (Array.isArray(draft)) return draft;
@@ -204,7 +215,11 @@ function targetRepCeiling(target) {
 
 function progressionSuggestion(exercise) {
   const previous = lastExercisePerformance(exercise.id);
-  if (!previous?.sets.length || exercise.muscle === "abs") return "Log a complete session to establish a progression target.";
+  if (!previous?.sets.length) return "Log a complete session to establish a progression target.";
+  if (isRepsOnlyExercise(exercise)) {
+    const bestReps = Math.max(0, ...previous.sets.map((set) => Number(set.reps) || 0));
+    return bestReps ? `Reps-only movement. Beat ${bestReps} reps on your best set, or slow the tempo.` : "Reps-only movement. Log reps to track progression.";
+  }
   const ceiling = targetRepCeiling(exercise.targetReps || previous.targetReps || "8-12") || 12;
   const working = previous.sets.filter((set) => !set.dropSet && Number(set.weight) > 0 && Number(set.reps) > 0);
   if (!working.length) return "Repeat the movement and establish working-set performance.";
@@ -388,7 +403,7 @@ function builderPlanFromForm() {
   const muscle = draft.muscle || "chest";
   return {
     id: `custom-${Date.now()}`,
-    title: String(draft.title || "").trim() || `${phaseLabel(muscle)} Custom Session`,
+    title: String(draft.title || "").trim() || `${muscleLabel(muscle)} Custom Session`,
     muscle,
     phase: muscle === "travel" ? "travel" : state.phase,
     rest: Number(draft.rest) || DEFAULT_REST_SECONDS,
@@ -715,8 +730,11 @@ collectMeasurementInputs = function collectToolkitMeasurements(prefix) {
 
 measurementRows = function toolkitMeasurementRows(entry) {
   if (!entry) return [];
-  return measurementDefinitions.map(([key, label]) => ({ label, value: entry[key], unit: key === "bodyFat" ? "%" : "in" }))
-    .filter(({ value }) => value !== null && value !== undefined && value !== "");
+  // Consumers in app.js (Logbook view and the PDF report) destructure
+  // [label, value, unit] tuples; returning objects here crashed both.
+  return measurementDefinitions
+    .map(([key, label]) => [label, entry[key], key === "bodyFat" ? "%" : "in"])
+    .filter(([, value]) => value !== null && value !== undefined && value !== "");
 };
 
 function saveWeeklyCheckIn() {
@@ -773,6 +791,7 @@ function requestHealthKit(action = "authorize") {
   const bridge = window.webkit?.messageHandlers?.peaksetHealthKit;
   if (!bridge) return toast("HealthKit is available in the iOS app.");
   const latestWeight = state.weightLogs[0];
+  if (action === "syncWeight" && !(Number(latestWeight?.bodyweight) > 0)) return toast("Log a body weight before sending it to Apple Health.");
   bridge.postMessage({ action, weight: latestWeight?.bodyweight || null, date: latestWeight?.date || null });
 }
 
@@ -785,6 +804,8 @@ function handleNativeHealthKit(payload) {
   }
   if (Number(payload.steps) > 0) {
     state.prepLogs.unshift({ id: crypto.randomUUID(), date: new Date().toISOString(), cardioType: "HealthKit", cardioMinutes: 0, steps: Number(payload.steps), posingMinutes: 0, notes: "Imported from Apple Health" });
+  } else if (payload.status === "stepsImported") {
+    state.healthKitStatus = "No steps recorded in Apple Health today.";
   }
   saveState();
   render();

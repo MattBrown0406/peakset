@@ -129,7 +129,7 @@ button {
 
 .main {
   min-width: 0;
-  padding: 18px 14px 126px;
+  padding: calc(18px + env(safe-area-inset-top, 0px)) 14px calc(126px + env(safe-area-inset-bottom, 0px));
 }
 
 .topbar {
@@ -812,7 +812,7 @@ textarea:focus {
   z-index: 35;
   display: grid;
   place-items: center;
-  padding: 18px;
+  padding: calc(18px + env(safe-area-inset-top, 0px)) 18px calc(18px + env(safe-area-inset-bottom, 0px));
   background:
     radial-gradient(circle at 50% 28%, rgba(30, 155, 255, 0.24), transparent 28rem),
     rgba(5, 7, 10, 0.96);
@@ -893,10 +893,15 @@ textarea:focus {
   overflow: auto;
 }
 
+.modal-screen .modal {
+  padding-top: calc(18px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+}
+
 .toast {
   position: fixed;
   right: 22px;
-  bottom: 22px;
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
   z-index: 40;
   max-width: min(360px, calc(100vw - 44px));
   padding: 14px 16px;
@@ -911,7 +916,7 @@ textarea:focus {
   position: fixed;
   left: max(10px, calc((100vw - 430px) / 2 + 10px));
   right: max(10px, calc((100vw - 430px) / 2 + 10px));
-  bottom: 10px;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   z-index: 10;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -687,7 +687,9 @@ let bellPlaybackStatus = { mode: "idle", error: "" };
 function loadState() {
   try {
     const stored = JSON.parse(localStorage.getItem(STORE_KEY)) || {};
-    const next = { ...defaultState, ...stored };
+    // Deep-copy the defaults: a shallow spread shares the default arrays with
+    // live state, so first-run logs silently mutated defaultState itself.
+    const next = { ...structuredClone(defaultState), ...stored };
     if (!Array.isArray(next.weightLogs)) next.weightLogs = [];
     if (next.weightLogs.length === 0) {
       const migratedWeights = (next.measurements || [])
@@ -717,7 +719,7 @@ function loadState() {
     next.measurements = (next.measurements || []).map(({ bodyweight, ...entry }) => entry);
     return next;
   } catch {
-    return { ...defaultState };
+    return structuredClone(defaultState);
   }
 }
 
@@ -1017,12 +1019,14 @@ function saveProfile() {
     bodyweight: profile.bodyweight,
     note: "Starting profile"
   });
-  state.measurements.unshift({
-    id: crypto.randomUUID(),
-    date: new Date().toISOString(),
-    ...measurements,
-    note: "Starting profile"
-  });
+  if (Object.values(measurements).some((value) => value !== null && Number.isFinite(value))) {
+    state.measurements.unshift({
+      id: crypto.randomUUID(),
+      date: new Date().toISOString(),
+      ...measurements,
+      note: "Starting profile"
+    });
+  }
   saveState();
   toast("Profile created. Time to train.");
   render();
@@ -1126,6 +1130,12 @@ function phaseLabel(phase) {
     prep: "Contest Prep",
     travel: "Road Gym"
   }[phase] || "Off-season";
+}
+
+function muscleLabel(muscle) {
+  if (muscle === "travel") return "Road Gym";
+  if (!muscle) return "Custom";
+  return muscle[0].toUpperCase() + muscle.slice(1);
 }
 
 function todaysRecommendedPlan() {
@@ -2063,7 +2073,7 @@ function startCustomWorkout() {
     toast("Add at least one exercise.");
     return;
   }
-  const title = `${phaseLabel(muscle)} Custom Session`;
+  const title = `${muscleLabel(muscle)} Custom Session`;
 
   const plan = {
     id: `builder-${Date.now()}`,
@@ -2141,7 +2151,9 @@ function startWorkout(planId) {
 
 function quickStartExercise(id) {
   const ex = exerciseById(id);
-  state.customPlans.unshift({
+  // Quick sessions are transient. Start them directly instead of saving a
+  // throwaway template into customPlans, which cluttered Plans and Builder.
+  beginWorkoutFromPlan({
     id: `quick-${Date.now()}`,
     title: `${ex.name} Quick Log`,
     muscle: ex.muscle,
@@ -2150,7 +2162,6 @@ function quickStartExercise(id) {
     note: "Single-exercise quick session.",
     exercises: [[id, 4, "8-12", DEFAULT_REST_SECONDS]]
   });
-  startWorkout(state.customPlans[0].id);
 }
 
 function updateSet(exIndex, setIndex, field, value) {
@@ -2659,7 +2670,7 @@ function renderContent() {
 
 function resetDemoData() {
   localStorage.removeItem(STORE_KEY);
-  state = { ...defaultState };
+  state = structuredClone(defaultState);
   builderDraft = [];
   render();
 }
@@ -2690,6 +2701,10 @@ function render() {
   `;
   updateTimerDom();
 }
+
+// A rest timer can be running while the user browses another tab. Resume its
+// tick on load so it still completes (and rings) instead of stalling.
+if (state.timer.running) ensureTimerTick();
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && timerTick) {

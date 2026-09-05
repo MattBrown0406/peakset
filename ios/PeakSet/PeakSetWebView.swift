@@ -149,7 +149,7 @@ struct PeakSetWebView: UIViewRepresentable {
                   let data = try? JSONSerialization.data(withJSONObject: payload),
                   let json = String(data: data, encoding: .utf8) else { return }
             DispatchQueue.main.async { [weak self] in
-                self?.webView?.evaluateJavaScript("window.handleNativeHealthKit(\(json));")
+                self?.webView?.evaluateJavaScript("window.handleNativeHealthKit?.(\(json));")
             }
         }
 
