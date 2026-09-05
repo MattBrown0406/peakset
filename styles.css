@@ -893,7 +893,9 @@ textarea:focus {
   overflow: auto;
 }
 
-.modal-screen .modal {
+/* Higher specificity than the mobile `.card.pad { padding: 14px }` reset so
+   the safe-area padding survives on phones. */
+.modal-screen .modal.card.pad {
   padding-top: calc(18px + env(safe-area-inset-top, 0px));
   padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
 }
