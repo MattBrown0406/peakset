@@ -1336,3 +1336,14 @@ textarea {
     max-width: none;
   }
 }
+
+.more-grid {
+  gap: 14px;
+}
+
+.file-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}

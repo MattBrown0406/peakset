@@ -1,0 +1,307 @@
+"use strict";
+
+// More tab: units, backup and restore, and the shared file-import dispatcher
+// used by coach packages and programs. Loaded after app.js and toolkit.js.
+
+const BACKUP_FORMAT = "mass-method-backup";
+const BACKUP_VERSION = 1;
+const SNAPSHOT_INTERVAL_MS = 20 * 3600000;
+const LENGTH_MEASUREMENT_KEYS = [
+  "chest", "waist", "waistNavel", "shoulders", "neck", "hips", "leftArm", "rightArm",
+  "forearm", "leftThigh", "rightThigh", "calf", "arm", "thigh"
+];
+const incomingFileHandlers = {};
+let nativeBackups = [];
+
+function settingsMigrateState() {
+  if (state.units !== "metric") state.units = "imperial";
+  if (typeof state.athleteName !== "string") state.athleteName = "";
+  if (!state.athleteId) state.athleteId = crypto.randomUUID();
+  if (!state.backupStatus || typeof state.backupStatus !== "object") state.backupStatus = { message: "No automatic backup yet.", at: null };
+}
+
+settingsMigrateState();
+
+function roundTo(value, places = 2) {
+  const factor = 10 ** places;
+  return Math.round(value * factor) / factor;
+}
+
+function convertNumber(value, factor) {
+  if (value === null || value === undefined || value === "") return value;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value;
+  const converted = roundTo(number * factor);
+  return typeof value === "string" ? String(converted) : converted;
+}
+
+// Stored numbers are always in the athlete's chosen unit, so switching units
+// converts history once instead of converting on every render.
+function convertStoredUnits(target) {
+  if (target === state.units) return;
+  const toMetric = target === "metric";
+  const weightFactor = toMetric ? KG_PER_LB : 1 / KG_PER_LB;
+  const lengthFactor = toMetric ? CM_PER_IN : 1 / CM_PER_IN;
+  const convertSets = (sets) => (Array.isArray(sets) ? sets : []).forEach((set) => {
+    if (set && typeof set === "object") set.weight = convertNumber(set.weight, weightFactor);
+  });
+
+  if (state.profile) state.profile.bodyweight = convertNumber(state.profile.bodyweight, weightFactor);
+  state.weightLogs.forEach((entry) => { entry.bodyweight = convertNumber(entry.bodyweight, weightFactor); });
+  state.measurements.forEach((entry) => {
+    LENGTH_MEASUREMENT_KEYS.forEach((key) => { entry[key] = convertNumber(entry[key], lengthFactor); });
+  });
+  state.workoutLogs.forEach((log) => {
+    convertSets(log.sets);
+    if (Number.isFinite(Number(log.volume))) log.volume = convertNumber(Number(log.volume), weightFactor);
+  });
+  (state.activeWorkout?.exercises || []).forEach((exercise) => convertSets(exercise.sets));
+  state.units = target;
+}
+
+function setUnits(target) {
+  if (!["imperial", "metric"].includes(target) || target === state.units) return;
+  convertStoredUnits(target);
+  saveState();
+  toast(target === "metric" ? "Units set to kg and cm. History converted." : "Units set to lb and inches. History converted.");
+  render();
+}
+
+function saveAthleteName(value) {
+  state.athleteName = String(value || "").trim().slice(0, 60);
+  saveState();
+}
+
+// ---------- Backup ----------
+
+function backupPayload() {
+  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, app: APP_NAME, exportedAt: new Date().toISOString(), state };
+}
+
+function todayStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function shareOrDownload(text, filename, mime = "application/json") {
+  const blob = new Blob([text], { type: mime });
+  if (await shareNativePdf(blob, filename)) return "shared";
+  downloadBlob(blob, filename);
+  return "downloaded";
+}
+
+async function exportBackupFile() {
+  const result = await shareOrDownload(JSON.stringify(backupPayload()), `mass-method-backup-${todayStamp()}.json`);
+  toast(result === "shared" ? "Backup ready. Save it to Files or iCloud Drive." : "Backup downloaded.");
+}
+
+function isBackupPayload(payload) {
+  return payload?.format === BACKUP_FORMAT && payload.state && typeof payload.state === "object" && !Array.isArray(payload.state);
+}
+
+function backupSummary(payloadState) {
+  const logs = Array.isArray(payloadState.workoutLogs) ? payloadState.workoutLogs.length : 0;
+  const weights = Array.isArray(payloadState.weightLogs) ? payloadState.weightLogs.length : 0;
+  return `${logs} workouts and ${weights} weigh-ins`;
+}
+
+function restoreBackupPayload(payload, sourceLabel = "this backup") {
+  if (!isBackupPayload(payload)) {
+    toast("That file is not a Mass Method backup.");
+    return false;
+  }
+  const confirmed = window.confirm(`Replace everything on this device with ${sourceLabel} (${backupSummary(payload.state)})? Your current data is kept in a recovery copy.`);
+  if (!confirmed) return false;
+  try {
+    const current = localStorage.getItem(STORE_KEY);
+    // Keep exactly one pre-restore copy so repeated restores cannot fill storage.
+    Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-before-restore-`)).forEach((key) => localStorage.removeItem(key));
+    if (current) localStorage.setItem(`${STORE_KEY}-before-restore-${Date.now()}`, current);
+    localStorage.setItem(STORE_KEY, JSON.stringify(payload.state));
+  } catch {
+    toast("Could not write the backup to this device's storage.");
+    return false;
+  }
+  window.location.reload();
+  return true;
+}
+
+function registerIncomingFileHandler(format, handler) {
+  incomingFileHandlers[format] = handler;
+}
+
+registerIncomingFileHandler(BACKUP_FORMAT, (payload) => restoreBackupPayload(payload));
+
+// Every imported file (backup, coach package, coach program) arrives here,
+// whether picked in the More tab or opened from Messages/Mail on iOS.
+function handleIncomingFileText(text) {
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    toast("That file could not be read.");
+    return false;
+  }
+  const handler = incomingFileHandlers[payload?.format];
+  if (!handler) {
+    toast("That file is not a Mass Method file.");
+    return false;
+  }
+  return handler(payload);
+}
+window.handleIncomingFileText = handleIncomingFileText;
+
+function importFileFromInput(input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => handleIncomingFileText(String(reader.result || ""));
+  reader.onerror = () => toast("That file could not be read.");
+  reader.readAsText(file);
+  input.value = "";
+}
+
+function nativeBackupBridge() {
+  return window.webkit?.messageHandlers?.peaksetBackup || null;
+}
+
+function requestAutomaticSnapshot(reason = "scheduled", force = false) {
+  const bridge = nativeBackupBridge();
+  if (!bridge || !state.profile) return false;
+  const last = Date.parse(state.backupStatus?.at || "");
+  if (!force && Number.isFinite(last) && Date.now() - last < SNAPSHOT_INTERVAL_MS) return false;
+  bridge.postMessage({ action: "snapshot", reason, filename: `mass-method-backup-${todayStamp()}.json`, json: JSON.stringify(backupPayload()) });
+  return true;
+}
+
+function refreshNativeBackups() {
+  const bridge = nativeBackupBridge();
+  if (!bridge) return;
+  bridge.postMessage({ action: "list" });
+}
+
+function restoreNativeBackup(index) {
+  const backup = nativeBackups[index];
+  const bridge = nativeBackupBridge();
+  if (!backup || !bridge) return;
+  bridge.postMessage({ action: "restore", name: backup.name, location: backup.location });
+}
+
+function handleNativeBackup(payload) {
+  if (!payload || typeof payload !== "object") return;
+  if (payload.status === "saved") {
+    state.backupStatus = { message: `Backed up to ${payload.location || "this iPhone"}.`, at: new Date().toISOString(), location: payload.location || "" };
+    saveState();
+    if (state.view === "more") render();
+  } else if (payload.status === "list") {
+    nativeBackups = Array.isArray(payload.backups) ? payload.backups : [];
+    if (state.view === "more") render();
+  } else if (payload.status === "restore") {
+    let parsed = null;
+    try { parsed = JSON.parse(payload.json || ""); } catch {}
+    restoreBackupPayload(parsed, `the ${payload.location || "saved"} backup from ${formatShortDate(payload.date)}`);
+  } else if (payload.status === "error") {
+    state.backupStatus = { ...state.backupStatus, message: payload.message || "Automatic backup failed." };
+    saveState();
+    if (state.view === "more") render();
+  }
+}
+window.handleNativeBackup = handleNativeBackup;
+
+// Snapshot after every saved workout and at most daily on launch.
+const baseFinishWorkoutForBackup = finishWorkout;
+finishWorkout = function finishWorkoutWithBackup() {
+  const before = state.workoutLogs.length;
+  baseFinishWorkoutForBackup();
+  if (state.workoutLogs.length > before) requestAutomaticSnapshot("workout", true);
+};
+
+// ---------- More tab ----------
+
+function renderUnitsCard() {
+  return `
+    <section class="card pad">
+      <p class="eyebrow">Units</p>
+      <h2>Weight and measurements</h2>
+      <div class="choice-grid" style="margin-top:12px">
+        <button class="choice-btn ${state.units === "imperial" ? "active" : ""}" aria-pressed="${state.units === "imperial"}" onclick="setUnits('imperial')">lb · inches</button>
+        <button class="choice-btn ${state.units === "metric" ? "active" : ""}" aria-pressed="${state.units === "metric"}" onclick="setUnits('metric')">kg · cm</button>
+      </div>
+      <p class="muted compact-note">Switching converts your saved weights, sets, and measurements once.</p>
+      <div class="field" style="margin-top:12px">
+        <label for="athleteName">Your name (shown to your coach)</label>
+        <input id="athleteName" value="${escapeHtml(state.athleteName)}" placeholder="First and last name" maxlength="60" onchange="saveAthleteName(this.value)" />
+      </div>
+    </section>
+  `;
+}
+
+function renderBackupCard() {
+  const native = Boolean(nativeBackupBridge());
+  const list = nativeBackups.slice(0, 10).map((backup, index) => `
+    <div class="exercise-row">
+      <div><strong>${formatShortDate(backup.date)}</strong><p class="muted" style="margin:2px 0 0">${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))} KB</p></div>
+      <button class="secondary-btn" onclick="restoreNativeBackup(${index})">Restore</button>
+    </div>
+  `).join("");
+  return `
+    <section class="card pad">
+      <p class="eyebrow">Backup and restore</p>
+      <h2>Keep your logbook safe</h2>
+      ${native ? `
+        <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app).</p>
+        <div class="signal-card"><span class="badge green">Automatic</span><strong>${escapeHtml(state.backupStatus?.message || "")}</strong>${state.backupStatus?.at ? `<p class="muted" style="margin:4px 0 0">${new Date(state.backupStatus.at).toLocaleString()}</p>` : ""}</div>
+        <div class="actions" style="margin-top:12px">
+          <button class="primary-btn" onclick="requestAutomaticSnapshot('manual', true)">Back Up Now</button>
+          <button class="secondary-btn" onclick="refreshNativeBackups()">Show Backups</button>
+        </div>
+        ${list ? `<div class="exercise-list" style="margin-top:12px">${list}</div>` : ""}
+      ` : `<p class="muted">Export a backup file and keep it somewhere safe. Automatic iCloud backups run in the iPhone app.</p>`}
+      <div class="actions" style="margin-top:12px">
+        <button class="secondary-btn" onclick="exportBackupFile()">Export Backup</button>
+        <label class="secondary-btn file-btn">Import File<input type="file" accept=".json,.massmethod,application/json" onchange="importFileFromInput(this)" hidden /></label>
+      </div>
+      <p class="muted compact-note">Import also opens coach check-ins and programs (.massmethod files).</p>
+    </section>
+  `;
+}
+
+const moreSections = [];
+
+function registerMoreSection(order, renderSection) {
+  moreSections.push({ order, renderSection });
+  moreSections.sort((a, b) => a.order - b.order);
+}
+
+registerMoreSection(10, renderUnitsCard);
+registerMoreSection(20, renderBackupCard);
+
+function renderMore() {
+  return `
+    <div class="compact-page-header"><p class="eyebrow">More</p><h1>Settings, backup, and coaching.</h1></div>
+    <div class="grid more-grid">${moreSections.map((section) => section.renderSection()).join("")}</div>
+  `;
+}
+
+const baseRenderContentWithMore = renderContent;
+renderContent = function renderContentWithMore() {
+  if (state.view === "more") return renderMore();
+  return baseRenderContentWithMore();
+};
+
+const baseResetForSettings = resetDemoData;
+resetDemoData = function resetWithSettings() {
+  baseResetForSettings();
+  settingsMigrateState();
+  saveState();
+  render();
+};
+
+const baseSetViewForMore = setView;
+setView = function setViewWithMore(view) {
+  baseSetViewForMore(view);
+  if (view === "more" && nativeBackupBridge() && !nativeBackups.length) refreshNativeBackups();
+};
+
+saveState();
+requestAutomaticSnapshot("launch");
+render();

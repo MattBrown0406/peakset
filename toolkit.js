@@ -235,10 +235,11 @@ function progressionSuggestion(exercise) {
   const allAtTop = working.every((set) => Number(set.reps) >= ceiling && rirOnTarget(set.rir));
   const bestWeight = Math.max(...working.map((set) => Number(set.weight)));
   if (allAtTop) {
-    const increment = exerciseById(exercise.id).muscle === "legs" ? 5 : 2.5;
-    return `All working sets reached ${ceiling}+ reps. Try ${bestWeight + increment} lb next time if form and RIR stay on target.`;
+    const legs = exerciseById(exercise.id).muscle === "legs";
+    const increment = isMetric() ? (legs ? 2.5 : 1.25) : (legs ? 5 : 2.5);
+    return `All working sets reached ${ceiling}+ reps. Try ${formatWeight(bestWeight + increment, 2)} ${weightUnit()} next time if form and RIR stay on target.`;
   }
-  return `Keep ${bestWeight} lb and add reps until every working set reaches ${ceiling} with 0-2 RIR.`;
+  return `Keep ${formatWeight(bestWeight, 2)} ${weightUnit()} and add reps until every working set reaches ${ceiling} with 0-2 RIR.`;
 }
 
 function renderLastPerformance(id) {
@@ -786,7 +787,7 @@ measurementRows = function toolkitMeasurementRows(entry) {
   // Consumers in app.js (Logbook view and the PDF report) destructure
   // [label, value, unit] tuples; returning objects here crashed both.
   return measurementDefinitions
-    .map(([key, label]) => [label, entry[key], key === "bodyFat" ? "%" : "in"])
+    .map(([key, label]) => [label, entry[key], key === "bodyFat" ? "%" : lengthUnit()])
     .filter(([, value]) => value !== null && value !== undefined && value !== "");
 };
 
@@ -845,7 +846,7 @@ function requestHealthKit(action = "authorize") {
   if (!bridge) return toast("HealthKit is available in the iOS app.");
   const latestWeight = state.weightLogs[0];
   if (action === "syncWeight" && !(Number(latestWeight?.bodyweight) > 0)) return toast("Log a body weight before sending it to Apple Health.");
-  bridge.postMessage({ action, weight: latestWeight?.bodyweight || null, date: latestWeight?.date || null });
+  bridge.postMessage({ action, weight: latestWeight?.bodyweight || null, unit: weightUnit(), date: latestWeight?.date || null });
 }
 
 function handleNativeHealthKit(payload) {

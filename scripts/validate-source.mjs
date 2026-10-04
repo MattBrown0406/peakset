@@ -11,6 +11,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 const readBuffer = (relativePath) => fs.readFileSync(path.join(root, relativePath));
 const app = read("app.js");
 const toolkit = read("toolkit.js");
+const settings = read("settings.js");
 const styles = read("styles.css");
 const swiftApp = read("ios/PeakSet/PeakSetApp.swift");
 const swiftWebView = read("ios/PeakSet/PeakSetWebView.swift");
@@ -89,8 +90,8 @@ assert(toolkit.includes("buildToolkitCoachReportLines"), "Check-ins and prep act
 {
   // app.js destructures [label, value, unit] from measurementRows(); the toolkit override must return tuples.
   const source = literalBetween(toolkit, "measurementRows = function toolkitMeasurementRows(entry) {", "\n};");
-  const measurementRows = Function("measurementDefinitions", "entry", source)
-    .bind(null, [["chest", "Chest"], ["bodyFat", "Body Fat %"]]);
+  const measurementRows = Function("measurementDefinitions", "lengthUnit", "entry", source)
+    .bind(null, [["chest", "Chest"], ["bodyFat", "Body Fat %"]], () => "in");
   const rows = measurementRows({ chest: 44, bodyFat: null });
   assert.deepEqual(rows, [["Chest", 44, "in"]], "Toolkit measurementRows must return [label, value, unit] tuples");
 }
@@ -113,7 +114,7 @@ assert.equal(appIcon.readUInt32BE(16), 1024, "Mass Method app icon must be 1024 
 assert.equal(appIcon.readUInt32BE(20), 1024, "Mass Method app icon must be 1024 px tall");
 assert.equal(appIcon[25], 2, "Mass Method app icon must be opaque RGB without alpha");
 
-for (const filename of ["app.js", "toolkit.js", "styles.css", "index.html", "assets/physique-lines.svg"]) {
+for (const filename of ["app.js", "toolkit.js", "settings.js", "styles.css", "index.html", "assets/physique-lines.svg"]) {
   assert.equal(read(filename), read(`ios/PeakSet/Web/${filename}`), `${filename} is not synced into the iOS bundle`);
 }
 assert.deepEqual(readBuffer("assets/boxing-bell.wav"), readBuffer("ios/PeakSet/Web/assets/boxing-bell.wav"), "Boxing bell audio is not synced into the iOS bundle");
@@ -127,7 +128,7 @@ console.log("Bodybuilder toolkit, native background timer, and HealthKit bridges
 
 // Runtime regression checks. The shipped page loads app.js and then toolkit.js,
 // which overrides several app.js functions, so both scripts run here.
-const runtimeSource = `${app}\n;\n${toolkit}`;
+const runtimeSource = `${app}\n;\n${toolkit}\n;\n${settings}`;
 
 function makeContext(storedState = null) {
   const storage = new Map();
@@ -387,3 +388,28 @@ assert.equal(vm.runInContext("state.workoutLogs[0].sets.length", corrupt.context
 assert.equal(vm.runInContext("state.measurements.length", corrupt.context), 1, "valid measurements must survive malformed neighbours");
 
 console.log("Audit regression checks passed: live-workout guards, RIR logging, progression, HealthKit steps, corrupt-state recovery.");
+
+// Units and backup (settings.js).
+const units = makeContext({
+  profile: { bodyweight: 200, gender: "Male", age: 40 },
+  weightLogs: [{ id: "w", date: "2026-09-01T12:00:00Z", bodyweight: 200 }],
+  measurements: [{ id: "m", date: "2026-09-01T12:00:00Z", waist: 32, bodyFat: 12 }],
+  workoutLogs: [{ id: "l", date: "2026-09-01T12:00:00Z", volume: 1000, sets: [{ exerciseId: "barbell-bench", exercise: "Barbell Bench Press", weight: "100", reps: "10" }] }]
+});
+vm.runInContext("setUnits('metric')", units.context);
+assert.equal(vm.runInContext("state.units", units.context), "metric", "units must switch to metric");
+assert.equal(vm.runInContext("state.weightLogs[0].bodyweight", units.context), 90.72, "body weight must convert to kg");
+assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].weight", units.context), "45.36", "logged set loads must convert and stay strings");
+assert.equal(vm.runInContext("state.measurements[0].waist", units.context), 81.28, "tape measurements must convert to cm");
+assert.equal(vm.runInContext("state.measurements[0].bodyFat", units.context), 12, "body fat percentage must not convert");
+assert.match(vm.runInContext("getStageTimeline() && weightRangeText(0.5, 1.5, 'down')", units.context), /0\.23-0\.68 kg down per week/, "stage targets must show kg");
+assert.equal(vm.runInContext("isPlausibleBodyweight(90)", units.context), true, "metric body weight bounds must use kg");
+vm.runInContext("setUnits('imperial')", units.context);
+assert.equal(vm.runInContext("state.weightLogs[0].bodyweight", units.context), 200, "converting back must round-trip body weight");
+assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].weight", units.context), "100", "converting back must round-trip set loads");
+assert.equal(vm.runInContext("handleIncomingFileText('{\"format\":\"something-else\"}')", units.context), false, "unknown files must be rejected");
+assert.equal(vm.runInContext("handleIncomingFileText('not json')", units.context), false, "unreadable files must be rejected");
+assert.equal(vm.runInContext("isBackupPayload(backupPayload())", units.context), true, "exported backups must be importable");
+assert.ok(vm.runInContext("typeof state.athleteId === 'string' && state.athleteId.length > 10", units.context), "athletes need a stable id for coach packages");
+
+console.log("Units and backup checks passed.");

@@ -46,6 +46,9 @@ struct PeakSetApp: App {
         WindowGroup {
             PeakSetWebView()
                 .ignoresSafeArea()
+                .onOpenURL { url in
+                    PeakSetIncomingFiles.shared.open(url)
+                }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     PeakSetAudioSession.activate()
                 }

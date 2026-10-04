@@ -675,6 +675,7 @@ const defaultState = {
   logbookRange: "7",
   todayPlanId: null,
   todayWorkoutPick: "recommended",
+  units: "imperial",
   timer: { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null }
 };
 
@@ -697,6 +698,39 @@ let bellPlaybackStatus = { mode: "idle", error: "" };
 let coachNoteDraft = "";
 let liveCustomizerOpen = false;
 let exerciseHistorySelection = "";
+
+const KG_PER_LB = 0.45359237;
+const CM_PER_IN = 2.54;
+
+function isMetric() {
+  return state?.units === "metric";
+}
+
+function weightUnit() {
+  return isMetric() ? "kg" : "lb";
+}
+
+function lengthUnit() {
+  return isMetric() ? "cm" : "in";
+}
+
+// Pound-based thresholds and copy are written once in lb and shown in the
+// athlete's unit.
+function fromPounds(pounds) {
+  return isMetric() ? pounds * KG_PER_LB : pounds;
+}
+
+function formatWeight(value, digits = 1) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return Number(number.toFixed(digits)).toLocaleString();
+}
+
+function weightRangeText(lowLb, highLb, direction) {
+  const low = formatWeight(fromPounds(lowLb), 2);
+  const high = formatWeight(fromPounds(highLb), 2);
+  return `${low}-${high} ${weightUnit()} ${direction} per week`;
+}
 
 function clampRestSeconds(value) {
   return Math.max(15, Math.min(300, Number(value) || DEFAULT_REST_SECONDS));
@@ -1075,7 +1109,7 @@ function saveProfile() {
     return;
   }
   if (!isPlausibleBodyweight(profile.bodyweight)) {
-    toast("Enter a body weight between 50 and 700 lb.");
+    toast(bodyweightRangeMessage());
     return;
   }
 
@@ -1107,11 +1141,16 @@ function saveProfile() {
 }
 
 function isPlausibleBodyweight(value) {
-  return Number.isFinite(value) && value >= 50 && value <= 700;
+  return Number.isFinite(value) && value >= fromPounds(50) && value <= fromPounds(700);
+}
+
+function bodyweightRangeMessage() {
+  return `Enter a body weight between ${formatWeight(fromPounds(50), 0)} and ${formatWeight(fromPounds(700), 0)} ${weightUnit()}.`;
 }
 
 function hasInvalidMeasurement(measurements) {
-  return Object.values(measurements).some((value) => value !== null && (!Number.isFinite(value) || value <= 0 || value > 150));
+  const maxLength = isMetric() ? 150 * CM_PER_IN : 150;
+  return Object.entries(measurements).some(([key, value]) => value !== null && (!Number.isFinite(value) || value <= 0 || value > (key === "bodyFat" ? 75 : maxLength)));
 }
 
 function collectMeasurementInputs(prefix) {
@@ -1199,7 +1238,8 @@ function navHtml() {
     ["builder", "Builder"],
     ["progress", "Progress"],
     ["history", "History"],
-    ["logbook", "Logbook"]
+    ["logbook", "Logbook"],
+    ["more", "More"]
   ];
   return items.map(([id, label]) => `
     <button class="${state.view === id ? "active" : ""}" ${state.view === id ? 'aria-current="page"' : ""} onclick="setView('${id}')">${label}</button>
@@ -1378,18 +1418,18 @@ function exerciseVolumeSparkline(entries, exerciseName) {
     return { x, y };
   });
   const points = coordinates.map(({ x, y }) => `${x},${y}`).join(" ");
-  const summary = entries.map((entry) => `${formatShortDate(entry.date)}: ${Math.round(entry.volume).toLocaleString()} pounds`).join(", ");
+  const summary = entries.map((entry) => `${formatShortDate(entry.date)}: ${Math.round(entry.volume).toLocaleString()} ${weightUnit()}`).join(", ");
   return `
     <svg class="sparkline exercise-history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(exerciseName)} session volume trend. ${escapeHtml(summary)}">
       <line x1="0" y1="${height - 8}" x2="${width}" y2="${height - 8}" stroke="rgba(255,255,255,0.12)" />
-      <polyline points="${points}" fill="none" stroke="#1ED8A5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
-      ${coordinates.map(({ x, y }) => `<circle cx="${x}" cy="${y}" r="5" fill="#1ED8A5" />`).join("")}
+      <polyline points="${points}" fill="none" stroke="#2DD4BF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+      ${coordinates.map(({ x, y }) => `<circle cx="${x}" cy="${y}" r="5" fill="#2DD4BF" />`).join("")}
     </svg>
   `;
 }
 
 function historySetSummary(set) {
-  const weight = set.weight === null ? "--" : `${Number(set.weight.toFixed(1)).toLocaleString()} lb`;
+  const weight = set.weight === null ? "--" : `${Number(set.weight.toFixed(1)).toLocaleString()} ${weightUnit()}`;
   const reps = set.reps === null ? "-- reps" : `${Number(set.reps.toFixed(1)).toLocaleString()} reps`;
   return `${set.dropSet ? "Drop · " : ""}${weight} × ${reps}`;
 }
@@ -1422,8 +1462,8 @@ function renderExerciseHistory() {
     <div class="grid today-stats history-stats">
       <article class="card stat"><p class="value">${history.sessionCount}</p><p class="label">Sessions</p></article>
       <article class="card stat"><p class="value">${history.setCount}</p><p class="label">Logged sets</p></article>
-      <article class="card stat"><p class="value">${historyMetric(history.bestWeight)}</p><p class="label">Heaviest lb</p></article>
-      <article class="card stat"><p class="value">${historyMetric(history.estimatedOneRepMax)}</p><p class="label">Estimated 1RM lb</p></article>
+      <article class="card stat"><p class="value">${historyMetric(history.bestWeight)}</p><p class="label">Heaviest ${weightUnit()}</p></article>
+      <article class="card stat"><p class="value">${historyMetric(history.estimatedOneRepMax)}</p><p class="label">Estimated 1RM ${weightUnit()}</p></article>
     </div>
     <section class="card pad history-panel history-trend-card">
       <div class="card-head">
@@ -1439,10 +1479,10 @@ function renderExerciseHistory() {
     <section class="card pad history-panel">
       <div class="card-head"><div><p class="eyebrow">Personal records</p><h2>Best performances</h2></div></div>
       <div class="grid two history-records">
-        <article class="log-card card"><strong>Estimated 1RM</strong><p class="history-record-value">${historyMetric(history.estimatedOneRepMax, " lb")}</p><p class="muted">${history.bestSet ? `${historyMetric(history.bestSet.weight, " lb")} × ${historyMetric(history.bestSet.reps, " reps")} · ${formatShortDate(history.bestSet.date)}` : "No weighted sets yet."}</p></article>
-        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${historyMetric(history.bestSessionVolume, " lb")}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
+        <article class="log-card card"><strong>Estimated 1RM</strong><p class="history-record-value">${historyMetric(history.estimatedOneRepMax, ` ${weightUnit()}`)}</p><p class="muted">${history.bestSet ? `${historyMetric(history.bestSet.weight, ` ${weightUnit()}`)} × ${historyMetric(history.bestSet.reps, " reps")} · ${formatShortDate(history.bestSet.date)}` : "No weighted sets yet."}</p></article>
+        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${historyMetric(history.bestSessionVolume, ` ${weightUnit()}`)}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
         <article class="log-card card"><strong>Highest reps</strong><p class="history-record-value">${historyMetric(history.bestReps)}</p><p class="muted">Highest recorded reps in one set.</p></article>
-        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${historyMetric(history.totalVolume, " lb")}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
+        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${historyMetric(history.totalVolume, ` ${weightUnit()}`)}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
       </div>
     </section>
     <section class="card pad history-panel">
@@ -1451,7 +1491,7 @@ function renderExerciseHistory() {
         ${history.recentSessions.map((session) => `
           <article class="log-card card history-session">
             <div class="card-head"><strong>${escapeHtml(session.title)}</strong><span class="badge">${formatShortDate(session.date)}</span></div>
-            <p class="muted">${session.sets.length} ${session.sets.length === 1 ? "set" : "sets"} · ${Math.round(session.volume).toLocaleString()} lb volume</p>
+            <p class="muted">${session.sets.length} ${session.sets.length === 1 ? "set" : "sets"} · ${Math.round(session.volume).toLocaleString()} ${weightUnit()} volume</p>
             <div class="history-set-list">${session.sets.map((set) => `<span class="history-set">${escapeHtml(historySetSummary(set))}</span>`).join("")}</div>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No saved sets for this exercise yet. Complete a workout and they will appear here.</p></div>'}
@@ -1477,12 +1517,12 @@ function formatShortDate(dateString) {
 function measurementRows(entry) {
   if (!entry) return [];
   return [
-    ["Chest", entry.chest, "in"],
-    ["Waist", entry.waist, "in"],
-    ["Shoulders", entry.shoulders, "in"],
-    ["Arm", entry.arm, "in"],
-    ["Thigh", entry.thigh, "in"],
-    ["Calf", entry.calf, "in"],
+    ["Chest", entry.chest, lengthUnit()],
+    ["Waist", entry.waist, lengthUnit()],
+    ["Shoulders", entry.shoulders, lengthUnit()],
+    ["Arm", entry.arm, lengthUnit()],
+    ["Thigh", entry.thigh, lengthUnit()],
+    ["Calf", entry.calf, lengthUnit()],
     ["Body Fat", entry.bodyFat, "%"]
   ].filter(([, value]) => value !== null && value !== undefined && value !== "");
 }
@@ -1524,7 +1564,7 @@ function buildCoachReportLines(days, coachNote = "") {
     { text: `${APP_NAME} Coach Logbook`, size: 20, bold: true },
     { text: `${days}-day report generated ${new Date().toLocaleDateString()}`, size: 10 },
     { text: `Athlete: ${profile.gender || "Not set"} - Age ${profile.age || "--"} - ${profile.division || "No division/goal set"}`, size: 10 },
-    { text: `Phase: ${phaseLabel(state.phase)} - Current body weight: ${report.latestWeight?.bodyweight || profile.bodyweight || "--"} lb`, size: 10 }
+    { text: `Phase: ${phaseLabel(state.phase)} - Current body weight: ${report.latestWeight?.bodyweight || profile.bodyweight || "--"} ${weightUnit()}`, size: 10 }
   ];
 
   if (coachNote.trim()) {
@@ -1534,15 +1574,15 @@ function buildCoachReportLines(days, coachNote = "") {
 
   addReportSection(lines, "Weekly Summary");
   lines.push({ text: `Workouts: ${report.workouts.length}`, size: 10 });
-  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString()} lb`, size: 10 });
+  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString()} ${weightUnit()}`, size: 10 });
   lines.push({ text: `Body weight logs: ${report.weights.length}`, size: 10 });
-  lines.push({ text: `Weight change in range: ${report.weightDelta === null ? "Needs 2 weigh-ins" : `${report.weightDelta} lb`}`, size: 10 });
+  lines.push({ text: `Weight change in range: ${report.weightDelta === null ? "Needs 2 weigh-ins" : `${report.weightDelta} ${weightUnit()}`}`, size: 10 });
   lines.push({ text: `Measurement check-ins: ${report.measurements.length}`, size: 10 });
 
   addReportSection(lines, "Body Weight");
   if (report.weights.length) {
     report.weights.forEach((entry) => {
-      lines.push({ text: `${formatShortDate(entry.date)} - ${entry.bodyweight} lb${entry.note ? ` - ${entry.note}` : ""}`, size: 10 });
+      lines.push({ text: `${formatShortDate(entry.date)} - ${formatWeight(entry.bodyweight)} ${weightUnit()}${entry.note ? ` - ${entry.note}` : ""}`, size: 10 });
     });
   } else {
     lines.push({ text: "No body weight logs in this range.", size: 10 });
@@ -1562,7 +1602,7 @@ function buildCoachReportLines(days, coachNote = "") {
   if (report.workouts.length) {
     report.workouts.forEach((log) => {
       lines.push({ text: `${formatShortDate(log.date)} - ${log.title}`, size: 11, bold: true });
-      lines.push({ text: `${(log.sets || []).length} sets - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} lb volume`, size: 10 });
+      lines.push({ text: `${(log.sets || []).length} sets - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume`, size: 10 });
       const grouped = (log.sets || []).reduce((groups, set) => {
         if (!groups[set.exercise]) groups[set.exercise] = [];
         groups[set.exercise].push(setLogSummary(set));
@@ -1776,7 +1816,7 @@ function getStageTimeline() {
                 badge: `${weeksOut} weeks out`,
                 phase: "prep",
                 focus: "Hold strength, tighten execution, increase posing consistency, and watch waist trend closely.",
-                target: "0.5-1.25 lb down per week",
+                target: weightRangeText(0.5, 1.25, "down"),
                 progress: 70
               }
             : weeksOut <= 16
@@ -1785,7 +1825,7 @@ function getStageTimeline() {
                   badge: `${weeksOut} weeks out`,
                   phase: "prep",
                   focus: "Create the weekly deficit while protecting heavy compounds and key body-part volume.",
-                  target: "0.5-1.5 lb down per week",
+                  target: weightRangeText(0.5, 1.5, "down"),
                   progress: 52
                 }
               : weeksOut <= 24
@@ -1802,7 +1842,7 @@ function getStageTimeline() {
                     badge: `${weeksOut} weeks out`,
                     phase: "offseason",
                     focus: "Push progressive overload and weak-point volume while keeping waist gain under control.",
-                    target: "0.25-0.75 lb up per week",
+                    target: weightRangeText(0.25, 0.75, "up"),
                     progress: 12
                   };
 
@@ -1831,7 +1871,7 @@ function weightTrendSummary() {
   return {
     label,
     delta,
-    detail: `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} lb over recent logs`
+    detail: `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} ${weightUnit()} over recent logs`
   };
 }
 
@@ -1901,7 +1941,7 @@ function weakPointMeasurementStatus() {
   return {
     done: true,
     label: "Weak-point measurements reviewed",
-    detail: `Lowest change since baseline: ${weakest.label} ${weakest.change >= 0 ? "+" : ""}${weakest.change.toFixed(1)} in.`
+    detail: `Lowest change since baseline: ${weakest.label} ${weakest.change >= 0 ? "+" : ""}${weakest.change.toFixed(1)} ${lengthUnit()}.`
   };
 }
 
@@ -1935,7 +1975,7 @@ function physiqueMeasurementProgressStatus() {
 
   const best = ranked[0];
   if (best.progress >= 0.1) {
-    const unit = best.key === "bodyFat" ? "%" : "in";
+    const unit = best.key === "bodyFat" ? "%" : lengthUnit();
     return {
       done: true,
       label: "Body measurements progressing",
@@ -2089,10 +2129,10 @@ function renderToday() {
       </article>
       <article class="card stat">
         <p class="value">${Math.round(s.weeklyVolume).toLocaleString()}</p>
-        <p class="label">Weekly volume lbs</p>
+        <p class="label">Weekly volume ${weightUnit()}</p>
       </article>
       <article class="card stat">
-        <p class="value">${s.lastWeight?.bodyweight || profile.bodyweight || "--"}</p>
+        <p class="value">${formatWeight(s.lastWeight?.bodyweight || profile.bodyweight)}</p>
         <p class="label">Current body weight</p>
       </article>
       <article class="card stat">
@@ -3005,7 +3045,7 @@ function renderLogbook() {
       </article>
       <article class="card stat">
         <p class="value">${Math.round(report.volume).toLocaleString()}</p>
-        <p class="label">Volume lbs</p>
+        <p class="label">Volume ${weightUnit()}</p>
       </article>
       <article class="card stat">
         <p class="value">${report.weights.length}</p>
@@ -3028,7 +3068,7 @@ function renderLogbook() {
         <article class="log-card card">
           <strong>Body weight</strong>
           ${report.weights.slice(0, 6).map((entry) => `
-            <p class="muted">${formatShortDate(entry.date)} - ${entry.bodyweight} lb${entry.note ? ` - ${escapeHtml(entry.note)}` : ""}</p>
+            <p class="muted">${formatShortDate(entry.date)} - ${formatWeight(entry.bodyweight)} ${weightUnit()}${entry.note ? ` - ${escapeHtml(entry.note)}` : ""}</p>
           `).join("") || '<p class="muted">No body weight logs in this range.</p>'}
         </article>
         <article class="log-card card">
@@ -3048,7 +3088,7 @@ function renderLogbook() {
               <strong>${escapeHtml(log.title)}</strong>
               <span class="badge">${formatShortDate(log.date)}</span>
             </div>
-            <p class="muted">${(log.sets || []).length} sets, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} lbs volume</p>
+            <p class="muted">${(log.sets || []).length} sets, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume</p>
             <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}</p>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No workouts logged in this range.</p></div>'}
@@ -3064,7 +3104,7 @@ function saveWeight() {
     return;
   }
   if (!isPlausibleBodyweight(bodyweight)) {
-    toast("Enter a body weight between 50 and 700 lb.");
+    toast(bodyweightRangeMessage());
     return;
   }
   const entry = {
@@ -3116,7 +3156,7 @@ function sparkline(values) {
   }).join(" ");
   return `
     <svg class="sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Body weight trend">
-      <polyline points="${points}" fill="none" stroke="#1ED8A5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+      <polyline points="${points}" fill="none" stroke="#2DD4BF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
       <line x1="0" y1="${height - 8}" x2="${width}" y2="${height - 8}" stroke="rgba(255,255,255,0.12)" />
     </svg>
   `;

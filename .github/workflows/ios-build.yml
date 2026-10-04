@@ -23,6 +23,7 @@ jobs:
         run: |
           node --check app.js
           node --check toolkit.js
+          node --check settings.js
           node scripts/validate-source.mjs
           git diff --exit-code
 

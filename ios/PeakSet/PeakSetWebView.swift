@@ -4,13 +4,15 @@ import WebKit
 import AVFoundation
 
 struct PeakSetWebView: UIViewRepresentable {
+    static let messageHandlers = ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit", "peaksetBackup"]
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        for handler in ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit"] {
+        for handler in PeakSetWebView.messageHandlers {
             configuration.userContentController.add(context.coordinator, name: handler)
         }
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
@@ -32,7 +34,7 @@ struct PeakSetWebView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
-        for handler in ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit"] {
+        for handler in PeakSetWebView.messageHandlers {
             uiView.configuration.userContentController.removeScriptMessageHandler(forName: handler)
         }
         uiView.stopLoading()
@@ -64,6 +66,63 @@ struct PeakSetWebView: UIViewRepresentable {
                 handleHealthKit(message.body)
             case "peaksetSharePdf":
                 handlePDFShare(message.body)
+            case "peaksetBackup":
+                handleBackup(message.body)
+            default:
+                break
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            PeakSetIncomingFiles.shared.attach { [weak self] text in
+                self?.callJavaScript("handleIncomingFileText", argument: text)
+            }
+        }
+
+        /// Calls `window.<function>(argument)` with the argument JSON-encoded so any
+        /// file contents arrive as a plain string, never as executable source.
+        func callJavaScript(_ function: String, argument: Any) {
+            guard let data = try? JSONSerialization.data(withJSONObject: [argument]),
+                  let array = String(data: data, encoding: .utf8) else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.webView?.evaluateJavaScript("window.\(function)?.(...\(array));")
+            }
+        }
+
+        private func handleBackup(_ body: Any) {
+            guard let payload = body as? [String: Any], let action = payload["action"] as? String else { return }
+            let service = PeakSetBackupService.shared
+            switch action {
+            case "snapshot":
+                guard let json = payload["json"] as? String else { return }
+                let filename = payload["filename"] as? String ?? "mass-method-backup.json"
+                service.snapshot(json: json, filename: filename) { [weak self] result in
+                    switch result {
+                    case .success(let location):
+                        self?.callJavaScript("handleNativeBackup", argument: ["status": "saved", "location": location.rawValue])
+                    case .failure(let error):
+                        self?.callJavaScript("handleNativeBackup", argument: ["status": "error", "message": error.localizedDescription])
+                    }
+                }
+            case "list":
+                service.list { [weak self] files in
+                    let formatter = ISO8601DateFormatter()
+                    let backups: [[String: Any]] = files.map {
+                        ["name": $0.name, "date": formatter.string(from: $0.date), "bytes": $0.bytes, "location": $0.location.rawValue]
+                    }
+                    self?.callJavaScript("handleNativeBackup", argument: ["status": "list", "backups": backups])
+                }
+            case "restore":
+                guard let name = payload["name"] as? String,
+                      let location = PeakSetBackupService.Location(rawValue: payload["location"] as? String ?? "") else { return }
+                service.read(name: name, location: location) { [weak self] result in
+                    switch result {
+                    case .success(let (json, date)):
+                        self?.callJavaScript("handleNativeBackup", argument: ["status": "restore", "json": json, "location": location.rawValue, "date": ISO8601DateFormatter().string(from: date)])
+                    case .failure(let error):
+                        self?.callJavaScript("handleNativeBackup", argument: ["status": "error", "message": error.localizedDescription])
+                    }
+                }
             default:
                 break
             }
@@ -115,7 +174,8 @@ struct PeakSetWebView: UIViewRepresentable {
                     sendHealthKitResult(.failure(PeakSetHealthKitService.ServiceError.invalidPayload))
                     return
                 }
-                service.saveWeight(pounds: weight, date: date) { [weak self] result in
+                let kilograms = (payload["unit"] as? String) == "kg"
+                service.saveWeight(value: weight, kilograms: kilograms, date: date) { [weak self] result in
                     self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "weightSaved", "message": value] })
                 }
             case "saveWorkout":

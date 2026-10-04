@@ -13,6 +13,8 @@
 		1A2B3C4D5E6F700000000004 /* Web in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000104 /* Web */; };
 		1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */; };
 		1A2B3C4D5E6F700000000006 /* boxing-bell.wav in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000108 /* boxing-bell.wav */; };
+		1A2B3C4D5E6F700000000007 /* PeakSetBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000001001 /* PeakSetBackupService.swift */; };
+		1A2B3C4D5E6F700000000008 /* PeakSetPhotos.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000001002 /* PeakSetPhotos.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -25,6 +27,8 @@
 		1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetNativeServices.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000107 /* PeakSet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PeakSet.entitlements; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000108 /* boxing-bell.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "boxing-bell.wav"; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000001001 /* PeakSetBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetBackupService.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000001002 /* PeakSetPhotos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetPhotos.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -57,6 +61,8 @@
 				1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */,
 				1A2B3C4D5E6F700000000107 /* PeakSet.entitlements */,
 				1A2B3C4D5E6F700000000108 /* boxing-bell.wav */,
+				1A2B3C4D5E6F700000001002 /* PeakSetPhotos.swift */,
+				1A2B3C4D5E6F700000001001 /* PeakSetBackupService.swift */,
 			);
 			path = PeakSet;
 			sourceTree = "<group>";
@@ -105,6 +111,9 @@
 							com.apple.HealthKit = {
 								enabled = 1;
 							};
+							com.apple.iCloud = {
+								enabled = 1;
+							};
 						};
 					};
 				};
@@ -148,6 +157,8 @@
 				1A2B3C4D5E6F700000000001 /* PeakSetApp.swift in Sources */,
 				1A2B3C4D5E6F700000000002 /* PeakSetWebView.swift in Sources */,
 				1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */,
+				1A2B3C4D5E6F700000000008 /* PeakSetPhotos.swift in Sources */,
+				1A2B3C4D5E6F700000000007 /* PeakSetBackupService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

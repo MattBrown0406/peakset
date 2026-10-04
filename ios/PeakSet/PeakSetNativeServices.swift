@@ -101,12 +101,12 @@ final class PeakSetHealthKitService {
         }
     }
 
-    func saveWeight(pounds: Double, date: Date, completion: @escaping (Result<String, Error>) -> Void) {
-        guard pounds.isFinite, pounds > 0, let bodyMassType else {
+    func saveWeight(value: Double, kilograms: Bool, date: Date, completion: @escaping (Result<String, Error>) -> Void) {
+        guard value.isFinite, value > 0, let bodyMassType else {
             completion(.failure(ServiceError.healthDataUnavailable))
             return
         }
-        let quantity = HKQuantity(unit: .pound(), doubleValue: pounds)
+        let quantity = HKQuantity(unit: kilograms ? .gramUnit(with: .kilo) : .pound(), doubleValue: value)
         let sample = HKQuantitySample(type: bodyMassType, quantity: quantity, start: date, end: date)
         store.save(sample) { success, error in
             if let error {
