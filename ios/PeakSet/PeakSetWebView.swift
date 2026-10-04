@@ -272,9 +272,14 @@ struct PeakSetWebView: UIViewRepresentable {
 
         private func handleTimer(_ body: Any) {
             guard let payload = body as? [String: Any], let action = payload["action"] as? String else { return }
+            if action == "endActivity" {
+                PeakSetLiveActivityManager.shared.end()
+                return
+            }
             if action == "cancel" {
                 PeakSetTimerService.shared.cancel()
-                if PeakSetWatchBridge.shared.workoutActive {
+                // After a cold launch the bridge hasn't seen a snapshot yet.
+                if payload["workoutActive"] as? Bool ?? PeakSetWatchBridge.shared.workoutActive {
                     PeakSetLiveActivityManager.shared.settle()
                 } else {
                     PeakSetLiveActivityManager.shared.end()

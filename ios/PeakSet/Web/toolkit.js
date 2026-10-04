@@ -874,13 +874,13 @@ startTimer = function startNativeBackedTimer(seconds = state.timer.seconds, full
 
 const baseStopTimer = stopTimer;
 stopTimer = function stopNativeBackedTimer() {
-  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel" });
+  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel", workoutActive: Boolean(state.activeWorkout) });
   baseStopTimer();
 };
 
 function handleNativeTimerReconcile(payload) {
   if (payload?.delivered) {
-    window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel" });
+    window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel", workoutActive: Boolean(state.activeWorkout) });
     state.timer.running = false;
     state.timer.left = 0;
     state.timer.startedAt = null;
@@ -893,7 +893,7 @@ function handleNativeTimerReconcile(payload) {
   } else if (state.timer.running && Date.now() - Number(state.timer.endsAt) > 1500) {
     // The rest ended while the app was away and its notification was already
     // tapped or cleared: settle quietly instead of ringing again.
-    window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel" });
+    window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel", workoutActive: Boolean(state.activeWorkout) });
     Object.assign(state.timer, { running: false, left: 0, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null });
     saveState();
     render();
@@ -1068,7 +1068,7 @@ renderLogbook = function renderToolkitLogbook() {
 };
 
 resetDemoData = function resetToolkitData() {
-  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel" });
+  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel", workoutActive: Boolean(state.activeWorkout) });
   clearInterval(timerTick);
   timerTick = null;
   localStorage.removeItem(STORE_KEY);
@@ -1081,7 +1081,7 @@ resetDemoData = function resetToolkitData() {
 
 // No rest is running after a cold launch: clear any leftover Live Activity
 // and pending notification from a session that was killed mid-rest.
-if (!state.timer.running) window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel" });
+if (!state.timer.running) window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel", workoutActive: Boolean(state.activeWorkout) });
 
 saveState();
 render();

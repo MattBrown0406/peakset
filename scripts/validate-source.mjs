@@ -1040,3 +1040,21 @@ console.log("Audit round 8 checks passed.");
   assert.equal(vm.runInContext("buildWatchSnapshot().exercises[0].group + '|' + buildWatchSnapshot().exercises[2].group", sg.context), "A|", "the watch snapshot carries superset groups so the watch can apply rest rules on its own");
   console.log("Watch superset snapshot checks passed.");
 }
+
+// Audit round 9: superset order on the phone matches the watch; toggle off
+// ends the between-rests activity; cancels say whether a workout is active.
+{
+  const r9 = makeContext({ profile: { bodyweight: 200 } });
+  const run = (code) => vm.runInContext(code, r9.context);
+  run("startWorkout('chest-density'); state.activeWorkout.exercises[0].group = 'A'; state.activeWorkout.exercises[1].group = 'A'");
+  run("state.activeWorkout.exercises[0].sets[0].done = true");
+  assert.equal(run("currentWatchExerciseIndex(state.activeWorkout)"), 1, "after A1 the partner A2 is next");
+  run("state.activeWorkout.exercises[1].sets[0].done = true; state.timer.running = true; state.timer.exerciseIndex = 1");
+  assert.equal(run("currentWatchExerciseIndex(state.activeWorkout)"), 0, "after the round the first superset exercise is next, even while resting");
+  run("window.__posts = []; window.webkit = { messageHandlers: { peaksetTimer: { postMessage: (message) => window.__posts.push(message) } } }; state.timer.running = false; setLiveActivityEnabled(false)");
+  assert.equal(run("JSON.stringify(window.__posts)"), JSON.stringify([{ action: "endActivity" }]), "turning the Lock Screen setting off between rests removes the activity");
+  assert.equal(run("buildWatchSnapshot().liveActivity"), false, "the setting reaches native code through the snapshot");
+  run("window.__posts = []; stopTimer()");
+  assert.ok(run("window.__posts.some((message) => message.action === 'cancel' && message.workoutActive === true)"), "a cancel mid-workout tells native code to keep the activity");
+  console.log("Audit round 9 checks passed.");
+}

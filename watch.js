@@ -37,9 +37,23 @@ function suggestedSetValues(exercise, setIndex) {
 
 function currentWatchExerciseIndex(workout) {
   const timerIndex = state.timer.running ? state.timer.exerciseIndex : null;
-  if (Number.isInteger(timerIndex) && workout.exercises[timerIndex]?.sets.some((set) => !set.done)) return timerIndex;
-  const index = workout.exercises.findIndex((exercise) => exercise.sets.some((set) => !set.done));
-  return index === -1 ? Math.max(0, workout.exercises.length - 1) : index;
+  const open = (exercise) => exercise?.sets.some((set) => !set.done);
+  let index = Number.isInteger(timerIndex) && open(workout.exercises[timerIndex])
+    ? timerIndex
+    : workout.exercises.findIndex(open);
+  if (index === -1) return Math.max(0, workout.exercises.length - 1);
+  // Supersets alternate A1, B1, A2, B2: the group exercise with the fewest
+  // completed sets goes next (ties go to the first), as on the watch.
+  const group = workout.exercises[index].group;
+  if (group) {
+    const doneCount = (exercise) => exercise.sets.filter((set) => set.done).length;
+    workout.exercises.forEach((exercise, candidate) => {
+      if (exercise.group === group && open(exercise) && doneCount(exercise) < doneCount(workout.exercises[index])) index = candidate;
+    });
+    const first = workout.exercises.findIndex((exercise) => exercise.group === group && open(exercise) && doneCount(exercise) === doneCount(workout.exercises[index]));
+    if (first !== -1) index = first;
+  }
+  return index;
 }
 
 function buildWatchSnapshot() {
@@ -85,6 +99,7 @@ function buildWatchSnapshot() {
   });
   const allSets = workout.exercises.flatMap((exercise) => exercise.sets);
   return {
+    liveActivity: state.liveActivityEnabled !== false,
     version: WATCH_SNAPSHOT_VERSION,
     active: true,
     workoutId: String(workout.id),
@@ -257,9 +272,14 @@ function restTimerContext() {
 function setLiveActivityEnabled(enabled) {
   state.liveActivityEnabled = Boolean(enabled);
   saveState();
-  if (!state.liveActivityEnabled && window.webkit?.messageHandlers?.peaksetTimer && state.timer.running) {
-    // Restart the native timer without the Live Activity; the notification stays.
-    window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: state.timer.left, endsAt: state.timer.endsAt, liveActivity: false });
+  if (!state.liveActivityEnabled && window.webkit?.messageHandlers?.peaksetTimer) {
+    if (state.timer.running) {
+      // Restart the native timer without the Live Activity; the notification stays.
+      window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: state.timer.left, endsAt: state.timer.endsAt, liveActivity: false });
+    } else {
+      // Between rests the workout's "Next set ready" activity is still up.
+      window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "endActivity" });
+    }
   }
   render();
 }

@@ -2915,7 +2915,7 @@ function ensureTimerTick() {
     if (left <= 0) {
       state.timer.running = false;
       state.timer.left = 0;
-      if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel" });
+      if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel", workoutActive: Boolean(state.activeWorkout) });
       playBoxingBell();
       if (state.timer.fullscreen) {
         saveState();

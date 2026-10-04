@@ -87,9 +87,16 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
     /// Whether the web app's latest snapshot has a workout in progress. Only
     /// touched on main (script message handlers).
     @MainActor private(set) var workoutActive = false
+    /// The in-app Lock Screen setting, mirrored from snapshots for commands
+    /// handled while the web app is paused.
+    private static let liveActivityKey = "MassMethodLiveActivityEnabled"
 
     @MainActor func publish(snapshotJSON: String) {
-        let active = (snapshotJSON.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any])?["active"] as? Bool ?? false
+        let parsed = snapshotJSON.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+        let active = parsed?["active"] as? Bool ?? false
+        if let enabled = parsed?["liveActivity"] as? Bool {
+            UserDefaults.standard.set(enabled, forKey: Self.liveActivityKey)
+        }
         // The Lock Screen activity lives for the whole workout.
         if workoutActive, !active { PeakSetLiveActivityManager.shared.end() }
         workoutActive = active
@@ -151,6 +158,10 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
             guard endsAtMs > 0 else { return }
             let endsAt = Date(timeIntervalSince1970: endsAtMs / 1000)
             guard endsAt > Date() else { return }
+            // This rest replaces any phone rest still pending, so its
+            // notification must not fire mid-rest (the watch alerts itself).
+            PeakSetTimerService.shared.cancel()
+            guard UserDefaults.standard.object(forKey: liveActivityKey) as? Bool ?? true else { return }
             // The watch alerts for its own rests, so only the Lock Screen
             // countdown is updated here (no phone notification).
             PeakSetLiveActivityManager.shared.show(.init(
@@ -165,7 +176,10 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
         case "adjustRest":
             let seconds = (command["seconds"] as? NSNumber)?.doubleValue ?? 0
             guard seconds != 0 else { return }
-            PeakSetTimerService.shared.shift(by: seconds)
+            // Only move the phone's notification if it belongs to the rest the
+            // watch adjusted.
+            let targetMs = (command["restEndsAt"] as? NSNumber)?.doubleValue ?? 0
+            PeakSetTimerService.shared.shift(by: seconds, ifEndingAt: targetMs > 0 ? Date(timeIntervalSince1970: targetMs / 1000) : nil)
             PeakSetLiveActivityManager.shared.shift(by: seconds)
         default:
             break

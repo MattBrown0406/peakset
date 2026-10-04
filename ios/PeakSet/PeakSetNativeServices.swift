@@ -67,8 +67,9 @@ final class PeakSetTimerService {
 
     /// Moves the pending rest notification (watch +/-15s while the phone's web
     /// app is paused). A rest moved into the past is cancelled.
-    func shift(by seconds: TimeInterval) {
+    func shift(by seconds: TimeInterval, ifEndingAt target: Date? = nil) {
         guard let current = currentFireDate else { return }
+        if let target, abs(current.timeIntervalSince(target)) > 5 { return }
         // The rest already fired; moving it would ring a second time.
         guard current > Date() else { scheduledFireDate = nil; return }
         let fireDate = current.addingTimeInterval(seconds)

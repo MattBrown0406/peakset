@@ -34,7 +34,11 @@ final class PeakSetLiveActivityManager {
                     guard state.endsAt > Date() else { continue }
                     state.endsAt = state.endsAt.addingTimeInterval(seconds)
                     if state.endsAt <= Date() {
-                        await activity.end(nil, dismissalPolicy: .immediate)
+                        // Keep the workout's activity (it can't be restarted
+                        // from the background); show the next set as ready.
+                        state.startedAt = Date()
+                        state.endsAt = state.startedAt
+                        await activity.update(ActivityContent(state: state, staleDate: nil))
                     } else {
                         await activity.update(ActivityContent(state: state, staleDate: state.endsAt))
                     }
@@ -89,7 +93,8 @@ final class PeakSetLiveActivityManager {
             totalSets: rest.totalSets
         )
         let content = ActivityContent(state: state, staleDate: rest.endsAt)
-        if let current = Activity<RestTimerAttributes>.activities.first(where: { $0.attributes.workoutTitle == rest.workoutTitle }) {
+        // An activity iOS ended (8-hour limit) or the user dismissed can't be updated.
+        if let current = Activity<RestTimerAttributes>.activities.first(where: { $0.attributes.workoutTitle == rest.workoutTitle && ($0.activityState == .active || $0.activityState == .stale) }) {
             await current.update(content)
             for other in Activity<RestTimerAttributes>.activities where other.id != current.id {
                 await other.end(nil, dismissalPolicy: .immediate)
