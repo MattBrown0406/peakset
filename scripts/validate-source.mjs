@@ -669,3 +669,71 @@ assert.equal(runB("handleWatchCommand({ action: 'completeSet', workoutId: 'anoth
 assert.match(read("ios/PeakSet/PeakSetWebView.swift"), /runJavaScriptConfirmPanelWithMessage/, "the web view must answer confirm() dialogs on iOS");
 
 console.log("Audit round 1 checks passed.");
+
+// Audit round 2 regressions.
+const X = "<img src=x onerror=PWN()>";
+const crafted = makeContext({
+  profile: { bodyweight: 200, gender: "Male", age: 30, createdAt: new Date().toISOString() },
+  coachMessage: { from: "C", planCount: X, message: "hi" },
+  prepLogs: [{ id: "p", date: new Date().toISOString(), steps: X, cardioMinutes: X }],
+  weeklyCheckIns: [{ id: "c", date: new Date().toISOString(), recovery: X, energy: X, sleep: X }],
+  weightLogs: [{ id: "w", date: new Date().toISOString(), bodyweight: `"><img src=x onerror=PWN()>` }],
+  measurements: [{ id: "m", date: new Date().toISOString(), chest: X, waist: 32 }],
+  selectedExerciseId: `"><img src=x onerror=PWN()>`,
+  builderFormDraft: { sets: `"><img src=x onerror=PWN()>`, rest: X, dropSets: X },
+  trainingBlock: { id: "b", name: "B", startDate: "2026-09-28", accumulationWeeks: 4, deload: true, focus: [X] },
+  blockDraft: { weeks: X, focus: [X] },
+  activeWorkout: { id: "a", title: "W", startedAt: new Date().toISOString(), exercises: [{ id: "flat-db-press", name: "F", targetSets: X, targetDropSets: X, targetReps: "8", rest: X, sets: [{ set: 1, label: "1", weight: "", reps: "", done: false }, null] }, null, { id: "not-real", sets: [] }] }
+});
+const runC = (code) => vm.runInContext(code, crafted.context);
+for (const view of ["today", "progress", "logbook", "library", "builder", "plans", "session", "more", "history"]) {
+  const html = runC(`state.view = '${view}'; renderContent()`);
+  assert.ok(!html.includes("onerror=PWN"), `a crafted backup must not inject markup on ${view}`);
+}
+runC("state.trainingBlock = null; state.view = 'plans'");
+assert.ok(!runC("renderContent()").includes("onerror=PWN"), "block draft text is safe");
+assert.equal(runC("state.activeWorkout.exercises.length"), 1, "malformed live-workout exercises are dropped, valid ones kept");
+assert.equal(runC("state.activeWorkout.exercises[0].sets.length"), 1, "malformed sets are dropped");
+const broken = makeContext({ profile: { bodyweight: 200 }, activeWorkout: { exercises: [null] } });
+assert.equal(vm.runInContext("state.activeWorkout", broken.context), null, "an unusable live workout is cleared instead of crashing every screen");
+// Weight change measures from the profile start, not back-filled Health history.
+const startCtx = makeContext({ profile: { bodyweight: 200, createdAt: new Date(Date.now() - 2 * 86400000).toISOString() }, weightLogs: [
+  { id: "now", date: new Date().toISOString(), bodyweight: 198 },
+  { id: "starting-weight", date: new Date(Date.now() - 2 * 86400000).toISOString(), bodyweight: 200 },
+  { id: "hk-day-old", date: new Date(Date.now() - 150 * 86400000).toISOString(), bodyweight: 225 }
+] });
+assert.equal(vm.runInContext("stats().weightDelta", startCtx.context), "-2.0", "weight change from start ignores back-filled history");
+// Display details.
+const disp = makeContext({ profile: { bodyweight: 200, division: "NPC Classic Physique Open", goalDate: dateKeyLocal(new Date()) } });
+function dateKeyLocal(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+assert.match(vm.runInContext("divisionSelect('x', state.profile.division)", disp.context), /value="NPC Classic Physique Open" selected/, "a custom division stays selected");
+assert.match(vm.runInContext("renderStageTimeline()", disp.context), /Show day/, "show day reads correctly (not 1 or -0 days)");
+vm.runInContext("state.profile.goalDate = '2020-01-01'", disp.context);
+assert.match(vm.runInContext("renderStageTimeline()", disp.context), /Show was [\d,]+ days ago/, "past shows never read as negative days");
+assert.equal(vm.runInContext("formatWeight(-0.01)", disp.context), "0", "tiny negative values never render as -0");
+assert.equal(vm.runInContext("plural(1, 'set') + '|' + plural(2, 'set')", disp.context), "1 set|2 sets", "counts use correct grammar");
+vm.runInContext("state.weightLogs = [{ id: 'w', date: new Date().toISOString(), bodyweight: 210 }]; setUnits('metric'); setUnits('imperial')", disp.context);
+assert.equal(vm.runInContext("state.weightLogs[0].bodyweight", disp.context), 210, "body weight round-trips lb -> kg -> lb");
+vm.runInContext("state.workoutLogs = [{ id: 'abs', title: 'Abs', date: new Date().toISOString(), sets: [{ exerciseId: 'cable-crunch', exercise: 'Cable Crunch', weight: '', reps: '15', repsOnly: true }] }]; exerciseHistorySelection = 'cable-crunch'", disp.context);
+const absHistory = vm.runInContext("renderExerciseHistory()", disp.context);
+assert.ok(!absHistory.includes("-- ×") && /15 reps/.test(absHistory), "reps-only history shows reps, not empty weights");
+// Coach: failed import keeps photo files; packages carry merged latest measurements.
+const coachR2 = makeContext({ profile: { bodyweight: 200 }, measurements: [
+  { id: "hk-m-1", date: new Date().toISOString(), waist: 31 },
+  { id: "tape", date: new Date(Date.now() - 86400000).toISOString(), chest: 46, waist: 32 }
+] });
+const pkgR2 = JSON.parse(JSON.stringify(await vm.runInContext("buildCoachPackage(14)", coachR2.context)));
+assert.equal(pkgR2.measurements[0].chest, 46, "check-ins send the latest value of every measurement");
+assert.equal(pkgR2.measurements[0].waist, 31, "the newest waist wins in the merged measurement");
+// Health readings are not re-sent to Health.
+vm.runInContext("state.weightLogs = [{ id: 'hk-day-x', date: new Date().toISOString(), bodyweight: 199 }, { id: 'mine', date: new Date(Date.now() - 86400000).toISOString(), bodyweight: 201 }]; window.webkit = { messageHandlers: { peaksetHealthKit: { postMessage(m) { window.__sent = m; } } } }; requestHealthKit('syncWeight')", coachR2.context);
+assert.equal(vm.runInContext("window.__sent.weight", coachR2.context), 201, "Send Weight skips readings that came from Apple Health");
+// Watch commands are applied once even when redelivered.
+const wR2 = makeContext({ profile: { bodyweight: 200 } });
+vm.runInContext("startWorkout('chest-density'); handleWatchCommand({ commandId: 'c1', action: 'completeSet', workoutId: state.activeWorkout.id, exIndex: 0, setIndex: 0, weight: '80', reps: '8' }); stopTimer(); updateSet(0, 0, 'reps', '9')", wR2.context);
+vm.runInContext("handleWatchCommand({ commandId: 'c1', action: 'completeSet', workoutId: state.activeWorkout.id, exIndex: 0, setIndex: 0, weight: '80', reps: '8' })", wR2.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].sets[0].reps", wR2.context), "9", "a redelivered watch command is not applied twice");
+assert.match(read("ios/PeakSet/PeakSetWebView.swift"), /webViewWebContentProcessDidTerminate/, "the app reloads if the web process is killed");
+assert.match(read("ios/PeakSet/PeakSetWebView.swift"), /decidePolicyFor navigationAction/, "the web view is restricted to the app's own pages");
+
+console.log("Audit round 2 checks passed.");

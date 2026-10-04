@@ -312,7 +312,7 @@ function renderPhotoCompare(pose) {
   const overlay = state.photoCompare?.mode === "overlay";
   return `
     <div class="photo-compare">
-      <div class="card-head"><h3>Compare · ${daysBetween(before.date, after.date)} days apart</h3>
+      <div class="card-head"><h3>Compare · ${plural(daysBetween(before.date, after.date), "day")} apart</h3>
         <div class="segmented"><button class="${overlay ? "" : "active"}" onclick="setCompareMode('side')">Side by side</button><button class="${overlay ? "active" : ""}" onclick="setCompareMode('overlay')">Fade</button></div>
       </div>
       <div class="grid two">

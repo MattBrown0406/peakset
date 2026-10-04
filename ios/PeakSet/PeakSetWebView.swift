@@ -90,14 +90,14 @@ struct PeakSetWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
-            guard let presenter = Self.topViewController() else { return completionHandler() }
+            guard let presenter = Self.topViewController(), !presenter.isBeingDismissed, !presenter.isBeingPresented else { return completionHandler() }
             let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
             presenter.present(alert, animated: true)
         }
 
         func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-            guard let presenter = Self.topViewController() else { return completionHandler(false) }
+            guard let presenter = Self.topViewController(), !presenter.isBeingDismissed, !presenter.isBeingPresented else { return completionHandler(false) }
             let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
             alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
@@ -105,7 +105,7 @@ struct PeakSetWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
-            guard let presenter = Self.topViewController() else { return completionHandler(nil) }
+            guard let presenter = Self.topViewController(), !presenter.isBeingDismissed, !presenter.isBeingPresented else { return completionHandler(nil) }
             let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
             alert.addTextField { $0.text = defaultText }
             alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
@@ -117,8 +117,10 @@ struct PeakSetWebView: UIViewRepresentable {
             PeakSetIncomingFiles.shared.attach { [weak self] text in
                 self?.callJavaScript("handleIncomingFileText", argument: text)
             }
-            PeakSetWatchBridge.shared.attach { [weak self] command in
-                self?.callJavaScript("handleWatchCommand", argument: command)
+            PeakSetWatchBridge.shared.attach { [weak self] command, acknowledge in
+                self?.callJavaScript("handleWatchCommand", argument: command) { applied in
+                    if applied { acknowledge() }
+                }
             }
             #if DEBUG
             // Simulator smoke tests: `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='...' xcrun simctl launch ...`
@@ -130,12 +132,47 @@ struct PeakSetWebView: UIViewRepresentable {
 
         /// Calls `window.<function>(argument)` with the argument JSON-encoded so any
         /// file contents arrive as a plain string, never as executable source.
-        func callJavaScript(_ function: String, argument: Any) {
+        func callJavaScript(_ function: String, argument: Any, completion: ((Bool) -> Void)? = nil) {
             guard let data = try? JSONSerialization.data(withJSONObject: [argument]),
                   let array = String(data: data, encoding: .utf8) else { return }
             DispatchQueue.main.async { [weak self] in
-                self?.webView?.evaluateJavaScript("window.\(function)?.(...\(array));")
+                guard let webView = self?.webView else {
+                    completion?(false)
+                    return
+                }
+                // `void` keeps the result serializable; success means the call ran.
+                webView.evaluateJavaScript("void window.\(function)?.(...\(array));") { _, error in
+                    completion?(error == nil)
+                }
             }
+        }
+
+        /// The web view only ever shows the bundled app; web links open in
+        /// Safari and anything else is refused.
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let url = navigationAction.request.url, let scheme = url.scheme?.lowercased() else {
+                return decisionHandler(.cancel)
+            }
+            switch scheme {
+            case "file", "about", "blob", "data", PeakSetPhotoSchemeHandler.scheme:
+                decisionHandler(.allow)
+            case "http", "https", "mailto", "tel":
+                if navigationAction.navigationType == .linkActivated {
+                    UIApplication.shared.open(url)
+                }
+                decisionHandler(.cancel)
+            default:
+                decisionHandler(.cancel)
+            }
+        }
+
+        /// iOS can kill the web content process under memory pressure (e.g.
+        /// while the camera is open). Reload instead of staying blank, and
+        /// queue watch commands and opened files until the page is back.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            PeakSetWatchBridge.shared.detach()
+            PeakSetIncomingFiles.shared.detach()
+            webView.reload()
         }
 
         private func handlePhoto(_ body: Any) {
@@ -382,10 +419,13 @@ struct PeakSetWebView: UIViewRepresentable {
         }
 
         private static func topViewController() -> UIViewController? {
-            let scene = UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first { $0.activationState == .foregroundActive }
-            var controller = scene?.windows.first { $0.isKeyWindow }?.rootViewController
+            // Files opened from Mail or Files arrive while the scene is still
+            // activating, so fall back to any foreground scene.
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            let scene = scenes.first { $0.activationState == .foregroundActive }
+                ?? scenes.first { $0.activationState == .foregroundInactive }
+            let window = scene?.windows.first { $0.isKeyWindow } ?? scene?.windows.first
+            var controller = window?.rootViewController
             while let presented = controller?.presentedViewController {
                 controller = presented
             }

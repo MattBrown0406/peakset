@@ -36,11 +36,19 @@ function snapLoad(value, toMetric) {
   return Math.abs(rounded - quarter) <= (toMetric ? 0.03 : 0.06) + 1e-9 ? quarter : rounded;
 }
 
+// Scales and tapes read to 0.1: snap to a tenth when within conversion
+// rounding error, so 210 lb -> 95.25 kg -> 210 lb (not 209.99).
+function snapTenth(value) {
+  const rounded = roundTo(value);
+  const tenth = Math.round(rounded * 10) / 10;
+  return Math.abs(rounded - tenth) <= 0.015 + 1e-9 ? tenth : rounded;
+}
+
 function convertNumber(value, factor, snapToMetric = null) {
   if (value === null || value === undefined || value === "") return value;
   const number = Number(value);
   if (!Number.isFinite(number)) return value;
-  const converted = snapToMetric === null ? roundTo(number * factor) : snapLoad(number * factor, snapToMetric);
+  const converted = snapToMetric === null ? snapTenth(number * factor) : snapLoad(number * factor, snapToMetric);
   return typeof value === "string" ? String(converted) : converted;
 }
 

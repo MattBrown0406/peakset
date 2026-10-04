@@ -25,6 +25,8 @@ final class PeakSetTimerService {
         generation = token
         let fireDate = Date().addingTimeInterval(max(1, seconds))
         center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
+            // `generation` is only touched on the main thread.
+            DispatchQueue.main.async {
             guard granted, let self, self.generation == token else { return }
 
             let content = UNMutableNotificationContent()
@@ -36,6 +38,7 @@ final class PeakSetTimerService {
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: remaining, repeats: false)
             let request = UNNotificationRequest(identifier: self.notificationID, content: content, trigger: trigger)
             self.center.add(request)
+            }
         }
     }
 

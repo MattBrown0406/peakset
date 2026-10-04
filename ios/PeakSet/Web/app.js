@@ -122,7 +122,7 @@ const exerciseLibrary = [
   { id: "leg-press", name: "Leg Press", muscle: "legs", equipment: "Leg press", hotel: false, cue: "Control depth and keep hips down." },
   { id: "leg-extension", name: "Leg Extension", muscle: "legs", equipment: "Leg extension", hotel: false, cue: "Pause at lockout for quad detail." },
   { id: "walking-lunge", name: "Walking Lunge", muscle: "legs", equipment: "Dumbbells", hotel: true, cue: "Long stride for glutes, shorter for quads." },
-  { id: "goblet-squat", name: "Goblet Squat", muscle: "legs", equipment: "Dumbbell", hotel: true, cue: "Slow tempo makes 50 lb feel heavy." },
+  { id: "goblet-squat", name: "Goblet Squat", muscle: "legs", equipment: "Dumbbell", hotel: true, cue: "Slow tempo makes a light dumbbell feel heavy." },
   { id: "db-step-up", name: "Dumbbell Step-Up", muscle: "legs", equipment: "Dumbbells, bench", hotel: true, cue: "Drive through the front leg, no bounce." },
   { id: "lying-leg-curl", name: "Lying Leg Curl", muscle: "legs", equipment: "Leg curl machine", hotel: false, cue: "Hamstring squeeze without hip lift." },
   { id: "seated-leg-curl", name: "Seated Leg Curl", muscle: "legs", equipment: "Leg curl machine", hotel: false, cue: "Great lengthened hamstring tension." },
@@ -247,7 +247,7 @@ const planTemplates = [
     muscle: "travel",
     phase: "travel",
     rest: 45,
-    note: "Built around a hotel bench, 5-50 lb dumbbells, cables, rope, handles, and ankle cuffs.",
+    note: "Built around a hotel bench, light-to-moderate dumbbells (up to about 50 lb / 22.5 kg), cables, rope, handles, and ankle cuffs.",
     exercises: [
       ["db-bulgarian-split-squat", 4, "10-15 each", 60],
       ["incline-db-press", 4, "10-15", 60],
@@ -723,7 +723,21 @@ function fromPounds(pounds) {
 function formatWeight(value, digits = 1) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
-  return Number(number.toFixed(digits)).toLocaleString();
+  // `+ 0` turns -0 into 0 so tiny negative changes never read "-0".
+  return (Number(number.toFixed(digits)) + 0).toLocaleString();
+}
+
+function plural(count, singular, pluralForm = `${singular}s`) {
+  return `${count} ${Number(count) === 1 ? singular : pluralForm}`;
+}
+
+function formatSignedChange(value, digits = 1) {
+  const rounded = Number(Number(value).toFixed(digits)) + 0;
+  return `${rounded > 0 ? "+" : ""}${rounded.toFixed(digits)}`;
+}
+
+function measurementValueText(value, unit) {
+  return unit === "%" ? `${value}%` : `${value} ${unit}`;
 }
 
 function weightRangeText(lowLb, highLb, direction) {
@@ -791,6 +805,7 @@ function loadState() {
       };
     }
     next.measurements = next.measurements.map(({ bodyweight, ...entry }) => entry);
+    sanitizeStoredState(next);
     return next;
   } catch {
     // Keep an untouched copy of unreadable data before the fresh state is saved over it.
@@ -805,6 +820,78 @@ function loadState() {
 let storageWarningShown = false;
 // Set while a restore reloads the page so a timer tick cannot overwrite it.
 let restoringState = false;
+
+function finiteOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+// Stored state can come from a restored backup file, so every field a screen
+// prints is coerced to its real type here; numbers must be numbers.
+function sanitizeStoredState(next) {
+  const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
+  const objects = (value) => (Array.isArray(value) ? value.filter(isObject) : []);
+  const textFields = ["id", "date", "note", "source", "cardioType", "notes", "title"];
+  next.weightLogs = next.weightLogs.map((entry) => ({
+    ...entry,
+    bodyweight: finiteOrNull(entry.bodyweight),
+    ...("bodyFat" in entry ? { bodyFat: finiteOrNull(entry.bodyFat) } : {}),
+    ...("leanMass" in entry ? { leanMass: finiteOrNull(entry.leanMass) } : {})
+  }));
+  next.measurements = next.measurements.map((entry) => Object.fromEntries(Object.entries(entry).map(([key, value]) => [
+    key,
+    key === "healthFields" ? (Array.isArray(value) ? value.map(String) : []) : textFields.includes(key) ? String(value ?? "") : finiteOrNull(value)
+  ])));
+  next.weeklyCheckIns = objects(next.weeklyCheckIns).map((entry) => ({
+    ...entry,
+    ...Object.fromEntries(["sleep", "energy", "hunger", "digestion", "recovery"].map((key) => [key, finiteOrNull(entry[key])])),
+    notes: String(entry.notes ?? "")
+  }));
+  next.prepLogs = objects(next.prepLogs).map((entry) => ({
+    ...entry,
+    cardioType: String(entry.cardioType ?? ""),
+    cardioMinutes: finiteOrNull(entry.cardioMinutes) ?? 0,
+    steps: finiteOrNull(entry.steps) ?? 0,
+    posingMinutes: finiteOrNull(entry.posingMinutes) ?? 0,
+    notes: String(entry.notes ?? "")
+  }));
+  if (next.coachMessage !== null && next.coachMessage !== undefined) {
+    const message = next.coachMessage;
+    next.coachMessage = isObject(message)
+      ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), receivedAt: String(message.receivedAt ?? "") }
+      : null;
+  }
+  // A malformed live workout would crash every screen, including the one
+  // used to restore a good backup; rebuild it from known-good parts.
+  const workout = next.activeWorkout;
+  if (workout !== null && workout !== undefined) {
+    const exercises = isObject(workout) && Array.isArray(workout.exercises)
+      ? workout.exercises.filter((exercise) => isObject(exercise) && Array.isArray(exercise.sets) && exerciseLibrary.some((item) => item.id === exercise.id)).map((exercise) => ({
+          ...exercise,
+          name: String(exercise.name ?? exerciseById(exercise.id).name),
+          targetSets: Math.max(1, Math.min(12, Math.trunc(finiteOrNull(exercise.targetSets) ?? 3))),
+          targetDropSets: Math.max(0, Math.min(4, Math.trunc(finiteOrNull(exercise.targetDropSets) ?? 0))),
+          targetReps: String(exercise.targetReps ?? "8-12"),
+          rest: clampRestSeconds(exercise.rest),
+          group: String(exercise.group ?? ""),
+          sets: exercise.sets.filter(isObject).map((set) => ({
+            ...set,
+            set: Math.trunc(finiteOrNull(set.set) ?? 1),
+            label: String(set.label ?? set.set ?? ""),
+            weight: String(set.weight ?? ""),
+            reps: String(set.reps ?? ""),
+            rir: String(set.rir ?? ""),
+            done: Boolean(set.done),
+            dropSet: Boolean(set.dropSet)
+          }))
+        }))
+      : [];
+    next.activeWorkout = exercises.length && exercises.every((exercise) => exercise.sets.length)
+      ? { ...workout, id: String(workout.id ?? crypto.randomUUID()), title: String(workout.title ?? "Workout"), exercises }
+      : null;
+  }
+}
 
 function saveState() {
   if (restoringState) return;
@@ -841,7 +928,7 @@ function isRepsOnlyExercise(exercise) {
 function divisionSelect(id, selected = "") {
   const normalizedSelected = selected || "";
   const customOption = normalizedSelected && !divisionOptions.includes(normalizedSelected)
-    ? `<option value="${escapeHtml(normalizedSelected)}">${escapeHtml(normalizedSelected)}</option>`
+    ? `<option value="${escapeHtml(normalizedSelected)}" selected>${escapeHtml(normalizedSelected)}</option>`
     : "";
   return `
     <select id="${id}">
@@ -1092,8 +1179,18 @@ function measurementFields(prefix = "") {
   `).join("");
 }
 
+// Units are chosen during onboarding, before any data exists to convert.
+function setOnboardingUnits(units, button) {
+  setChoice("onboardingUnits", units, button);
+  state.units = units === "metric" ? "metric" : "imperial";
+  document.querySelectorAll("[data-weight-unit]").forEach((el) => { el.textContent = weightUnit(); });
+  document.querySelectorAll("[data-length-unit]").forEach((el) => { el.textContent = lengthUnit(); });
+}
+
 function saveProfile() {
   const get = (id) => document.getElementById(id)?.value.trim() || "";
+  const chosenUnits = get("onboardingUnits");
+  if (chosenUnits === "metric" || chosenUnits === "imperial") state.units = chosenUnits;
   const profile = {
     gender: get("gender"),
     age: Number(get("age")),
@@ -1198,7 +1295,7 @@ function renderOnboarding() {
             </div>
             <div class="grid two">
               <div class="field">
-                <label for="bodyweight">Starting Body Weight</label>
+                <label for="bodyweight">Starting Body Weight (<span data-weight-unit>${weightUnit()}</span>)</label>
                 <input id="bodyweight" type="number" step="0.1" placeholder="218.4" />
               </div>
               <div class="field">
@@ -1222,7 +1319,15 @@ function renderOnboarding() {
               </div>
             </div>
             <div>
-              <h3>Starting Measurements</h3>
+              <div class="field">
+                <label>Units</label>
+                <input id="onboardingUnits" type="hidden" value="${state.units === "metric" ? "metric" : "imperial"}" />
+                <div class="choice-grid">
+                  <button class="choice-btn ${state.units === "metric" ? "" : "active"}" data-choice="onboardingUnits" onclick="setOnboardingUnits('imperial', this)">lb · inches</button>
+                  <button class="choice-btn ${state.units === "metric" ? "active" : ""}" data-choice="onboardingUnits" onclick="setOnboardingUnits('metric', this)">kg · cm</button>
+                </div>
+              </div>
+              <h3>Starting Measurements (<span data-length-unit>${lengthUnit()}</span>)</h3>
               <div class="measurement-grid">${measurementFields("")}</div>
             </div>
             <button class="primary-btn" onclick="saveProfile()">Enter ${APP_NAME}</button>
@@ -1300,11 +1405,15 @@ function totalVolume(log) {
 
 function stats() {
   const lastWeight = state.weightLogs[0];
-  const firstWeight = state.weightLogs[state.weightLogs.length - 1];
+  const startedAt = Date.parse(state.profile?.createdAt || "");
+  const sinceStart = Number.isFinite(startedAt)
+    ? state.weightLogs.filter((entry) => Date.parse(entry.date) >= startedAt - 86400000)
+    : state.weightLogs;
+  const firstWeight = sinceStart[sinceStart.length - 1] || state.weightLogs[state.weightLogs.length - 1];
   const lastSeven = state.workoutLogs.filter((log) => Date.now() - new Date(log.date).getTime() < 7 * 86400000);
   const weeklyVolume = lastSeven.reduce((sum, log) => sum + (Number(log.volume) || totalVolume(log)), 0);
   const weightDelta = lastWeight && firstWeight
-    ? (Number(lastWeight.bodyweight || 0) - Number(firstWeight.bodyweight || 0)).toFixed(1)
+    ? (Number((Number(lastWeight.bodyweight || 0) - Number(firstWeight.bodyweight || 0)).toFixed(1)) + 0).toFixed(1)
     : "0.0";
   return { lastWeight, weeklyVolume, weightDelta, workouts: lastSeven.length };
 }
@@ -1354,7 +1463,9 @@ function exerciseHistoryData(exerciseId) {
         const rawReps = Number(set.reps);
         const weight = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : null;
         const reps = Number.isFinite(rawReps) && rawReps > 0 ? rawReps : null;
-        const volume = weight !== null && reps !== null ? weight * reps : 0;
+        const repsOnly = Boolean(set.repsOnly) || exercise.muscle === "abs";
+        // Reps-only (abs) work tracks total reps instead of load x reps.
+        const volume = repsOnly ? reps || 0 : weight !== null && reps !== null ? weight * reps : 0;
         const estimatedOneRepMax = weight !== null && reps !== null && reps <= 30
           ? weight * (1 + reps / 30)
           : 0;
@@ -1364,6 +1475,7 @@ function exerciseHistoryData(exerciseId) {
           volume,
           estimatedOneRepMax,
           dropSet: Boolean(set.dropSet),
+          repsOnly,
           label: set.label || ""
         };
       });
@@ -1432,6 +1544,7 @@ function exerciseVolumeSparkline(entries, exerciseName) {
 }
 
 function historySetSummary(set) {
+  if (set.repsOnly) return `${set.dropSet ? "Drop · " : ""}${set.reps === null ? "--" : Number(set.reps.toFixed(1)).toLocaleString()} reps`;
   const weight = set.weight === null ? "--" : `${Number(set.weight.toFixed(1)).toLocaleString()} ${weightUnit()}`;
   const reps = set.reps === null ? "-- reps" : `${Number(set.reps.toFixed(1)).toLocaleString()} reps`;
   return `${set.dropSet ? "Drop · " : ""}${weight} × ${reps}`;
@@ -1471,7 +1584,7 @@ function renderExerciseHistory() {
     <section class="card pad history-panel history-trend-card">
       <div class="card-head">
         <div><p class="eyebrow">Volume trend</p><h2>${escapeHtml(history.exercise.name)}</h2></div>
-        <span class="badge blue">Last ${history.sessionVolumes.length || 0} sessions</span>
+        <span class="badge blue">Last ${plural(history.sessionVolumes.length || 0, "session")}</span>
       </div>
       ${exerciseVolumeSparkline(history.sessionVolumes, history.exercise.name)}
       <div class="history-trend-labels">
@@ -1494,7 +1607,7 @@ function renderExerciseHistory() {
         ${history.recentSessions.map((session) => `
           <article class="log-card card history-session">
             <div class="card-head"><strong>${escapeHtml(session.title)}</strong><span class="badge">${formatShortDate(session.date)}</span></div>
-            <p class="muted">${session.sets.length} ${session.sets.length === 1 ? "set" : "sets"} · ${Math.round(session.volume).toLocaleString()} ${weightUnit()} volume</p>
+            <p class="muted">${plural(session.sets.length, "set")} · ${history.exercise.muscle === "abs" ? plural(Math.round(session.volume), "rep") : `${Math.round(session.volume).toLocaleString()} ${weightUnit()} volume`}</p>
             <div class="history-set-list">${session.sets.map((set) => `<span class="history-set">${escapeHtml(historySetSummary(set))}</span>`).join("")}</div>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No saved sets for this exercise yet. Complete a workout and they will appear here.</p></div>'}
@@ -1595,7 +1708,7 @@ function buildCoachReportLines(days, coachNote = "") {
   if (report.latestMeasurement) {
     lines.push({ text: `Latest: ${formatShortDate(report.latestMeasurement.date)}${report.latestMeasurement.note ? ` - ${report.latestMeasurement.note}` : ""}`, size: 10 });
     measurementRows(report.latestMeasurement).forEach(([label, value, unit]) => {
-      lines.push({ text: `${label}: ${value}${unit}`, size: 10 });
+      lines.push({ text: `${String(label).replace(/ %$/, "")}: ${measurementValueText(value, unit)}`, size: 10 });
     });
   } else {
     lines.push({ text: "No measurements logged yet.", size: 10 });
@@ -1605,7 +1718,7 @@ function buildCoachReportLines(days, coachNote = "") {
   if (report.workouts.length) {
     report.workouts.forEach((log) => {
       lines.push({ text: `${formatShortDate(log.date)} - ${log.title}`, size: 11, bold: true });
-      lines.push({ text: `${(log.sets || []).length} sets - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume`, size: 10 });
+      lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume`, size: 10 });
       const grouped = (log.sets || []).reduce((groups, set) => {
         if (!groups[set.exercise]) groups[set.exercise] = [];
         groups[set.exercise].push(setLogSummary(set));
@@ -1774,7 +1887,9 @@ function getStageTimeline() {
   const targetDate = goalDateRaw ? new Date(`${goalDateRaw}T12:00:00`) : null;
   const validTarget = targetDate && Number.isFinite(targetDate.getTime());
   const today = new Date();
-  const daysOut = validTarget ? Math.ceil((targetDate - today) / 86400000) : null;
+  // Whole calendar days between local dates (show day = 0), DST-safe.
+  const calendarDay = (date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000;
+  const daysOut = validTarget ? Math.round(calendarDay(targetDate) - calendarDay(today)) : null;
   const weeksOut = daysOut === null ? null : Math.max(0, Math.ceil(daysOut / 7));
 
   const stage = weeksOut === null
@@ -1874,7 +1989,7 @@ function weightTrendSummary() {
   return {
     label,
     delta,
-    detail: `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} ${weightUnit()} over recent logs`
+    detail: `${formatSignedChange(delta)} ${weightUnit()} over recent logs`
   };
 }
 
@@ -2070,7 +2185,7 @@ function renderStageTimeline() {
         <div class="signal-card">
           <span class="badge">Target</span>
           <strong>${escapeHtml(timeline.target)}</strong>
-          <p class="muted">${timeline.weeksOut === null ? "Add a date below." : `${timeline.daysOut} days until goal date.`}</p>
+          <p class="muted">${timeline.weeksOut === null ? "Add a date below." : timeline.daysOut > 0 ? `${plural(timeline.daysOut, "day")} until goal date.` : timeline.daysOut === 0 ? "Show day. Trust the process." : `Show was ${plural(-timeline.daysOut, "day")} ago.`}</p>
         </div>
         <div class="signal-card">
           <span class="badge">Scale trend</span>
@@ -3106,7 +3221,7 @@ function renderLogbook() {
         <article class="log-card card">
           <strong>Latest measurements</strong>
           ${latestMeasurementRows.map(([label, value, unit]) => `
-            <p class="muted">${label}: ${value}${unit}</p>
+            <p class="muted">${escapeHtml(String(label).replace(/ %$/, ""))}: ${escapeHtml(measurementValueText(value, unit))}</p>
           `).join("") || '<p class="muted">No measurements logged yet.</p>'}
         </article>
       </div>
@@ -3120,7 +3235,7 @@ function renderLogbook() {
               <strong>${escapeHtml(log.title)}</strong>
               <span class="badge">${formatShortDate(log.date)}</span>
             </div>
-            <p class="muted">${(log.sets || []).length} sets, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume</p>
+            <p class="muted">${plural((log.sets || []).length, "set")}, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume</p>
             <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}</p>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No workouts logged in this range.</p></div>'}
@@ -3246,7 +3361,7 @@ function render() {
         <div class="sidebar-card">
           <span class="badge blue">${phaseLabel(state.phase)}</span>
           <p style="margin: 12px 0 6px; font-weight: 850;">Road Gym ready</p>
-          <p class="muted">Hotel bench, dumbbells to 50, cable handles, rope, and ankle cuffs.</p>
+          <p class="muted">Hotel bench, dumbbells to 50 lb / 22.5 kg, cable handles, rope, and ankle cuffs.</p>
         </div>
       </aside>
       <main class="main">${renderActiveWorkoutBanner()}${renderContent()}</main>

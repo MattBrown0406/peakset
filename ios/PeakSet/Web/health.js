@@ -154,12 +154,15 @@ function applyHealthBodySamples(samples) {
 }
 
 function setHealthBodyEnabled(enabled) {
+  if (enabled && !healthBridge()) {
+    toast("Apple Health import works in the iPhone app.");
+    render();
+    return;
+  }
   state.healthBody.enabled = Boolean(enabled);
   saveState();
   if (state.healthBody.enabled) {
-    if (!healthBridge()) {
-      toast("Apple Health import works in the iPhone app.");
-    } else {
+    {
       // Ask for read access first; the import runs when authorization returns.
       state.healthBody.pendingAuthorization = true;
       requestHealthKit("authorize");
@@ -240,7 +243,7 @@ function renderBodyCompositionCard() {
   return `
     <section class="card pad body-composition" style="margin-top:12px">
       <div class="card-head">
-        <div><p class="eyebrow">Body composition</p><h2>${latest ? `${formatWeight(latest.value)}% body fat` : "No body fat readings yet"}</h2>${latest ? `<p class="muted">${formatShortDate(latest.date)}${change === null ? "" : ` · ${change >= 0 ? "+" : ""}${formatWeight(change)} pts vs 4 weeks ago`}</p>` : ""}</div>
+        <div><p class="eyebrow">Body composition</p><h2>${latest ? `${formatWeight(latest.value)}% body fat` : "No body fat readings yet"}</h2>${latest ? `<p class="muted">${formatShortDate(latest.date)}${change === null ? "" : ` · ${formatSignedChange(change)} pts vs 4 weeks ago`}</p>` : ""}</div>
         ${state.healthBody?.enabled ? '<span class="badge green">Apple Health</span>' : ""}
       </div>
       ${series.length > 1 ? sparkline(series.slice(-60).map((point) => point.value)) : ""}

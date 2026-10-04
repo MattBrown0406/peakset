@@ -58,6 +58,18 @@ function weeklyVolumeHistory(weeks = 4) {
   });
 }
 
+function mergedLatestMeasurement() {
+  if (!state.measurements.length) return null;
+  const merged = { id: `latest-${state.measurements[0].date}`, date: state.measurements[0].date };
+  state.measurements.forEach((entry) => {
+    Object.entries(entry).forEach(([key, value]) => {
+      if (["id", "date", "note", "source", "healthFields"].includes(key)) return;
+      if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") merged[key] = value;
+    });
+  });
+  return merged;
+}
+
 async function buildCoachPackage(days = Number(state.logbookRange || 7)) {
   const report = coachReportData(days);
   const photos = PHOTO_POSES
@@ -88,7 +100,9 @@ async function buildCoachPackage(days = Number(state.logbookRange || 7)) {
     },
     note: coachNoteDraft || "",
     weightLogs: report.weights,
-    measurements: state.measurements.slice(0, 6),
+    // Latest value of every metric first (Health adds waist-only days), then
+    // the athlete's own tape check-ins.
+    measurements: [mergedLatestMeasurement(), ...state.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).slice(0, 5)].filter(Boolean),
     workoutLogs: report.workouts,
     weeklyCheckIns: report.weeklyCheckIns || [],
     prepLogs: report.prepLogs || [],
@@ -240,7 +254,6 @@ async function importCoachPackage(pkg) {
   }
   const incomingUnitsMatch = profile.units === (existing.units || profile.units);
   const photos = [...storedPhotos, ...safeArray(existing.photos)].sort((a, b) => new Date(b.date) - new Date(a.date));
-  photos.slice(COACH_PHOTOS_PER_ATHLETE).forEach(deletePhotoFile);
   const athlete = {
     ...existing,
     id: athleteId,
@@ -269,6 +282,8 @@ async function importCoachPackage(pkg) {
     toast("Your roster is full on this device. Remove an athlete before importing more check-ins.");
     return false;
   }
+  // Only now that the import is kept, drop photo files beyond the cap.
+  photos.slice(COACH_PHOTOS_PER_ATHLETE).forEach(deletePhotoFile);
   state.coach.selectedAthleteId = athleteId;
   state.view = "coach";
   saveState();
@@ -507,12 +522,12 @@ function renderAthleteDetail(athlete) {
     </div>
     <div class="grid two" style="margin-top:12px">
       <section class="card pad"><h2>Body weight</h2>${weights.length > 1 ? sparkline(weights) : '<p class="muted">Needs two weigh-ins.</p>'}</section>
-      <section class="card pad"><h2>Latest measurements</h2>${latestMeasurement ? `<p class="muted">${formatShortDate(latestMeasurement.date)}</p><div class="measurement-grid">${measurementDefinitions.filter(([key]) => latestMeasurement[key] !== null && latestMeasurement[key] !== undefined).map(([key, label]) => `<div class="stat card"><p class="value">${escapeHtml(latestMeasurement[key])}</p><p class="label">${escapeHtml(label)} ${key === "bodyFat" ? "%" : lengthLabel}</p></div>`).join("")}</div>` : '<p class="muted">No measurements yet.</p>'}</section>
+      <section class="card pad"><h2>Latest measurements</h2>${latestMeasurement ? `<p class="muted">${formatShortDate(latestMeasurement.date)}</p><div class="measurement-grid">${measurementDefinitions.filter(([key]) => latestMeasurement[key] !== null && latestMeasurement[key] !== undefined).map(([key, label]) => `<div class="stat card"><p class="value">${escapeHtml(latestMeasurement[key])}</p><p class="label">${escapeHtml(String(label).replace(/ %$/, ""))} ${key === "bodyFat" ? "%" : lengthLabel}</p></div>`).join("")}</div>` : '<p class="muted">No measurements yet.</p>'}</section>
     </div>
     <section class="card pad" style="margin-top:12px"><div class="card-head"><div><p class="eyebrow">Weekly volume</p><h2>Hard sets this week</h2></div>${athlete.trainingBlock ? `<span class="badge blue">${escapeHtml(athlete.trainingBlock.statusLine || athlete.trainingBlock.name || "")}</span>` : ""}</div><div class="volume-list">${renderAthleteVolume(athlete)}</div></section>
     ${safeArray(athlete.photos).length ? `<section class="card pad" style="margin-top:12px"><p class="eyebrow">Progress photos</p><div class="photo-strip">${safeArray(athlete.photos).map((photo) => `<figure class="photo-thumb">${photoImg(photo)}<figcaption>${escapeHtml(poseLabel(photo.pose))}<br />${formatShortDate(photo.date)}</figcaption></figure>`).join("")}</div></section>` : ""}
     <div class="grid two" style="margin-top:12px">
-      <section class="card pad"><h2>Recent workouts</h2><div class="exercise-list">${safeArray(athlete.workoutLogs).slice(0, 8).map((log) => `<div class="exercise-row"><div><strong>${escapeHtml(log.title || "Workout")}</strong><p class="muted" style="margin:2px 0 0">${formatShortDate(log.date)} · ${Number(log.setCount ?? workoutLogSets(log).length) || 0} sets</p></div></div>`).join("") || '<p class="muted">No workouts in range.</p>'}</div></section>
+      <section class="card pad"><h2>Recent workouts</h2><div class="exercise-list">${safeArray(athlete.workoutLogs).slice(0, 8).map((log) => `<div class="exercise-row"><div><strong>${escapeHtml(log.title || "Workout")}</strong><p class="muted" style="margin:2px 0 0">${formatShortDate(log.date)} · ${plural(Number(log.setCount ?? workoutLogSets(log).length) || 0, "set")}</p></div></div>`).join("") || '<p class="muted">No workouts in range.</p>'}</div></section>
       <section class="card pad"><h2>Recovery check-ins</h2><div class="exercise-list">${safeArray(athlete.weeklyCheckIns).slice(0, 6).map((entry) => `<div class="exercise-row"><span>${formatShortDate(entry.date)} · Sleep ${escapeHtml(entry.sleep ?? "--")}h</span><strong>Energy ${escapeHtml(entry.energy ?? "--")} · Recovery ${escapeHtml(entry.recovery ?? "--")}/5</strong></div>${entry.notes ? `<p class="muted compact-note">${escapeHtml(entry.notes)}</p>` : ""}`).join("") || '<p class="muted">No check-ins in range.</p>'}</div></section>
     </div>
     <section class="card pad" style="margin-top:12px">
@@ -523,7 +538,7 @@ function renderAthleteDetail(athlete) {
       <p class="eyebrow">Send a program</p>
       <h2>Templates, block, and message</h2>
       <p class="muted compact-note">Build templates in the Builder tab, then pick them here. The athlete imports the file and the workouts land in their Plans.</p>
-      <div class="program-plans">${plans.map((plan) => `<label class="toggle-row"><input type="checkbox" ${coachProgramDraft.planIds.includes(plan.id) ? "checked" : ""} onchange="toggleProgramPlan('${escapeHtml(plan.id)}')" /> <span>${escapeHtml(plan.title)} <small class="muted">${plan.exercises.length} exercises${plan.scheduleDay ? ` · ${escapeHtml(plan.scheduleDay)}` : ""}</small></span></label>`).join("") || '<p class="muted">No saved templates yet. Save some from the Builder tab.</p>'}</div>
+      <div class="program-plans">${plans.map((plan) => `<label class="toggle-row"><input type="checkbox" ${coachProgramDraft.planIds.includes(plan.id) ? "checked" : ""} onchange="toggleProgramPlan('${escapeHtml(plan.id)}')" /> <span>${escapeHtml(plan.title)} <small class="muted">${plural(plan.exercises.length, "exercise")}${plan.scheduleDay ? ` · ${escapeHtml(plan.scheduleDay)}` : ""}</small></span></label>`).join("") || '<p class="muted">No saved templates yet. Save some from the Builder tab.</p>'}</div>
       <div class="grid two" style="margin-top:12px">
         <div class="field"><label for="programBlock">Training block</label><select id="programBlock" onchange="updateProgramDraft('blockWeeks', this.value); render()"><option value="0">No block</option>${[3, 4, 5, 6].map((weeks) => `<option value="${weeks}" ${coachProgramDraft.blockWeeks === weeks ? "selected" : ""}>${weeks} build weeks + deload, starting next week</option>`).join("")}</select></div>
         <div class="field"><label for="programMessage">Message</label><input id="programMessage" value="${escapeHtml(coachProgramDraft.message)}" placeholder="Focus for this block..." oninput="updateProgramDraft('message', this.value)" /></div>

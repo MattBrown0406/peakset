@@ -57,15 +57,24 @@ function toolkitMigrateState() {
   }));
   if (!state.equipmentProfiles.length) state.equipmentProfiles = [{ id: "all-equipment", name: "Commercial Gym", equipment: [] }];
   if (!state.equipmentProfiles.some((profile) => profile.id === state.activeEquipmentProfileId)) state.activeEquipmentProfileId = state.equipmentProfiles[0].id;
-  if (!Array.isArray(state.weeklyCheckIns)) state.weeklyCheckIns = [];
-  if (!Array.isArray(state.prepLogs)) state.prepLogs = [];
-  if (!state.librarySearch) state.librarySearch = "";
+  const objectsOnly = (value) => (Array.isArray(value) ? value.filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry)) : []);
+  state.weeklyCheckIns = objectsOnly(state.weeklyCheckIns);
+  state.prepLogs = objectsOnly(state.prepLogs);
+  if (typeof state.librarySearch !== "string") state.librarySearch = "";
   if (!state.libraryEquipmentFilter) state.libraryEquipmentFilter = "all";
   if (!state.measurementTrendKey) state.measurementTrendKey = "waist";
   if (!state.healthKitStatus) state.healthKitStatus = "Not connected";
   if (typeof state.healthKitEnabled !== "boolean") state.healthKitEnabled = false;
   if (!state.healthKitPermissions || typeof state.healthKitPermissions !== "object") state.healthKitPermissions = { weightWrite: false, workoutWrite: false };
   if (!state.builderFormDraft || typeof state.builderFormDraft !== "object") state.builderFormDraft = defaultBuilderFormDraft();
+  state.builderFormDraft = {
+    ...defaultBuilderFormDraft(),
+    ...state.builderFormDraft,
+    sets: clampSetCount(state.builderFormDraft.sets),
+    rest: clampRestSeconds(state.builderFormDraft.rest),
+    dropSets: clampDropSetCount(state.builderFormDraft.dropSets)
+  };
+  if (!exerciseLibrary.some((exercise) => exercise.id === state.selectedExerciseId)) state.selectedExerciseId = null;
   state.customPlans = (state.customPlans || []).filter((plan) => plan && typeof plan === "object" && !String(plan.id || "").startsWith("quick-")).map((plan) => ({
     ...plan,
     id: safeId.test(String(plan.id)) ? plan.id : `custom-${crypto.randomUUID()}`,
@@ -261,7 +270,7 @@ function renderLastPerformance(id) {
 }
 
 function renderExerciseHistoryPanel(id) {
-  if (!id) return "";
+  if (!exerciseLibrary.some((exercise) => exercise.id === id)) return "";
   const exercise = exerciseById(id);
   const sessions = exerciseHistorySessions(id);
   const sets = sessions.flatMap((session) => session.sets);
@@ -520,7 +529,7 @@ renderBuilder = function renderToolkitBuilder() {
       <section class="card pad"><h2>Draft</h2><div class="exercise-list">${normalizedDraft.map((spec,index) => `<div class="exercise-row"><div><strong>${spec.group ? `${escapeHtml(spec.group)} · ` : ""}${escapeHtml(exerciseById(spec.id).name)}</strong><p class="muted">${spec.sets} × ${escapeHtml(spec.reps)} · ${escapeHtml(setTypeOptions.find(([value]) => value === spec.setType)?.[1] || spec.setType)}${spec.dropSets ? ` · ${spec.dropSets} drop` : ""}</p></div><div class="mini-actions"><button onclick="moveBuilderExercise(${index},-1)">↑</button><button onclick="moveBuilderExercise(${index},1)">↓</button><button onclick="duplicateBuilderExercise(${index})">Copy</button><button class="danger" onclick="removeBuilderExercise(${index})">×</button></div></div>`).join("") || '<div class="empty"><p class="muted">No exercises added yet.</p></div>'}</div></section>
     </div>
     <section class="card pad" style="margin-top:16px"><div class="card-head"><div><p class="eyebrow">Equipment profiles</p><h2>${escapeHtml(profile.name)}</h2></div><select onchange="selectEquipmentProfile(this.value)">${state.equipmentProfiles.map((item) => `<option value="${item.id}" ${item.id === profile.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></div><div class="grid two"><div><p class="muted">${profile.equipment.length ? profile.equipment.join(" · ") : "All equipment available"}</p><button class="ghost-btn danger" onclick="deleteEquipmentProfile('${profile.id}')">Delete Active Profile</button></div><div><div class="field"><label>New profile name</label><input id="equipmentProfileName" placeholder="Garage Gym" /></div><div class="equipment-checks">${equipmentOptions.map((item) => `<label><input id="${equipmentInputId(item)}" type="checkbox" /> ${item}</label>`).join("")}</div><button class="secondary-btn" onclick="saveEquipmentProfile()">Save Profile</button></div></div></section>
-    <section class="card pad" style="margin-top:16px"><div class="card-head"><p class="eyebrow">Saved templates</p><button class="secondary-btn" onclick="duplicateScheduledWeek()">Duplicate Scheduled Week</button></div><div class="grid three">${state.customPlans.map((plan) => `<article class="card plan-card"><h3>${escapeHtml(plan.title)}</h3><p class="muted">${escapeHtml(plan.scheduleDay || "Unscheduled")} · ${plan.exercises.length} exercises</p><div class="field"><label>Scheduled day</label><select onchange="updateCustomPlanSchedule('${plan.id}',this.value)"><option value="">Unscheduled</option>${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].map((day) => `<option value="${day}" ${plan.scheduleDay === day ? "selected" : ""}>${day}</option>`).join("")}</select></div><div class="actions"><button class="primary-btn" onclick="startWorkout('${plan.id}')">Start</button><button class="secondary-btn" onclick="duplicateCustomPlan('${plan.id}')">Duplicate</button><button class="ghost-btn danger" onclick="deleteCustomPlan('${plan.id}')">Delete</button></div></article>`).join("") || '<p class="muted">No saved custom templates.</p>'}</div></section>`;
+    <section class="card pad" style="margin-top:16px"><div class="card-head"><p class="eyebrow">Saved templates</p><button class="secondary-btn" onclick="duplicateScheduledWeek()">Duplicate Scheduled Week</button></div><div class="grid three">${state.customPlans.map((plan) => `<article class="card plan-card"><h3>${escapeHtml(plan.title)}</h3><p class="muted">${escapeHtml(plan.scheduleDay || "Unscheduled")} · ${plural(plan.exercises.length, "exercise")}</p><div class="field"><label>Scheduled day</label><select onchange="updateCustomPlanSchedule('${plan.id}',this.value)"><option value="">Unscheduled</option>${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].map((day) => `<option value="${day}" ${plan.scheduleDay === day ? "selected" : ""}>${day}</option>`).join("")}</select></div><div class="actions"><button class="primary-btn" onclick="startWorkout('${plan.id}')">Start</button><button class="secondary-btn" onclick="duplicateCustomPlan('${plan.id}')">Duplicate</button><button class="ghost-btn danger" onclick="deleteCustomPlan('${plan.id}')">Delete</button></div></article>`).join("") || '<p class="muted">No saved custom templates.</p>'}</div></section>`;
 };
 
 const baseTodaysRecommendedPlan = todaysRecommendedPlan;
@@ -684,7 +693,7 @@ function saveActiveWorkoutAsTemplate() {
       exercise.targetReps,
       exercise.rest,
       exercise.fullDropSets ?? exercise.sets.filter((set) => set.dropSet).length,
-      { group: exercise.group || "", setType: exercise.defaultSetType || "standard" }
+      { group: exercise.group || "", setType: exercise.fullSetType || exercise.defaultSetType || "standard" }
     ])
   });
   saveState();
@@ -767,7 +776,7 @@ renderSession = function renderToolkitSession() {
   const totalTimer = Math.max(1, state.timer.seconds);
   const progress = state.timer.running || state.timer.fullscreen ? (totalTimer - left) / totalTimer * 360 : 0;
   setTimeout(ensureTimerTick, 0);
-  return `${renderRestOverlay(left,progress)}<div class="topbar"><div><p class="eyebrow">Live workout</p><h1>${escapeHtml(workout.title)}</h1><p class="muted" data-sets-completed>${completed} of ${total} sets completed</p></div><div class="actions"><select id="liveExerciseAdd" aria-label="Add exercise"><option value="">Add exercise...</option>${liveExerciseCandidates().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button class="secondary-btn" onclick="addLiveExercise()">Add</button><button class="secondary-btn" onclick="saveActiveWorkoutAsTemplate()">Save Template</button><button class="secondary-btn" onclick="finishWorkout()">Save Session</button><button class="ghost-btn danger" onclick="cancelWorkout()">Cancel</button></div></div><div class="session-shell"><section class="session">${workout.exercises.map((exercise,exIndex) => `<article class="card pad"><div class="card-head"><div>${exercise.group ? `<span class="badge green">Superset ${escapeHtml(exercise.group)}</span>` : ""}<span class="badge blue">${exercise.targetSets} sets${exercise.targetDropSets ? ` + ${exercise.targetDropSets} drop` : ""} × ${escapeHtml(exercise.targetReps)}</span><h2 style="margin-top:10px">${escapeHtml(exercise.name)}</h2></div><span class="badge">${exercise.rest}s rest</span></div>${renderToolkitExerciseControls(exercise,exIndex)}<div class="set-table">${exercise.sets.map((set,setIndex) => renderToolkitSetFields(exercise,exIndex,set,setIndex)).join("")}</div></article>`).join("")}</section><aside class="card pad"><p class="eyebrow">Rest timer</p><div class="timer-face" style="--progress:${progress}deg"><div style="text-align:center"><strong data-timer-time>${formatTime(left)}</strong><p class="muted" data-timer-status>${timerStatusText()}</p></div></div><div class="timer-controls"><div class="actions"><button class="secondary-btn" onclick="adjustRest(-15)">-15s</button><button class="secondary-btn" onclick="adjustRest(15)">+15s</button></div><div class="actions">${restPresetButtons(false)}</div><button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button><button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button></div></aside></div>`;
+  return `${renderRestOverlay(left,progress)}<div class="topbar"><div><p class="eyebrow">Live workout</p><h1>${escapeHtml(workout.title)}</h1><p class="muted" data-sets-completed>${completed} of ${total} sets completed</p></div><div class="actions"><select id="liveExerciseAdd" aria-label="Add exercise"><option value="">Add exercise...</option>${liveExerciseCandidates().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button class="secondary-btn" onclick="addLiveExercise()">Add</button><button class="secondary-btn" onclick="saveActiveWorkoutAsTemplate()">Save Template</button><button class="secondary-btn" onclick="finishWorkout()">Save Session</button><button class="ghost-btn danger" onclick="cancelWorkout()">Cancel</button></div></div><div class="session-shell"><section class="session">${workout.exercises.map((exercise,exIndex) => `<article class="card pad"><div class="card-head"><div>${exercise.group ? `<span class="badge green">Superset ${escapeHtml(exercise.group)}</span>` : ""}<span class="badge blue">${plural(exercise.targetSets, "set")}${exercise.targetDropSets ? ` + ${exercise.targetDropSets} drop` : ""} × ${escapeHtml(exercise.targetReps)}</span><h2 style="margin-top:10px">${escapeHtml(exercise.name)}</h2></div><span class="badge">${exercise.rest}s rest</span></div>${renderToolkitExerciseControls(exercise,exIndex)}<div class="set-table">${exercise.sets.map((set,setIndex) => renderToolkitSetFields(exercise,exIndex,set,setIndex)).join("")}</div></article>`).join("")}</section><aside class="card pad"><p class="eyebrow">Rest timer</p><div class="timer-face" style="--progress:${progress}deg"><div style="text-align:center"><strong data-timer-time>${formatTime(left)}</strong><p class="muted" data-timer-status>${timerStatusText()}</p></div></div><div class="timer-controls"><div class="actions"><button class="secondary-btn" onclick="adjustRest(-15)">-15s</button><button class="secondary-btn" onclick="adjustRest(15)">+15s</button></div><div class="actions">${restPresetButtons(false)}</div><button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button><button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button></div></aside></div>`;
 };
 
 const baseStartTimer = startTimer;
@@ -818,14 +827,20 @@ measurementRows = function toolkitMeasurementRows(entry) {
     .filter(([, value]) => value !== null && value !== undefined && value !== "");
 };
 
+function optionalNumberInput(id) {
+  const raw = document.getElementById(id)?.value;
+  return raw === undefined || raw === null || String(raw).trim() === "" ? null : Number(raw);
+}
+
 function saveWeeklyCheckIn() {
   const entry = {
     id: crypto.randomUUID(), date: new Date().toISOString(),
-    sleep: Number(document.getElementById("checkSleep")?.value) || null,
-    energy: Number(document.getElementById("checkEnergy")?.value) || null,
-    hunger: Number(document.getElementById("checkHunger")?.value) || null,
-    digestion: Number(document.getElementById("checkDigestion")?.value) || null,
-    recovery: Number(document.getElementById("checkRecovery")?.value) || null,
+    // Blank means "not rated"; anything typed (including 0) is validated below.
+    sleep: optionalNumberInput("checkSleep"),
+    energy: optionalNumberInput("checkEnergy"),
+    hunger: optionalNumberInput("checkHunger"),
+    digestion: optionalNumberInput("checkDigestion"),
+    recovery: optionalNumberInput("checkRecovery"),
     notes: document.getElementById("checkNotes")?.value.trim() || ""
   };
   const readiness = [entry.energy, entry.hunger, entry.digestion, entry.recovery].filter((value) => value !== null);
@@ -878,7 +893,8 @@ function weeklyAverageWeight() {
 function requestHealthKit(action = "authorize") {
   const bridge = window.webkit?.messageHandlers?.peaksetHealthKit;
   if (!bridge) return toast("HealthKit is available in the iOS app.");
-  const latestWeight = state.weightLogs[0];
+  // Readings imported from Apple Health are never sent back as duplicates.
+  const latestWeight = state.weightLogs.find((entry) => !String(entry.id || "").startsWith("hk-"));
   if (action === "syncWeight" && !(Number(latestWeight?.bodyweight) > 0)) return toast("Log a body weight before sending it to Apple Health.");
   bridge.postMessage({ action, weight: latestWeight?.bodyweight || null, unit: weightUnit(), date: latestWeight?.date || null });
 }

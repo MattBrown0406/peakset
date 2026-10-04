@@ -106,6 +106,18 @@ final class PeakSetPhotoCoordinator: NSObject, PHPickerViewControllerDelegate {
             pickFromLibrary(pose: pose, from: presenter, completion: completion)
             return
         }
+        // With access denied the camera would open black; explain instead.
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        if status == .denied || status == .restricted {
+            let alert = UIAlertController(title: "Camera access is off", message: "Allow camera access in Settings to take progress photos, or choose one from your Photos library.", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Choose From Photos", style: .default) { [weak self, weak presenter] _ in
+                guard let self, let presenter else { return completion(["status": "cancelled"]) }
+                self.pickFromLibrary(pose: pose, from: presenter, completion: completion)
+            })
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completion(["status": "cancelled"]) })
+            presenter.present(alert, animated: true)
+            return
+        }
         self.pose = pose
         self.completion = completion
         let ghost = PeakSetPhotoStore.isValidID(ghostID) ? PeakSetPhotoStore.image(for: ghostID) : nil

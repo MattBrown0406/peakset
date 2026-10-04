@@ -125,8 +125,12 @@ function volumeMigrateState() {
     state.trainingBlock.deload = state.trainingBlock.deload !== false;
     if (!Array.isArray(state.trainingBlock.focus)) state.trainingBlock.focus = [];
   }
-  if (!Array.isArray(state.blockHistory)) state.blockHistory = [];
+  state.blockHistory = Array.isArray(state.blockHistory) ? state.blockHistory.filter((entry) => entry && typeof entry === "object") : [];
   if (!state.blockDraft || typeof state.blockDraft !== "object") state.blockDraft = { weeks: 4, start: "this", focus: [] };
+  const validFocus = (focus) => (Array.isArray(focus) ? focus : []).filter((key) => MUSCLE_GROUPS.some((group) => group.key === key)).slice(0, 3);
+  state.blockDraft.focus = validFocus(state.blockDraft.focus);
+  state.blockDraft.weeks = Math.max(3, Math.min(6, Math.trunc(Number(state.blockDraft.weeks)) || 4));
+  if (state.trainingBlock) state.trainingBlock.focus = validFocus(state.trainingBlock.focus);
 }
 
 volumeMigrateState();
@@ -315,7 +319,7 @@ function renderTrainingBlockCard() {
           <span class="badge ${info.deload ? "amber" : "green"}">${info.status === "active" ? (info.deload ? "Deload" : "Build") : info.status === "upcoming" ? "Upcoming" : "Complete"}</span>
         </div>
         <div class="block-weeks">${weeks}</div>
-        ${block.focus.length ? `<p class="muted compact-note">Weak-point focus: ${block.focus.map(muscleGroupLabel).join(", ")} (+${WEAK_POINT_BONUS_SETS} sets/week).</p>` : ""}
+        ${block.focus.length ? `<p class="muted compact-note">Weak-point focus: ${escapeHtml(block.focus.map(muscleGroupLabel).join(", "))} (+${WEAK_POINT_BONUS_SETS} sets/week).</p>` : ""}
         ${conflict ? `<p class="warning-note">${escapeHtml(conflict)}</p>` : ""}
         <p class="muted compact-note">${formatShortDate(block.startDate)} to ${formatShortDate(dateKey(info.endDate))}. Set targets climb each week; deload week halves your planned sets automatically.</p>
         <button class="ghost-btn danger" onclick="endTrainingBlock()">${info.status === "complete" ? "Archive Block" : "End Block"}</button>
@@ -326,7 +330,7 @@ function renderTrainingBlockCard() {
   return `
     <section class="card pad training-block">
       <p class="eyebrow">Training block</p>
-      <h2>Plan the next ${draft.weeks + 1} weeks</h2>
+      <h2>Plan the next ${(Number(draft.weeks) || 4) + 1} weeks</h2>
       <p class="muted">Build weeks push effort from 3 RIR down to 0 while weekly sets climb through the productive range, then a deload resets fatigue.</p>
       <div class="grid two">
         <div class="field"><label for="blockName">Name</label><input id="blockName" value="${escapeHtml(draft.name || "")}" placeholder="${escapeHtml(phaseLabel(state.phase))} block" maxlength="40" oninput="updateBlockDraft('name', this.value)" /></div>
@@ -417,6 +421,7 @@ beginWorkoutFromPlan = function beginWorkoutWithBlock(plan) {
     state.activeWorkout.exercises.forEach((exercise, index) => {
       exercise.fullSets = full[index]?.sets ?? exercise.targetSets;
       exercise.fullDropSets = full[index]?.dropSets ?? exercise.targetDropSets;
+      exercise.fullSetType = full[index]?.setType || exercise.defaultSetType;
     });
     saveState();
     toast("Deload week: sets halved, stop 4+ reps short of failure.");

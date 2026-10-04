@@ -5,15 +5,17 @@ import WatchConnectivity
 /// the watch sends back commands (complete set, adjust or skip rest) that
 /// are forwarded to `window.handleWatchCommand`.
 ///
-/// Activated at app launch (not after the page loads) so queued watch
-/// commands are received even before the web view exists; they wait in
-/// `pendingCommands` until the web app attaches.
+/// Activated at app launch (not after the page loads). Every command is
+/// persisted until the web app acknowledges applying it, so a set completed
+/// on the watch survives a background launch, a suspended web view, or the
+/// app being killed before it was applied.
 final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
+    typealias CommandHandler = (_ command: [String: Any], _ acknowledge: @escaping () -> Void) -> Void
     static let shared = PeakSetWatchBridge()
 
     private let lock = NSLock()
-    private var commandHandler: (([String: Any]) -> Void)?
-    private var pendingCommands: [[String: Any]] = []
+    private let storeKey = "MassMethodPendingWatchCommands"
+    private var commandHandler: CommandHandler?
     private var pendingSnapshot: String?
     private var lastSentSnapshot = ""
 
@@ -28,14 +30,57 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
         if session.activationState != .activated { session.activate() }
     }
 
-    /// Attaches the web app and delivers commands that arrived before it loaded.
-    func attach(_ handler: @escaping ([String: Any]) -> Void) {
+    /// Attaches the web app and delivers every unacknowledged command.
+    func attach(_ handler: @escaping CommandHandler) {
         lock.lock()
         commandHandler = handler
-        let queued = pendingCommands
-        pendingCommands.removeAll()
         lock.unlock()
-        DispatchQueue.main.async { queued.forEach(handler) }
+        storedCommands().forEach(deliver)
+    }
+
+    /// Called when the web content process dies; commands queue until reload.
+    func detach() {
+        lock.lock()
+        commandHandler = nil
+        lock.unlock()
+    }
+
+    private func storedCommands() -> [[String: Any]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return (UserDefaults.standard.stringArray(forKey: storeKey) ?? []).compactMap { text in
+            text.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        }
+    }
+
+    private func store(_ command: [String: Any]) -> Bool {
+        guard let id = command["commandId"] as? String,
+              let data = try? JSONSerialization.data(withJSONObject: command),
+              let text = String(data: data, encoding: .utf8) else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        var stored = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
+        if stored.contains(where: { $0.contains("\"commandId\":\"\(id)\"") }) { return false }
+        stored.append(text)
+        UserDefaults.standard.set(Array(stored.suffix(200)), forKey: storeKey)
+        return true
+    }
+
+    private func acknowledge(_ id: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let stored = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
+        UserDefaults.standard.set(stored.filter { !$0.contains("\"commandId\":\"\(id)\"") }, forKey: storeKey)
+    }
+
+    private func deliver(_ command: [String: Any]) {
+        lock.lock()
+        let handler = commandHandler
+        lock.unlock()
+        guard let handler, let id = command["commandId"] as? String else { return }
+        DispatchQueue.main.async {
+            handler(command) { [weak self] in self?.acknowledge(id) }
+        }
     }
 
     func publish(snapshotJSON: String) {
@@ -70,14 +115,12 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
     private func forward(_ message: [String: Any]) {
         guard let text = message["command"] as? String,
               let data = text.data(using: .utf8),
-              let command = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        lock.lock()
-        let handler = commandHandler
-        if handler == nil { pendingCommands.append(command) }
-        lock.unlock()
-        if let handler {
-            DispatchQueue.main.async { handler(command) }
-        }
+              var command = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        if (command["commandId"] as? String)?.isEmpty != false { command["commandId"] = UUID().uuidString }
+        // A command already stored (sendMessage plus its transferUserInfo
+        // fallback) is delivered once.
+        guard store(command) else { return }
+        deliver(command)
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {

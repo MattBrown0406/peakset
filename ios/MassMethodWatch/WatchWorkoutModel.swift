@@ -60,8 +60,18 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     private var restAlertTask: Task<Void, Never>?
     private var loadingDraft = false
     private var draftEdited = false
-    /// Sets completed here that the phone has not confirmed yet, keyed "exerciseId|label".
-    private var pendingCompletions: [String: (weight: String, reps: String)] = [:]
+    /// Sets completed here that the phone has not confirmed yet.
+    private struct PendingCompletion {
+        let exerciseIndex: Int
+        let setIndex: Int
+        let exerciseID: String
+        let label: String
+        let weight: String
+        let reps: String
+        let completedAt: Date
+        var unconfirmedSnapshots = 0
+    }
+    private var pendingCompletions: [PendingCompletion] = []
 
     override init() {
         super.init()
@@ -108,6 +118,8 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         let weightText = exercise.repsOnly ? "" : Self.format(weight)
         let repsText = String(Int(reps.rounded()))
         send([
+            "commandId": UUID().uuidString,
+            "sentAt": Date().timeIntervalSince1970 * 1000,
             "action": "completeSet",
             "workoutId": current.workoutId ?? "",
             "exerciseId": exercise.id ?? "",
@@ -119,7 +131,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             "completedAt": Date().timeIntervalSince1970 * 1000
         ])
         // Apply locally so the next set and the rest timer appear immediately.
-        pendingCompletions[Self.key(exercise, set)] = (weightText, repsText)
+        pendingCompletions.append(PendingCompletion(exerciseIndex: exercise.index, setIndex: set.index, exerciseID: exercise.id ?? "", label: set.label, weight: weightText, reps: repsText, completedAt: Date()))
         Self.markDone(&current, exerciseIndex: selectedExercise, setIndex: set.index, weight: weightText, reps: repsText)
         snapshot = current
         let restSeconds = max(15, exercise.rest ?? 120)
@@ -140,13 +152,13 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             localRest = (rest.start, max(Date().addingTimeInterval(1), rest.end.addingTimeInterval(TimeInterval(seconds))))
             scheduleRestAlert()
         }
-        send(["action": "adjustRest", "seconds": seconds, "workoutId": snapshot?.workoutId ?? ""])
+        send(["commandId": UUID().uuidString, "sentAt": Date().timeIntervalSince1970 * 1000, "action": "adjustRest", "seconds": seconds, "workoutId": snapshot?.workoutId ?? ""])
     }
 
     func skipRest() {
         localRest = nil
         restAlertTask?.cancel()
-        send(["action": "skipRest", "workoutId": snapshot?.workoutId ?? ""])
+        send(["commandId": UUID().uuidString, "sentAt": Date().timeIntervalSince1970 * 1000, "action": "skipRest", "workoutId": snapshot?.workoutId ?? ""])
         objectWillChange.send()
     }
 
@@ -166,8 +178,22 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         }
     }
 
-    private static func key(_ exercise: WatchSnapshot.Exercise, _ set: WatchSnapshot.WorkoutSet) -> String {
-        "\(exercise.id ?? String(exercise.index))|\(set.label)"
+    /// The phone may have reordered exercises: prefer the exact position, else
+    /// the first exercise with the same id whose set with that label is open.
+    /// Only one set is ever matched, even when an exercise appears twice.
+    private static func locate(_ pending: PendingCompletion, in snapshot: WatchSnapshot) -> (exercise: Int, set: Int)? {
+        if snapshot.exercises.indices.contains(pending.exerciseIndex) {
+            let exercise = snapshot.exercises[pending.exerciseIndex]
+            if (exercise.id ?? "") == pending.exerciseID, exercise.sets.indices.contains(pending.setIndex), exercise.sets[pending.setIndex].label == pending.label {
+                return (pending.exerciseIndex, pending.setIndex)
+            }
+        }
+        for (exerciseIndex, exercise) in snapshot.exercises.enumerated() where (exercise.id ?? "") == pending.exerciseID {
+            if let setIndex = exercise.sets.firstIndex(where: { $0.label == pending.label && !$0.done }) {
+                return (exerciseIndex, setIndex)
+            }
+        }
+        return nil
     }
 
     private static func markDone(_ snapshot: inout WatchSnapshot, exerciseIndex: Int, setIndex: Int, weight: String, reps: String) {
@@ -187,18 +213,16 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             pendingCompletions.removeAll()
             localRest = nil
         }
-        // Keep local completions the phone has not caught up with yet.
-        for (key, values) in pendingCompletions {
-            var confirmed = false
-            for (exerciseIndex, exercise) in next.exercises.enumerated() {
-                guard let setIndex = exercise.sets.firstIndex(where: { Self.key(exercise, $0) == key }) else { continue }
-                if exercise.sets[setIndex].done {
-                    confirmed = true
-                } else {
-                    Self.markDone(&next, exerciseIndex: exerciseIndex, setIndex: setIndex, weight: values.weight, reps: values.reps)
-                }
-            }
-            if confirmed { pendingCompletions[key] = nil }
+        // Keep local completions the phone has not caught up with yet. If the
+        // phone keeps publishing without them, stop showing them as done.
+        pendingCompletions = pendingCompletions.compactMap { pending in
+            var pending = pending
+            guard let (exerciseIndex, setIndex) = Self.locate(pending, in: next) else { return nil }
+            if next.exercises[exerciseIndex].sets[setIndex].done { return nil }
+            pending.unconfirmedSnapshots += 1
+            if pending.unconfirmedSnapshots > 6, Date().timeIntervalSince(pending.completedAt) > 120 { return nil }
+            Self.markDone(&next, exerciseIndex: exerciseIndex, setIndex: setIndex, weight: pending.weight, reps: pending.reps)
+            return pending
         }
         if pendingCompletions.isEmpty { localRest = nil }
         guard next != snapshot else { return }

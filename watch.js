@@ -119,8 +119,19 @@ saveState = function saveStateAndPublish() {
   scheduleWatchSnapshot();
 };
 
+// Commands are redelivered until the phone acknowledges them, so each one is
+// applied at most once; rest adjustments that arrive late are dropped.
+const appliedWatchCommandIds = [];
+
 function handleWatchCommand(command) {
   if (!command || typeof command !== "object") return false;
+  if (command.commandId) {
+    if (appliedWatchCommandIds.includes(command.commandId)) return false;
+    appliedWatchCommandIds.push(command.commandId);
+    if (appliedWatchCommandIds.length > 300) appliedWatchCommandIds.shift();
+  }
+  const sentAt = Number(command.sentAt);
+  if (["adjustRest", "skipRest"].includes(command.action) && Number.isFinite(sentAt) && Date.now() - sentAt > 30000) return false;
   const workout = state.activeWorkout;
   // Commands can arrive long after they were sent (queued while the phone was
   // locked), so they name the workout, exercise, and set rather than trusting

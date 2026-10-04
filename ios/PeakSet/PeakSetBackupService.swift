@@ -32,6 +32,8 @@ final class PeakSetBackupService {
     }
 
     private let queue = DispatchQueue(label: "com.mattbrown.peakset.backup", qos: .utility)
+    /// Photo downloads can take minutes on a new phone; they never block backups.
+    private let photoQueue = DispatchQueue(label: "com.mattbrown.peakset.backup.photos", qos: .utility)
     private let fileManager = FileManager.default
     private let keepCount = 30
 
@@ -107,8 +109,10 @@ final class PeakSetBackupService {
                 let data = try self.readCoordinated(url)
                 let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
                 guard let text = String(data: data, encoding: .utf8) else { throw BackupError.invalidPayload }
-                if location == .iCloud { self.restorePhotosFromICloud() }
                 completion(.success((text, date)))
+                if location == .iCloud {
+                    self.photoQueue.async { self.restorePhotosFromICloud() }
+                }
             } catch {
                 completion(.failure(error))
             }
@@ -209,6 +213,10 @@ final class PeakSetIncomingFiles {
         let queued = pending
         pending.removeAll()
         queued.forEach(deliver)
+    }
+
+    func detach() {
+        deliver = nil
     }
 
     func open(_ url: URL) {
