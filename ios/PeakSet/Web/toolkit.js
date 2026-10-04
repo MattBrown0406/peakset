@@ -36,6 +36,15 @@ function defaultBuilderFormDraft() {
   return { title: "", muscle: "chest", exerciseFocus: "chest", exerciseId: "incline-db-press", sets: 3, reps: "8-12", rest: DEFAULT_REST_SECONDS, setType: "standard", group: "", dropSets: 0, scheduleDay: "", note: "" };
 }
 
+// Sets saved by early builds carry only a name, and some exercises were
+// renamed since (e.g. "Seated Calf Raise" -> "Seated Calf Raises").
+function exerciseForLoggedName(name) {
+  const normalize = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/s$/, "");
+  const wanted = normalize(name);
+  if (!wanted) return null;
+  return exerciseLibrary.find((item) => normalize(item.name) === wanted) || null;
+}
+
 function toolkitMigrateState() {
   state.toolkitSchemaVersion = TOOLKIT_SCHEMA_VERSION;
   if (!Array.isArray(state.favoriteExercises)) state.favoriteExercises = [];
@@ -87,7 +96,7 @@ function toolkitMigrateState() {
   state.workoutLogs = (state.workoutLogs || []).map((log) => ({
     ...log,
     sets: workoutLogSets(log).filter((set) => set && typeof set === "object").map((set) => {
-      const exercise = exerciseLibrary.find((item) => item.id === set.exerciseId || item.name === set.exercise);
+      const exercise = exerciseLibrary.find((item) => item.id === set.exerciseId) || exerciseForLoggedName(set.exercise);
       return { setType: "standard", rir: "", ...set, exerciseId: set.exerciseId || exercise?.id || "" };
     })
   }));
@@ -443,6 +452,7 @@ function addToolkitBuilderExercise() {
     group: String(draft.group || "").trim().toUpperCase(),
     setType: draft.setType || "standard"
   });
+  saveState();
   render();
 }
 
@@ -450,16 +460,19 @@ function moveBuilderExercise(index, direction) {
   const destination = index + direction;
   if (destination < 0 || destination >= builderDraft.length) return;
   [builderDraft[index], builderDraft[destination]] = [builderDraft[destination], builderDraft[index]];
+  saveState();
   render();
 }
 
 function duplicateBuilderExercise(index) {
   builderDraft.splice(index + 1, 0, { ...normalizePlanExercise(builderDraft[index]) });
+  saveState();
   render();
 }
 
 removeBuilderExercise = function removeToolkitBuilderExercise(index) {
   builderDraft.splice(index, 1);
+  saveState();
   render();
 };
 
@@ -790,7 +803,9 @@ finishWorkout = function finishToolkitWorkout() {
   if (unlogged && !window.confirm(`${unlogged} ${unlogged === 1 ? "set has" : "sets have"} entries but ${unlogged === 1 ? "isn't" : "aren't"} marked Complete and won't be saved. Save the session anyway?`)) return;
   const sets = workout.exercises.flatMap((exercise) => exercise.sets.filter((set) => set.done).map((set) => ({
     exercise: exercise.name, exerciseId: exercise.id, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps,
-    rir: set.rir ?? "", setType: set.setType || "standard", group: exercise.group || "", repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set), targetReps: exercise.targetReps
+    rir: set.rir ?? "", setType: set.setType || "standard", group: exercise.group || "", repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set), targetReps: exercise.targetReps,
+    // Keep the pre-switch value so a later unit switch back restores it exactly.
+    ...(set._unitOrigin?.weight ? { _unitOrigin: { weight: set._unitOrigin.weight } } : {})
   })));
   if (!sets.length) return toast("Complete at least one set before saving.");
   const endedAt = new Date().toISOString();

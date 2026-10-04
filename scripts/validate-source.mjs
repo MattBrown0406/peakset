@@ -794,7 +794,7 @@ console.log("Audit round 3 checks passed.");
 const rt = makeContext({ profile: { bodyweight: 83.8 }, weightLogs: [{ id: "w", date: new Date().toISOString(), bodyweight: 83.8 }], measurements: [{ id: "m", date: new Date().toISOString(), waist: 22.75 }],
   workoutLogs: [{ id: "l", date: new Date().toISOString(), volume: 1600, sets: [{ exerciseId: "barbell-bench", exercise: "Barbell Bench Press", weight: "200", reps: "8" }, { exerciseId: "barbell-bench", exercise: "Barbell Bench Press", weight: "182.5", reps: "8" }] }] });
 vm.runInContext("setUnits('metric'); setUnits('imperial')", rt.context);
-assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify([state.weightLogs[0].bodyweight, state.measurements[0].waist, state.workoutLogs[0].sets.map((set) => set.weight), state.workoutLogs[0].volume])", rt.context)), [83.8, 22.75, ["200", "182.5"], 1600], "unedited values round-trip lb -> kg -> lb exactly");
+assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify([state.weightLogs[0].bodyweight, state.measurements[0].waist, state.workoutLogs[0].sets.map((set) => set.weight), state.workoutLogs[0].volume])", rt.context)), [83.8, 22.75, ["200", "182.5"], 3060], "unedited values round-trip lb -> kg -> lb exactly (volume recomputed from sets)");
 vm.runInContext("setUnits('metric'); state.workoutLogs[0].sets[0].weight = '100'; setUnits('imperial')", rt.context);
 assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].weight", rt.context), "220.46", "a value edited in kg converts normally");
 const kgFirst = makeContext({ profile: { bodyweight: 90 }, units: "metric", workoutLogs: [{ id: "k", date: new Date().toISOString(), sets: [{ exerciseId: "db-curl", exercise: "Alternating Dumbbell Curl", weight: "16.8", reps: "10" }] }] });
@@ -810,3 +810,46 @@ vm.runInContext("handleWatchCommand({ commandId: 'late1', action: 'completeSet',
 assert.equal(vm.runInContext("state.timer.endsAt", late.context), beforeEnds, "a late watch set held for its superset partner does not restart another rest");
 
 console.log("Audit round 3 follow-up checks passed.");
+
+// Audit round 4: Apple Health data never goes to iCloud backups.
+const hkBackup = makeContext({ profile: { bodyweight: 200 }, weightLogs: [
+  { id: "hk-day-1", date: new Date().toISOString(), bodyweight: 199, bodyFat: 14 },
+  { id: "mine", date: new Date(Date.now() - 86400000).toISOString(), bodyweight: 200, bodyFat: 13.5, healthFields: ["bodyFat"] }
+], measurements: [{ id: "hk-m-1", date: new Date().toISOString(), waist: 31 }], prepLogs: [{ id: "s", date: new Date().toISOString(), cardioType: "HealthKit", steps: 9000 }] });
+const nativeSnapshot = JSON.parse(JSON.stringify(vm.runInContext("nativeBackupPayload()", hkBackup.context)));
+assert.deepEqual(nativeSnapshot.state.weightLogs.map((entry) => [entry.id, entry.bodyFat ?? null]), [["mine", null]], "iCloud snapshots exclude Health readings and Health-filled fields");
+assert.equal(nativeSnapshot.state.measurements.length + nativeSnapshot.state.prepLogs.length, 0, "iCloud snapshots exclude Health measurements and steps");
+assert.equal(vm.runInContext("backupPayload().state.weightLogs.length", hkBackup.context), 2, "the user-exported backup file stays complete");
+assert.match(read("ios/PeakSet/Info.plist"), /ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>/, "export compliance is declared");
+
+console.log("Audit round 4 checks passed.");
+
+// Sets entered before a unit switch and saved after it still round-trip.
+const midSwitch = makeContext({ profile: { bodyweight: 200 } });
+vm.runInContext("startWorkout('chest-density'); updateSet(0, 0, 'weight', '135'); updateSet(0, 0, 'reps', '8'); setUnits('metric'); completeSet(0, 0); stopTimer(); finishWorkout(); setUnits('imperial')", midSwitch.context);
+assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].weight", midSwitch.context), "135", "a set typed in lb, saved in kg, and viewed in lb again is unchanged");
+assert.equal(vm.runInContext("state.workoutLogs[0].volume", midSwitch.context), 1080, "log volume is recomputed from the sets on a unit switch");
+console.log("Mid-workout unit switch checks passed.");
+
+// Audit round 4 holistic follow-ups.
+const r4 = makeContext({ profile: { bodyweight: 200 } });
+const r4run = (code) => vm.runInContext(code, r4.context);
+r4run("window.webkit = { messageHandlers: { peaksetBackup: { postMessage(m) { (window.__backups = window.__backups || []).push(m); } } } }; requestAutomaticSnapshot('test', true)");
+assert.ok(r4run("window.__backups.at(-1).filename.includes(state.athleteId.slice(0, 8))"), "automatic backups are named per install so a reinstall cannot overwrite them");
+const fresh = makeContext({});
+assert.match(vm.runInContext("renderOnboarding()", fresh.context), /Restore from a backup/, "onboarding offers restore before creating a profile");
+// Builder draft edits persist without an explicit save.
+r4run("state.builderFormDraft.exerciseFocus = 'chest'; state.builderFormDraft.exerciseId = 'barbell-bench'; addToolkitBuilderExercise(); state.builderFormDraft.exerciseId = 'pec-deck'; addToolkitBuilderExercise(); removeBuilderExercise(0)");
+assert.deepEqual(JSON.parse(r4.storage.get("stageforge-v1")).builderDraft.map((spec) => spec.id ?? spec[0]), ["pec-deck"], "builder add/remove are saved immediately");
+// A coach block waits for the current block (and its deload) to finish.
+r4run("state.trainingBlock = { id: 'cur', name: 'Current', startDate: dateKey(addDays(startOfWeek(), -28)), accumulationWeeks: 4, deload: true, focus: [], createdAt: '' }; window.confirm = () => true");
+r4run(`importProgram(${JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach", plans: [], block: { accumulationWeeks: 5, focus: [], start: "next" } })})`);
+assert.equal(r4run("blockWeekInfo().deload"), true, "importing a coach block keeps the current deload running");
+assert.ok(r4run("Boolean(state.pendingTrainingBlock)"), "the coach block is queued for its start date");
+r4run("state.pendingTrainingBlock.startDate = dateKey(startOfWeek())");
+assert.equal(r4run("blockWeekInfo().weekNumber + ':' + state.trainingBlock.accumulationWeeks"), "1:5", "the coach block takes over on its start date");
+// Sets saved under an old exercise name keep their history.
+const legacyName = makeContext({ profile: { bodyweight: 200 }, workoutLogs: [{ id: "old", date: new Date().toISOString(), sets: [{ exercise: "Seated Calf Raise", weight: "90", reps: "15" }] }] });
+assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].exerciseId", legacyName.context), "seated-calf-raise", "renamed exercises still match old logs");
+assert.match(read("ios/MassMethodWatch/WatchWorkoutModel.swift"), /unitChanged/, "the watch reloads its draft after a unit switch");
+console.log("Audit round 4 holistic checks passed.");

@@ -94,9 +94,11 @@ struct PeakSetWebView: UIViewRepresentable {
         private func presentPanel(_ alert: UIAlertController, attempt: Int = 0, onFailure: @escaping () -> Void) {
             guard let presenter = Self.topViewController() else { return onFailure() }
             if presenter.isBeingDismissed || presenter.isBeingPresented, let coordinator = presenter.transitionCoordinator, attempt < 3 {
-                coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+                let queued = coordinator.animate(alongsideTransition: nil) { [weak self] _ in
                     self?.presentPanel(alert, attempt: attempt + 1, onFailure: onFailure) ?? onFailure()
                 }
+                // WebKit requires every panel's completion to run exactly once.
+                if !queued { onFailure() }
                 return
             }
             guard !presenter.isBeingDismissed, !presenter.isBeingPresented else { return onFailure() }

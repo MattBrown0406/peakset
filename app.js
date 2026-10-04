@@ -2994,7 +2994,7 @@ function finishWorkout() {
   const sets = workout.exercises.flatMap((exercise) =>
     exercise.sets
       .filter((set) => set.done)
-      .map((set) => ({ exerciseId: exercise.id, exercise: exercise.name, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps, repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
+      .map((set) => ({ exerciseId: exercise.id, exercise: exercise.name, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps, repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set), ...(set._unitOrigin?.weight ? { _unitOrigin: { weight: set._unitOrigin.weight } } : {}) }))
   );
   if (sets.length === 0) {
     toast("Complete at least one set before saving.");

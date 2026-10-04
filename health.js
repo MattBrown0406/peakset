@@ -260,7 +260,7 @@ coachReportData = function coachReportWithMergedMeasurements(days) {
   const merged = { date: report.measurements[0].date, note: report.measurements[0].note || "" };
   report.measurements.forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
-      if (["id", "date", "note", "source", "healthFields"].includes(key)) return;
+      if (["id", "date", "note", "source", "healthFields", "_unitOrigin"].includes(key)) return;
       if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") merged[key] = value;
     });
   });

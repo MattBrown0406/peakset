@@ -63,7 +63,7 @@ function mergedLatestMeasurement() {
   const merged = { id: `latest-${state.measurements[0].date}`, date: state.measurements[0].date };
   state.measurements.forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
-      if (["id", "date", "note", "source", "healthFields"].includes(key)) return;
+      if (["id", "date", "note", "source", "healthFields", "_unitOrigin"].includes(key)) return;
       if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") merged[key] = value;
     });
   });
@@ -339,8 +339,7 @@ function importProgram(program) {
   if (!window.confirm(`Add ${summary} from ${from}?`)) return false;
   state.customPlans.unshift(...plans);
   if (block) {
-    if (state.trainingBlock) archiveTrainingBlock("replaced by coach");
-    state.trainingBlock = {
+    const incoming = {
       id: crypto.randomUUID(),
       name: String(block.name || `${from}'s block`).slice(0, 40),
       startDate: dateKey(block.start === "next" ? addDays(startOfWeek(), 7) : startOfWeek()),
@@ -349,6 +348,13 @@ function importProgram(program) {
       focus: (Array.isArray(block.focus) ? block.focus : []).filter((key) => MUSCLE_GROUPS.some((group) => group.key === key)).slice(0, 3),
       createdAt: new Date().toISOString()
     };
+    // Finish the current block (often its deload) first; the coach's block
+    // takes over on its start date.
+    if (blockWeekInfo()?.status === "active" && parseDateKey(incoming.startDate) > startOfWeek()) state.pendingTrainingBlock = incoming;
+    else {
+      if (state.trainingBlock) archiveTrainingBlock("replaced by coach");
+      state.trainingBlock = incoming;
+    }
   }
   state.coachMessage = { from, message: String(program.message || "").slice(0, 2000), receivedAt: new Date().toISOString(), planCount: plans.length };
   saveState();

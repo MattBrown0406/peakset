@@ -248,6 +248,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         let previousSet = nextSet?.index
         let previousExercise = selectedExercise
         let previousValues = nextSet.map { ($0.weight, $0.reps) }
+        let previousUnit = snapshot?.unit
         snapshot = next
         if followCurrent || !next.exercises.indices.contains(selectedExercise) {
             selectedExercise = next.exercises.indices.contains(next.currentExercise) ? next.currentExercise : 0
@@ -255,7 +256,9 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         let valuesChanged = nextSet.map { ($0.weight, $0.reps) }.map { $0 != (previousValues?.0 ?? "", previousValues?.1 ?? "") } ?? false
         // Reload when the target set moved, or when the phone typed new values
         // and the athlete has not started editing on the watch.
-        if previousExercise != selectedExercise || previousSet != nextSet?.index || (valuesChanged && !draftEdited) {
+        // A unit switch on the phone makes any draft number meaningless.
+        let unitChanged = previousUnit != nil && previousUnit != next.unit
+        if unitChanged || previousExercise != selectedExercise || previousSet != nextSet?.index || (valuesChanged && !draftEdited) {
             loadDraft()
         }
         scheduleRestAlert()

@@ -135,6 +135,21 @@ function volumeMigrateState() {
 
 volumeMigrateState();
 
+// A block sent by a coach while another block is running starts on its date.
+function promotePendingBlock() {
+  const pending = state.pendingTrainingBlock;
+  if (!pending || typeof pending !== "object") {
+    state.pendingTrainingBlock = null;
+    return;
+  }
+  const start = parseDateKey(pending.startDate);
+  if (!start || start > new Date()) return;
+  if (state.trainingBlock) archiveTrainingBlock("replaced by coach");
+  state.trainingBlock = pending;
+  state.pendingTrainingBlock = null;
+  saveState();
+}
+
 function blockLength(block) {
   return block.accumulationWeeks + (block.deload ? 1 : 0);
 }
@@ -145,7 +160,7 @@ function blockTargetRir(block, weekIndex) {
   return Math.round(3 - (3 * weekIndex) / span);
 }
 
-function blockWeekInfo(block = state.trainingBlock, date = new Date()) {
+function blockWeekInfo(block = (promotePendingBlock(), state.trainingBlock), date = new Date()) {
   if (!block) return null;
   const start = parseDateKey(block.startDate);
   if (!start) return null;
@@ -321,6 +336,7 @@ function renderTrainingBlockCard() {
         <div class="block-weeks">${weeks}</div>
         ${block.focus.length ? `<p class="muted compact-note">Weak-point focus: ${escapeHtml(block.focus.map(muscleGroupLabel).join(", "))} (+${WEAK_POINT_BONUS_SETS} sets/week).</p>` : ""}
         ${conflict ? `<p class="warning-note">${escapeHtml(conflict)}</p>` : ""}
+        ${state.pendingTrainingBlock ? `<p class="muted compact-note">Next: ${escapeHtml(state.pendingTrainingBlock.name || "Coach block")} starts ${formatShortDate(state.pendingTrainingBlock.startDate)}.</p>` : ""}
         <p class="muted compact-note">${formatShortDate(block.startDate)} to ${formatShortDate(dateKey(info.endDate))}. Set targets climb each week; deload week halves your planned sets automatically.</p>
         <button class="ghost-btn danger" onclick="endTrainingBlock()">${info.status === "complete" ? "Archive Block" : "End Block"}</button>
       </section>

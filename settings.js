@@ -73,7 +73,11 @@ function convertStoredUnits(target) {
   state.measurements.forEach((entry) => LENGTH_MEASUREMENT_KEYS.forEach((key) => length(entry, key)));
   state.workoutLogs.forEach((log) => {
     convertSets(log.sets);
-    weight(log, "volume");
+    // Volume is derived from the sets, so recompute it rather than convert it.
+    if (log.volume !== undefined) {
+      delete log[UNIT_ORIGIN_KEY]?.volume;
+      log.volume = roundTo(totalVolume(log));
+    }
   });
   (state.activeWorkout?.exercises || []).forEach((exercise) => convertSets(exercise.sets));
   state.units = target;
@@ -96,6 +100,25 @@ function saveAthleteName(value) {
 
 function backupPayload() {
   return { format: BACKUP_FORMAT, version: BACKUP_VERSION, app: APP_NAME, exportedAt: new Date().toISOString(), state };
+}
+
+// Apple's HealthKit rules forbid storing Health data in iCloud, so automatic
+// (iCloud/device) snapshots leave out anything imported from Apple Health; it
+// is re-imported from Health after a restore. "Export Backup" stays complete
+// because the athlete chooses where that file goes.
+function nativeBackupPayload() {
+  const copy = JSON.parse(JSON.stringify(state));
+  const fromHealth = (entry) => String(entry?.id || "").startsWith("hk-");
+  const strip = (entry) => {
+    (Array.isArray(entry.healthFields) ? entry.healthFields : []).forEach((field) => { entry[field] = null; });
+    delete entry.healthFields;
+    return entry;
+  };
+  copy.weightLogs = (copy.weightLogs || []).filter((entry) => !fromHealth(entry)).map(strip);
+  copy.measurements = (copy.measurements || []).filter((entry) => !fromHealth(entry)).map(strip);
+  copy.prepLogs = (copy.prepLogs || []).filter((entry) => entry?.cardioType !== "HealthKit");
+  if (copy.healthBody) copy.healthBody.lastSyncAt = null;
+  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, app: APP_NAME, exportedAt: new Date().toISOString(), state: copy };
 }
 
 function todayStamp() {
@@ -134,7 +157,7 @@ function restoreBackupPayload(payload, sourceLabel = "this backup") {
   if (!confirmed) return false;
   if (native && state.profile) {
     // A separately named file, never overwritten by the daily snapshot.
-    nativeBackupBridge().postMessage({ action: "snapshot", reason: "before-restore", filename: `mass-method-before-restore-${new Date().toISOString().replace(/[:.]/g, "-")}.json`, json: JSON.stringify(backupPayload()) });
+    nativeBackupBridge().postMessage({ action: "snapshot", reason: "before-restore", filename: `mass-method-before-restore-${new Date().toISOString().replace(/[:.]/g, "-")}.json`, json: JSON.stringify(nativeBackupPayload()) });
   }
   // The restored data's old backup time must not trigger an immediate
   // snapshot that overwrites today's backup with older data.
@@ -196,7 +219,9 @@ function requestAutomaticSnapshot(reason = "scheduled", force = false) {
   if (!bridge || !state.profile) return false;
   const last = Date.parse(state.backupStatus?.at || "");
   if (!force && Number.isFinite(last) && Date.now() - last < SNAPSHOT_INTERVAL_MS) return false;
-  bridge.postMessage({ action: "snapshot", reason, filename: `mass-method-backup-${todayStamp()}.json`, json: JSON.stringify(backupPayload()) });
+  // The athlete id keeps a fresh install (new id until it restores) from
+  // overwriting another install's backup for the same day in iCloud Drive.
+  bridge.postMessage({ action: "snapshot", reason, filename: `mass-method-backup-${todayStamp()}-${String(state.athleteId || "device").slice(0, 8)}.json`, json: JSON.stringify(nativeBackupPayload()) });
   return true;
 }
 
@@ -221,7 +246,7 @@ function handleNativeBackup(payload) {
     if (state.view === "more") render();
   } else if (payload.status === "list") {
     nativeBackups = Array.isArray(payload.backups) ? payload.backups : [];
-    if (state.view === "more") render();
+    if (state.view === "more" || onboardingRestoreOpen) render();
   } else if (payload.status === "restore") {
     let parsed = null;
     try { parsed = JSON.parse(payload.json || ""); } catch {}
@@ -275,7 +300,7 @@ function renderBackupCard() {
       <p class="eyebrow">Backup and restore</p>
       <h2>Keep your logbook safe</h2>
       ${native ? `
-        <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app).</p>
+        <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app). Apple Health data is not included; it re-imports from Apple Health after a restore.</p>
         <div class="signal-card"><span class="badge green">Automatic</span><strong>${escapeHtml(state.backupStatus?.message || "")}</strong>${state.backupStatus?.at ? `<p class="muted" style="margin:4px 0 0">${new Date(state.backupStatus.at).toLocaleString()}</p>` : ""}</div>
         <div class="actions" style="margin-top:12px">
           <button class="primary-btn" onclick="requestAutomaticSnapshot('manual', true)">Back Up Now</button>
@@ -308,6 +333,33 @@ function renderMore() {
     <div class="grid more-grid">${moreSections.map((section) => section.renderSection()).join("")}</div>
   `;
 }
+
+// Restoring onto a new phone must not require completing onboarding first.
+let onboardingRestoreOpen = false;
+
+function openOnboardingRestore(open) {
+  onboardingRestoreOpen = Boolean(open);
+  if (onboardingRestoreOpen) refreshNativeBackups();
+  render();
+}
+
+const baseRenderOnboardingForRestore = renderOnboarding;
+renderOnboarding = function renderOnboardingWithRestore() {
+  if (state.profile) return "";
+  if (!onboardingRestoreOpen) {
+    return baseRenderOnboardingForRestore().replace('<button class="primary-btn" onclick="saveProfile()">', '<button class="ghost-btn" onclick="openOnboardingRestore(true)">Restore from a backup</button><button class="primary-btn" onclick="saveProfile()">');
+  }
+  return `
+    <div class="modal-screen">
+      <section class="modal card pad">
+        <p class="eyebrow">Welcome back</p>
+        <h1>Restore your logbook</h1>
+        ${renderBackupCard()}
+        <button class="secondary-btn" style="margin-top:12px" onclick="openOnboardingRestore(false)">Start fresh instead</button>
+      </section>
+    </div>
+  `;
+};
 
 const baseRenderContentWithMore = renderContent;
 renderContent = function renderContentWithMore() {
