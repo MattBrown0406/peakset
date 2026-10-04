@@ -1347,3 +1347,131 @@ textarea {
   justify-content: center;
   cursor: pointer;
 }
+
+/* Progress photos */
+.pose-strip {
+  display: flex;
+  gap: 8px;
+  margin: 12px -2px 4px;
+  padding: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pose-strip .chip {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.photo-strip {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.photo-thumb {
+  flex: 0 0 104px;
+  margin: 0;
+}
+
+.photo-thumb img,
+.photo-full {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.photo-thumb figcaption,
+.photo-side figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.photo-delete {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.photo-compare {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.photo-side {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.photo-side figure {
+  margin: 0;
+}
+
+.photo-overlay {
+  position: relative;
+  margin-top: 12px;
+}
+
+.photo-overlay .photo-overlay-top {
+  position: absolute;
+  inset: 0;
+}
+
+.photo-slider {
+  width: 100%;
+  margin-top: 12px;
+  accent-color: var(--accent);
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.segmented button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.segmented button.active {
+  color: var(--ink);
+  background: var(--action-gradient);
+}
+
+.segmented button {
+  white-space: nowrap;
+}
+
+.photo-compare .card-head {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.photo-compare h3 {
+  margin: 0;
+}

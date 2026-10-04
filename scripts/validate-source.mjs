@@ -11,7 +11,9 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 const readBuffer = (relativePath) => fs.readFileSync(path.join(root, relativePath));
 const app = read("app.js");
 const toolkit = read("toolkit.js");
-const settings = read("settings.js");
+// The page's scripts, in the order index.html loads them.
+const webScripts = [...read("index.html").matchAll(/<script src="\.\/([\w-]+\.js)"><\/script>/g)].map((match) => match[1]);
+assert.deepEqual(webScripts.slice(0, 2), ["app.js", "toolkit.js"], "index.html must load app.js then toolkit.js first");
 const styles = read("styles.css");
 const swiftApp = read("ios/PeakSet/PeakSetApp.swift");
 const swiftWebView = read("ios/PeakSet/PeakSetWebView.swift");
@@ -114,7 +116,7 @@ assert.equal(appIcon.readUInt32BE(16), 1024, "Mass Method app icon must be 1024 
 assert.equal(appIcon.readUInt32BE(20), 1024, "Mass Method app icon must be 1024 px tall");
 assert.equal(appIcon[25], 2, "Mass Method app icon must be opaque RGB without alpha");
 
-for (const filename of ["app.js", "toolkit.js", "settings.js", "styles.css", "index.html", "assets/physique-lines.svg"]) {
+for (const filename of [...webScripts, "styles.css", "index.html", "assets/physique-lines.svg"]) {
   assert.equal(read(filename), read(`ios/PeakSet/Web/${filename}`), `${filename} is not synced into the iOS bundle`);
 }
 assert.deepEqual(readBuffer("assets/boxing-bell.wav"), readBuffer("ios/PeakSet/Web/assets/boxing-bell.wav"), "Boxing bell audio is not synced into the iOS bundle");
@@ -128,7 +130,7 @@ console.log("Bodybuilder toolkit, native background timer, and HealthKit bridges
 
 // Runtime regression checks. The shipped page loads app.js and then toolkit.js,
 // which overrides several app.js functions, so both scripts run here.
-const runtimeSource = `${app}\n;\n${toolkit}\n;\n${settings}`;
+const runtimeSource = webScripts.map(read).join("\n;\n");
 
 function makeContext(storedState = null) {
   const storage = new Map();
@@ -173,7 +175,7 @@ function makeContext(storedState = null) {
     URL,
     structuredClone
   });
-  vm.runInContext(runtimeSource, context, { filename: "app.js+toolkit.js" });
+  vm.runInContext(runtimeSource, context, { filename: webScripts.join("+") });
   return { context, elements, storage };
 }
 
@@ -413,3 +415,19 @@ assert.equal(vm.runInContext("isBackupPayload(backupPayload())", units.context),
 assert.ok(vm.runInContext("typeof state.athleteId === 'string' && state.athleteId.length > 10", units.context), "athletes need a stable id for coach packages");
 
 console.log("Units and backup checks passed.");
+
+// Progress photos (photos.js).
+const photoCtx = makeContext({ profile: { bodyweight: 200 } });
+vm.runInContext("setPhotoPose('side-chest'); handleNativePhoto({ status: 'saved', id: 'ABC-123', pose: 'side-chest', date: '2026-09-01T12:00:00Z' })", photoCtx.context);
+assert.equal(vm.runInContext("state.progressPhotos.length", photoCtx.context), 1, "native photos must be recorded");
+assert.equal(vm.runInContext("photoSrc(state.progressPhotos[0])", photoCtx.context), "massmethod-photo://photo/ABC-123.jpg", "native photos must load through the photo scheme");
+vm.runInContext("handleNativePhoto({ status: 'saved', id: '../../etc/passwd', pose: 'side-chest' })", photoCtx.context);
+assert.equal(vm.runInContext("state.progressPhotos.length", photoCtx.context), 1, "photo ids must be path-safe");
+vm.runInContext("handleNativePhoto({ status: 'saved', id: 'DEF-456', pose: 'side-chest', date: new Date().toISOString() })", photoCtx.context);
+assert.equal(vm.runInContext("comparePair('side-chest').before.id + '>' + comparePair('side-chest').after.id", photoCtx.context), "ABC-123>DEF-456", "comparison must default to first vs latest");
+assert.ok(vm.runInContext("stageChecklist(getStageTimeline()).some((item) => item.label.includes('Progress photos') && item.done)", photoCtx.context), "a photo this week must tick the checklist");
+assert.match(vm.runInContext("renderProgress()", photoCtx.context), /Progress photos[\s\S]*Compare/, "the Progress tab must show the photo section with comparison");
+assert.match(fs.readFileSync(path.join(root, "ios/PeakSet/Info.plist"), "utf8"), /NSCameraUsageDescription/, "camera usage description is required");
+assert.match(swiftWebView, /setURLSchemeHandler/, "the photo URL scheme must be registered");
+
+console.log("Progress photo checks passed.");

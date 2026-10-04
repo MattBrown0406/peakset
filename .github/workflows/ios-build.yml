@@ -21,9 +21,7 @@ jobs:
 
       - name: Validate web and native integration
         run: |
-          node --check app.js
-          node --check toolkit.js
-          node --check settings.js
+          for script in *.js; do node --check "$script"; done
           node scripts/validate-source.mjs
           git diff --exit-code
 

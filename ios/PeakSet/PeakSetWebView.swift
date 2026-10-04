@@ -4,7 +4,7 @@ import WebKit
 import AVFoundation
 
 struct PeakSetWebView: UIViewRepresentable {
-    static let messageHandlers = ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit", "peaksetBackup"]
+    static let messageHandlers = ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit", "peaksetBackup", "peaksetPhoto"]
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -18,6 +18,7 @@ struct PeakSetWebView: UIViewRepresentable {
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
+        configuration.setURLSchemeHandler(context.coordinator.photoSchemeHandler, forURLScheme: PeakSetPhotoSchemeHandler.scheme)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -44,6 +45,8 @@ struct PeakSetWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
+        let photoSchemeHandler = PeakSetPhotoSchemeHandler()
+        private let photoCoordinator = PeakSetPhotoCoordinator()
         private var bellPlayer: AVAudioPlayer?
         private let fractionalISOFormatter: ISO8601DateFormatter = {
             let formatter = ISO8601DateFormatter()
@@ -68,6 +71,8 @@ struct PeakSetWebView: UIViewRepresentable {
                 handlePDFShare(message.body)
             case "peaksetBackup":
                 handleBackup(message.body)
+            case "peaksetPhoto":
+                handlePhoto(message.body)
             default:
                 break
             }
@@ -86,6 +91,34 @@ struct PeakSetWebView: UIViewRepresentable {
                   let array = String(data: data, encoding: .utf8) else { return }
             DispatchQueue.main.async { [weak self] in
                 self?.webView?.evaluateJavaScript("window.\(function)?.(...\(array));")
+            }
+        }
+
+        private func handlePhoto(_ body: Any) {
+            guard let payload = body as? [String: Any], let action = payload["action"] as? String else { return }
+            let pose = payload["pose"] as? String ?? ""
+            let report: ([String: Any]) -> Void = { [weak self] result in
+                self?.callJavaScript("handleNativePhoto", argument: result)
+            }
+            switch action {
+            case "capture", "library":
+                guard let presenter = Self.topViewController() else { return }
+                if action == "library" {
+                    photoCoordinator.pickFromLibrary(pose: pose, from: presenter, completion: report)
+                } else {
+                    photoCoordinator.capture(pose: pose, poseLabel: payload["poseLabel"] as? String ?? "Progress photo", ghostID: payload["ghostId"] as? String ?? "", from: presenter, completion: report)
+                }
+            case "delete":
+                if let id = payload["id"] as? String { PeakSetPhotoStore.delete(id) }
+            case "thumbnail":
+                guard let id = payload["id"] as? String, let requestID = payload["requestId"] as? String else { return }
+                let size = CGFloat((payload["size"] as? NSNumber)?.doubleValue ?? 640)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let dataURL = PeakSetPhotoStore.thumbnailDataURL(for: id, maxEdge: max(120, min(size, 1200))) ?? ""
+                    report(["status": "thumbnail", "requestId": requestID, "id": id, "dataUrl": dataURL])
+                }
+            default:
+                break
             }
         }
 
