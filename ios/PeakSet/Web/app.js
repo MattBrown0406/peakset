@@ -708,7 +708,9 @@ function loadState() {
     const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
     const next = { ...freshDefaultState(), ...stored };
     ["customPlans", "workoutLogs", "weightLogs", "measurements"].forEach((key) => {
-      next[key] = Array.isArray(next[key]) ? [...next[key]] : [];
+      // Drop malformed entries instead of throwing: a throw here falls back to
+      // an empty state, and the next save would overwrite the user's history.
+      next[key] = Array.isArray(next[key]) ? next[key].filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry)) : [];
     });
     if (next.weightLogs.length === 0) {
       const migratedWeights = next.measurements
@@ -757,12 +759,29 @@ function loadState() {
     next.measurements = next.measurements.map(({ bodyweight, ...entry }) => entry);
     return next;
   } catch {
+    // Keep an untouched copy of unreadable data before the fresh state is saved over it.
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) localStorage.setItem(`${STORE_KEY}-recovery-${Date.now()}`, raw);
+    } catch {}
     return freshDefaultState();
   }
 }
 
+let storageWarningShown = false;
+
 function saveState() {
-  localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    storageWarningShown = false;
+  } catch {
+    // A full or blocked store must not crash the live workout. Keep the
+    // in-memory session and warn once so the user can export or clear space.
+    if (!storageWarningShown) {
+      storageWarningShown = true;
+      toast("Storage is full. This session is not being saved on the device.");
+    }
+  }
 }
 
 function escapeHtml(value) {
@@ -1051,8 +1070,20 @@ function saveProfile() {
     toast("Add gender, age, and starting body weight.");
     return;
   }
+  if (!Number.isInteger(profile.age) || profile.age < 13 || profile.age > 100) {
+    toast("Enter an age between 13 and 100.");
+    return;
+  }
+  if (!isPlausibleBodyweight(profile.bodyweight)) {
+    toast("Enter a body weight between 50 and 700 lb.");
+    return;
+  }
 
   const measurements = collectMeasurementInputs("");
+  if (hasInvalidMeasurement(measurements)) {
+    toast("Measurements must be positive numbers.");
+    return;
+  }
   state.profile = profile;
   state.phase = get("phase") || "offseason";
   state.weightLogs.unshift({
@@ -1073,6 +1104,14 @@ function saveProfile() {
   saveState();
   toast("Profile created. Time to train.");
   render();
+}
+
+function isPlausibleBodyweight(value) {
+  return Number.isFinite(value) && value >= 50 && value <= 700;
+}
+
+function hasInvalidMeasurement(measurements) {
+  return Object.values(measurements).some((value) => value !== null && (!Number.isFinite(value) || value <= 0 || value > 150));
 }
 
 function collectMeasurementInputs(prefix) {
@@ -2495,7 +2534,7 @@ function removeActiveWorkoutExercise(index) {
   if (state.timer.exerciseIndex === index) {
     clearInterval(timerTick);
     timerTick = null;
-    state.timer = { ...defaultState.timer };
+    stopTimer();
   } else if (state.timer.exerciseIndex > index) {
     state.timer.exerciseIndex -= 1;
   }
@@ -2530,8 +2569,10 @@ function substituteActiveWorkoutExercise(index) {
 
 function updateSet(exIndex, setIndex, field, value) {
   const set = state.activeWorkout?.exercises?.[exIndex]?.sets?.[setIndex];
-  if (!set || !["weight", "reps"].includes(field)) return;
-  if (set.done && set[field] !== value) set.done = false;
+  if (!set || !["weight", "reps", "rir", "setType"].includes(field)) return;
+  // Changing the load or reps of a completed set reopens it; RIR and set-type
+  // annotations do not change what was lifted.
+  if (set.done && ["weight", "reps"].includes(field) && set[field] !== value) set.done = false;
   set[field] = value;
   saveState();
 }
@@ -2609,6 +2650,7 @@ function ensureTimerTick() {
   timerTick = setInterval(() => {
     if (!state.timer.running) return;
     const left = Math.max(0, Math.ceil((state.timer.endsAt - Date.now()) / 1000));
+    if (left === state.timer.left && left > 0) return;
     state.timer.left = left;
     if (left <= 0) {
       state.timer.running = false;
@@ -3021,6 +3063,10 @@ function saveWeight() {
     toast("Add body weight before saving.");
     return;
   }
+  if (!isPlausibleBodyweight(bodyweight)) {
+    toast("Enter a body weight between 50 and 700 lb.");
+    return;
+  }
   const entry = {
     id: crypto.randomUUID(),
     date: new Date().toISOString(),
@@ -3039,6 +3085,10 @@ function saveMeasurement() {
   const hasMeasurement = Object.values(measurements).some((value) => value !== null && Number.isFinite(value));
   if (!hasMeasurement) {
     toast("Add at least one body measurement.");
+    return;
+  }
+  if (hasInvalidMeasurement(measurements)) {
+    toast("Measurements must be positive numbers.");
     return;
   }
   const entry = {

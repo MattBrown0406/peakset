@@ -1270,14 +1270,56 @@ textarea {
 
   .toolkit-set-row,
   .toolkit-set-row.reps-only {
-    grid-template-columns: 40px 1fr;
+    grid-template-columns: 40px repeat(2, minmax(0, 1fr));
   }
 
+  /* Weight + reps, then RIR + set type, then Complete: three short rows per
+     set instead of five stacked full-width fields. */
   .toolkit-set-row > *:not(.set-number) {
-    grid-column: 2;
+    grid-column: auto;
+  }
+
+  .toolkit-set-row > .set-number {
+    grid-row: span 3;
+  }
+
+  .toolkit-set-row > button:last-child {
+    grid-column: 2 / -1;
   }
 
   .equipment-checks {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Long exercise names must not squeeze rest/target badges into tall pills. */
+.card-head > .badge {
+  flex-shrink: 0;
+  align-self: flex-start;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  /* Keep live-workout controls compact: Copy Last + Substitute on one row,
+     set/order buttons on the next, Remove last. */
+  .toolkit-exercise-controls .actions {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .toolkit-exercise-controls .actions > .secondary-btn,
+  .toolkit-exercise-controls .actions > select {
+    grid-column: span 2;
+  }
+
+  .toolkit-exercise-controls .actions > .ghost-btn.danger {
+    grid-column: 1 / -1;
+  }
+
+  /* The phone tab bar wraps to two rows; keep toasts above it. */
+  .toast {
+    left: 16px;
+    right: 16px;
+    bottom: calc(126px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
   }
 }

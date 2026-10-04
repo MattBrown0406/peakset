@@ -59,7 +59,7 @@ function toolkitMigrateState() {
   if (!state.builderFormDraft || typeof state.builderFormDraft !== "object") state.builderFormDraft = defaultBuilderFormDraft();
   state.customPlans = (state.customPlans || []).filter((plan) => !String(plan?.id || "").startsWith("quick-")).map((plan) => ({
     ...plan,
-    exercises: (plan.exercises || []).map((draft) => {
+    exercises: (Array.isArray(plan?.exercises) ? plan.exercises : []).map((draft) => {
       if (Array.isArray(draft)) return draft;
       const spec = normalizePlanExercise(draft);
       return [spec.id, spec.sets, spec.reps, spec.rest, spec.dropSets, { group: spec.group, setType: spec.setType }];
@@ -67,7 +67,7 @@ function toolkitMigrateState() {
   }));
   state.workoutLogs = (state.workoutLogs || []).map((log) => ({
     ...log,
-    sets: (log.sets || []).map((set) => {
+    sets: workoutLogSets(log).filter((set) => set && typeof set === "object").map((set) => {
       const exercise = exerciseLibrary.find((item) => item.id === set.exerciseId || item.name === set.exercise);
       return { setType: "standard", rir: "", ...set, exerciseId: set.exerciseId || exercise?.id || "" };
     })
@@ -84,17 +84,25 @@ function toolkitMigrateState() {
 
 toolkitMigrateState();
 
+function clampSetCount(value) {
+  return Math.max(1, Math.min(10, Math.trunc(Number(value)) || 3));
+}
+
+function clampDropSetCount(value) {
+  return Math.max(0, Math.min(4, Math.trunc(Number(value)) || 0));
+}
+
 function normalizePlanExercise(spec) {
   if (Array.isArray(spec)) {
     const [id, sets, reps, rest, dropSets = 0, metadata = {}] = spec;
-    return { id, sets: Number(sets) || 3, reps: String(reps || "8-12"), rest: Number(rest) || DEFAULT_REST_SECONDS, dropSets: Number(dropSets) || 0, group: metadata.group || "", setType: metadata.setType || "standard" };
+    return { id, sets: clampSetCount(sets), reps: String(reps || "8-12"), rest: clampRestSeconds(rest), dropSets: clampDropSetCount(dropSets), group: metadata?.group || "", setType: metadata?.setType || "standard" };
   }
   return {
     id: spec.id,
-    sets: Number(spec.sets) || 3,
+    sets: clampSetCount(spec.sets),
     reps: String(spec.reps || "8-12"),
-    rest: Number(spec.rest) || DEFAULT_REST_SECONDS,
-    dropSets: Number(spec.dropSets) || 0,
+    rest: clampRestSeconds(spec.rest),
+    dropSets: clampDropSetCount(spec.dropSets),
     group: spec.group || "",
     setType: spec.setType || "standard"
   };
@@ -171,7 +179,7 @@ function closeExerciseHistory() {
 
 function exerciseLoggedSets(id) {
   const exercise = exerciseById(id);
-  return (state.workoutLogs || []).flatMap((log) => (log.sets || [])
+  return (state.workoutLogs || []).flatMap((log) => workoutLogSets(log)
     .filter((set) => set.exerciseId === id || (!set.exerciseId && set.exercise === exercise.name))
     .map((set) => ({ ...set, date: log.date, workoutTitle: log.title })));
 }
@@ -179,7 +187,7 @@ function exerciseLoggedSets(id) {
 function exerciseHistorySessions(id) {
   const exercise = exerciseById(id);
   return (state.workoutLogs || []).map((log) => {
-    const sets = (log.sets || []).filter((set) => set.exerciseId === id || (!set.exerciseId && set.exercise === exercise.name));
+    const sets = workoutLogSets(log).filter((set) => set.exerciseId === id || (!set.exerciseId && set.exercise === exercise.name));
     return {
       date: log.date,
       title: log.title,
@@ -192,12 +200,12 @@ function exerciseHistorySessions(id) {
 
 function lastExercisePerformance(id) {
   const exercise = exerciseById(id);
-  const log = (state.workoutLogs || []).find((entry) => (entry.sets || []).some((set) => set.exerciseId === id || (!set.exerciseId && set.exercise === exercise.name)));
+  const log = (state.workoutLogs || []).find((entry) => workoutLogSets(entry).some((set) => set.exerciseId === id || (!set.exerciseId && set.exercise === exercise.name)));
   if (!log) return null;
   return {
     date: log.date,
     title: log.title,
-    sets: (log.sets || []).filter((set) => set.exerciseId === id || (!set.exerciseId && set.exercise === exercise.name))
+    sets: workoutLogSets(log).filter((set) => set.exerciseId === id || (!set.exerciseId && set.exercise === exercise.name))
   };
 }
 
@@ -223,7 +231,8 @@ function progressionSuggestion(exercise) {
   const ceiling = targetRepCeiling(exercise.targetReps || previous.targetReps || "8-12") || 12;
   const working = previous.sets.filter((set) => !set.dropSet && Number(set.weight) > 0 && Number(set.reps) > 0);
   if (!working.length) return "Repeat the movement and establish working-set performance.";
-  const allAtTop = working.every((set) => Number(set.reps) >= ceiling && (set.rir === "" || Number(set.rir) <= 2));
+  const rirOnTarget = (rir) => rir === "" || rir == null || rir === "failure" || Number(rir) <= 2;
+  const allAtTop = working.every((set) => Number(set.reps) >= ceiling && rirOnTarget(set.rir));
   const bestWeight = Math.max(...working.map((set) => Number(set.weight)));
   if (allAtTop) {
     const increment = exerciseById(exercise.id).muscle === "legs" ? 5 : 2.5;
@@ -431,9 +440,10 @@ function saveBuilderTemplate() {
 startCustomWorkout = function startToolkitCustomWorkout() {
   if (!builderDraft.length) return toast("Add at least one exercise.");
   const plan = builderPlanFromForm();
+  if (!beginWorkoutFromPlan(plan)) return;
   builderDraft = [];
   state.builderFormDraft = defaultBuilderFormDraft();
-  beginWorkoutFromPlan(plan);
+  saveState();
   toast("Workout started.");
 };
 
@@ -509,13 +519,27 @@ function toolkitSetRows(spec) {
 }
 
 beginWorkoutFromPlan = function beginToolkitWorkout(plan) {
-  const specs = (plan.exercises || []).map(normalizePlanExercise);
+  if (state.activeWorkout) {
+    // Starting a plan, quick log, or builder session must never overwrite a
+    // live workout with entered sets.
+    state.view = "session";
+    saveState();
+    render();
+    toast("Finish or cancel your current workout before starting another.");
+    return false;
+  }
+  const specs = (Array.isArray(plan?.exercises) ? plan.exercises : []).map(normalizePlanExercise).filter((spec) => exerciseLibrary.some((item) => item.id === spec.id));
+  if (!specs.length) {
+    toast("This workout has no exercises available in the library.");
+    return false;
+  }
+  if (state.timer.running) stopTimer();
   state.activeWorkout = {
     id: crypto.randomUUID(), planId: plan.id, title: plan.title, phase: plan.phase, startedAt: new Date().toISOString(),
     exercises: specs.map((spec) => {
       const preferred = state.substitutionPreferences[spec.id];
       const source = exerciseById(spec.id);
-      const usePreferred = preferred && !exerciseMatchesEquipmentProfile(source) && exerciseMatchesEquipmentProfile(exerciseById(preferred));
+      const usePreferred = preferred && exerciseLibrary.some((item) => item.id === preferred) && !exerciseMatchesEquipmentProfile(source) && exerciseMatchesEquipmentProfile(exerciseById(preferred));
       const id = usePreferred ? preferred : spec.id;
       const exercise = exerciseById(id);
       return { id, originalId: spec.id, name: exercise.name, repsOnly: exercise.muscle === "abs", targetSets: spec.sets, targetDropSets: spec.dropSets, targetReps: spec.reps, rest: spec.rest, group: spec.group, defaultSetType: spec.setType, sets: toolkitSetRows(spec) };
@@ -525,16 +549,21 @@ beginWorkoutFromPlan = function beginToolkitWorkout(plan) {
   state.timer = { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null };
   saveState();
   render();
+  return true;
 };
 
 function copyPreviousPerformance(exIndex) {
   const exercise = state.activeWorkout.exercises[exIndex];
   const previous = lastExercisePerformance(exercise.id);
   if (!previous) return toast("No previous performance to copy.");
-  exercise.sets.forEach((set, index) => {
-    const source = previous.sets[index];
-    if (!source) return;
-    set.weight = source.weight || "";
+  const previousWorking = previous.sets.filter((set) => !set.dropSet);
+  const previousDrops = previous.sets.filter((set) => set.dropSet);
+  let workingIndex = 0;
+  let dropIndex = 0;
+  exercise.sets.forEach((set) => {
+    const source = set.dropSet ? previousDrops[dropIndex++] : previousWorking[workingIndex++];
+    if (!source || set.done) return;
+    set.weight = isRepsOnlyExercise(exercise) ? "" : source.weight || "";
     set.reps = source.reps || "";
     set.rir = source.rir ?? "";
     set.setType = source.setType || set.setType;
@@ -543,9 +572,32 @@ function copyPreviousPerformance(exIndex) {
   render();
 }
 
+function liveExerciseCandidates(currentId = null) {
+  const current = currentId ? exerciseById(currentId) : null;
+  const existing = new Set((state.activeWorkout?.exercises || []).map((item) => item.id));
+  const travel = state.activeWorkout?.phase === "travel";
+  return exerciseLibrary.filter((item) =>
+    !existing.has(item.id)
+    && (!travel || item.hotel)
+    && exerciseMatchesEquipmentProfile(item)
+    && (!current || item.muscle === current.muscle));
+}
+
 function substituteActiveExercise(exIndex, id) {
-  const exercise = state.activeWorkout.exercises[exIndex];
+  const exercise = state.activeWorkout?.exercises?.[exIndex];
   if (!exercise || !id) return;
+  if (exerciseHasProgress(exercise)) {
+    // Entered sets belong to the original movement; relabelling them would
+    // corrupt that exercise's history and PRs.
+    toast("Sets already entered for this exercise. Add the replacement as a new exercise instead.");
+    render();
+    return;
+  }
+  if (!liveExerciseCandidates(exercise.id).some((item) => item.id === id)) {
+    toast("That substitute is not available for this workout.");
+    render();
+    return;
+  }
   state.substitutionPreferences[exercise.originalId || exercise.id] = id;
   const replacement = exerciseById(id);
   exercise.id = id;
@@ -558,7 +610,8 @@ function substituteActiveExercise(exIndex, id) {
 
 function addLiveExercise() {
   const id = document.getElementById("liveExerciseAdd")?.value;
-  if (!id) return;
+  if (!id || !state.activeWorkout) return;
+  if (!liveExerciseCandidates().some((item) => item.id === id)) return toast("That exercise is already in this workout or unavailable here.");
   const exercise = exerciseById(id);
   const spec = { id, sets: 3, reps: "8-12", rest: DEFAULT_REST_SECONDS, dropSets: 0, group: "", setType: "standard" };
   state.activeWorkout.exercises.push({ id, originalId: id, name: exercise.name, repsOnly: exercise.muscle === "abs", targetSets: 3, targetDropSets: 0, targetReps: "8-12", rest: DEFAULT_REST_SECONDS, group: "", defaultSetType: "standard", sets: toolkitSetRows(spec) });
@@ -567,18 +620,12 @@ function addLiveExercise() {
 }
 
 function removeLiveExercise(index) {
-  if (state.activeWorkout.exercises.length <= 1) return toast("Keep at least one exercise.");
-  state.activeWorkout.exercises.splice(index, 1);
-  saveState();
-  render();
+  // app.js protects entered sets and keeps the rest timer attached correctly.
+  return removeActiveWorkoutExercise(index);
 }
 
 function moveLiveExercise(index, direction) {
-  const destination = index + direction;
-  if (destination < 0 || destination >= state.activeWorkout.exercises.length) return;
-  [state.activeWorkout.exercises[index], state.activeWorkout.exercises[destination]] = [state.activeWorkout.exercises[destination], state.activeWorkout.exercises[index]];
-  saveState();
-  render();
+  return moveActiveWorkoutExercise(index, direction);
 }
 
 function adjustLiveSets(exIndex, delta) {
@@ -631,10 +678,16 @@ function updateSetType(exIndex, setIndex, value) {
 }
 
 completeSet = function completeToolkitSet(exIndex, setIndex) {
-  const exercise = state.activeWorkout.exercises[exIndex];
-  const set = exercise.sets[setIndex];
+  const exercise = state.activeWorkout?.exercises?.[exIndex];
+  const set = exercise?.sets?.[setIndex];
+  if (!exercise || !set) return;
   const repsOnly = isRepsOnlyExercise(exercise);
-  if (!set.reps || (!repsOnly && !set.weight)) return toast(repsOnly ? "Enter reps before completing the set." : "Enter weight and reps before completing the set.");
+  const weight = Number(set.weight);
+  const reps = Number(set.reps);
+  const weightValid = repsOnly || (set.weight !== "" && Number.isFinite(weight) && weight >= 0);
+  if (set.reps === "" || !Number.isInteger(reps) || reps <= 0 || !weightValid) {
+    return toast(repsOnly ? "Enter whole-number reps before completing the set." : "Enter a non-negative weight and whole-number reps before completing the set.");
+  }
   set.done = !set.done;
   saveState();
   if (set.done) {
@@ -669,13 +722,13 @@ finishWorkout = function finishToolkitWorkout() {
 
 function renderToolkitExerciseControls(exercise, exIndex) {
   const source = exerciseById(exercise.id);
-  const substitutions = exerciseLibrary.filter((item) => item.id !== exercise.id && item.muscle === source.muscle && exerciseMatchesEquipmentProfile(item)).slice(0, 30);
+  const substitutions = exerciseHasProgress(exercise) ? [] : liveExerciseCandidates(source.id).slice(0, 30);
   const setting = exerciseSetting(exercise.id);
-  return `<div class="toolkit-exercise-controls">${renderLastPerformance(exercise.id)}<p class="progression-callout">${escapeHtml(progressionSuggestion(exercise))}</p>${setting.note ? `<p class="compact-note"><strong>Note:</strong> ${escapeHtml(setting.note)}</p>` : ""}${setting.pain !== "none" ? `<span class="badge amber">Discomfort: ${escapeHtml(setting.pain)}</span>` : ""}<div class="actions"><button class="secondary-btn" onclick="copyPreviousPerformance(${exIndex})">Copy Last</button><select onchange="substituteActiveExercise(${exIndex},this.value)"><option value="">Substitute...</option>${substitutions.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button class="ghost-btn" onclick="adjustLiveSets(${exIndex},1)">+ Set</button><button class="ghost-btn" onclick="adjustLiveSets(${exIndex},-1)">− Set</button><button class="ghost-btn" onclick="moveLiveExercise(${exIndex},-1)">↑</button><button class="ghost-btn" onclick="moveLiveExercise(${exIndex},1)">↓</button><button class="ghost-btn danger" onclick="removeLiveExercise(${exIndex})">Remove</button></div></div>`;
+  return `<div class="toolkit-exercise-controls">${renderLastPerformance(exercise.id)}<p class="progression-callout">${escapeHtml(progressionSuggestion(exercise))}</p>${setting.note ? `<p class="compact-note"><strong>Note:</strong> ${escapeHtml(setting.note)}</p>` : ""}${setting.pain !== "none" ? `<span class="badge amber">Discomfort: ${escapeHtml(setting.pain)}</span>` : ""}<div class="actions"><button class="secondary-btn" onclick="copyPreviousPerformance(${exIndex})">Copy Last</button><select aria-label="Substitute ${escapeHtml(exercise.name)}" onchange="substituteActiveExercise(${exIndex},this.value)" ${substitutions.length ? "" : "disabled"}><option value="">Substitute...</option>${substitutions.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button class="ghost-btn" onclick="adjustLiveSets(${exIndex},1)">+ Set</button><button class="ghost-btn" onclick="adjustLiveSets(${exIndex},-1)">− Set</button><button class="ghost-btn" onclick="moveLiveExercise(${exIndex},-1)">↑</button><button class="ghost-btn" onclick="moveLiveExercise(${exIndex},1)">↓</button><button class="ghost-btn danger" onclick="removeLiveExercise(${exIndex})">Remove</button></div></div>`;
 }
 
 function renderToolkitSetFields(exercise, exIndex, set, setIndex) {
-  return `<div class="set-row toolkit-set-row ${isRepsOnlyExercise(exercise) ? "reps-only" : ""}"><div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" placeholder="Weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex},${setIndex},'weight',this.value)" />`}<input type="number" inputmode="numeric" placeholder="Reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex},${setIndex},'reps',this.value)" /><select aria-label="RIR" onchange="updateSet(${exIndex},${setIndex},'rir',this.value)"><option value="">RIR</option>${[0,1,2,3,4].map((value) => `<option value="${value}" ${String(set.rir) === String(value) ? "selected" : ""}>${value} RIR</option>`).join("")}<option value="failure" ${set.rir === "failure" ? "selected" : ""}>Failure</option></select><select aria-label="Set type" onchange="updateSetType(${exIndex},${setIndex},this.value)">${setTypeOptions.map(([value,label]) => `<option value="${value}" ${set.setType === value ? "selected" : ""}>${label}</option>`).join("")}</select><button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex},${setIndex})">${set.done ? "Done" : "Complete"}</button></div>`;
+  return `<div class="set-row toolkit-set-row ${isRepsOnlyExercise(exercise) ? "reps-only" : ""}"><div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex},${setIndex},'weight',this.value)" />`}<input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex},${setIndex},'reps',this.value)" /><select aria-label="RIR" onchange="updateSet(${exIndex},${setIndex},'rir',this.value)"><option value="">RIR</option>${[0,1,2,3,4].map((value) => `<option value="${value}" ${String(set.rir) === String(value) ? "selected" : ""}>${value} RIR</option>`).join("")}<option value="failure" ${set.rir === "failure" ? "selected" : ""}>Failure</option></select><select aria-label="Set type" onchange="updateSetType(${exIndex},${setIndex},this.value)">${setTypeOptions.map(([value,label]) => `<option value="${value}" ${set.setType === value ? "selected" : ""}>${label}</option>`).join("")}</select><button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex},${setIndex})">${set.done ? "Done" : "Complete"}</button></div>`;
 }
 
 const baseRenderSession = renderSession;
@@ -688,7 +741,7 @@ renderSession = function renderToolkitSession() {
   const totalTimer = Math.max(1, state.timer.seconds);
   const progress = state.timer.running || state.timer.fullscreen ? (totalTimer - left) / totalTimer * 360 : 0;
   setTimeout(ensureTimerTick, 0);
-  return `${renderRestOverlay(left,progress)}<div class="topbar"><div><p class="eyebrow">Live workout</p><h1>${escapeHtml(workout.title)}</h1><p class="muted">${completed} of ${total} sets completed</p></div><div class="actions"><select id="liveExerciseAdd"><option value="">Add exercise...</option>${exerciseLibrary.filter((item) => exerciseMatchesEquipmentProfile(item)).map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button class="secondary-btn" onclick="addLiveExercise()">Add</button><button class="secondary-btn" onclick="saveActiveWorkoutAsTemplate()">Save Template</button><button class="secondary-btn" onclick="finishWorkout()">Save Session</button><button class="ghost-btn danger" onclick="cancelWorkout()">Cancel</button></div></div><div class="session-shell"><section class="session">${workout.exercises.map((exercise,exIndex) => `<article class="card pad"><div class="card-head"><div>${exercise.group ? `<span class="badge green">Superset ${escapeHtml(exercise.group)}</span>` : ""}<span class="badge blue">${exercise.targetSets} sets${exercise.targetDropSets ? ` + ${exercise.targetDropSets} drop` : ""} × ${escapeHtml(exercise.targetReps)}</span><h2 style="margin-top:10px">${escapeHtml(exercise.name)}</h2></div><span class="badge">${exercise.rest}s rest</span></div>${renderToolkitExerciseControls(exercise,exIndex)}<div class="set-table">${exercise.sets.map((set,setIndex) => renderToolkitSetFields(exercise,exIndex,set,setIndex)).join("")}</div></article>`).join("")}</section><aside class="card pad"><p class="eyebrow">Rest timer</p><div class="timer-face" style="--progress:${progress}deg"><div style="text-align:center"><strong data-timer-time>${formatTime(left)}</strong><p class="muted" data-timer-status>${timerStatusText()}</p></div></div><div class="timer-controls"><div class="actions"><button class="secondary-btn" onclick="adjustRest(-15)">-15s</button><button class="secondary-btn" onclick="adjustRest(15)">+15s</button></div><div class="actions">${restPresetButtons(false)}</div><button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button><button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button></div></aside></div>`;
+  return `${renderRestOverlay(left,progress)}<div class="topbar"><div><p class="eyebrow">Live workout</p><h1>${escapeHtml(workout.title)}</h1><p class="muted">${completed} of ${total} sets completed</p></div><div class="actions"><select id="liveExerciseAdd" aria-label="Add exercise"><option value="">Add exercise...</option>${liveExerciseCandidates().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button class="secondary-btn" onclick="addLiveExercise()">Add</button><button class="secondary-btn" onclick="saveActiveWorkoutAsTemplate()">Save Template</button><button class="secondary-btn" onclick="finishWorkout()">Save Session</button><button class="ghost-btn danger" onclick="cancelWorkout()">Cancel</button></div></div><div class="session-shell"><section class="session">${workout.exercises.map((exercise,exIndex) => `<article class="card pad"><div class="card-head"><div>${exercise.group ? `<span class="badge green">Superset ${escapeHtml(exercise.group)}</span>` : ""}<span class="badge blue">${exercise.targetSets} sets${exercise.targetDropSets ? ` + ${exercise.targetDropSets} drop` : ""} × ${escapeHtml(exercise.targetReps)}</span><h2 style="margin-top:10px">${escapeHtml(exercise.name)}</h2></div><span class="badge">${exercise.rest}s rest</span></div>${renderToolkitExerciseControls(exercise,exIndex)}<div class="set-table">${exercise.sets.map((set,setIndex) => renderToolkitSetFields(exercise,exIndex,set,setIndex)).join("")}</div></article>`).join("")}</section><aside class="card pad"><p class="eyebrow">Rest timer</p><div class="timer-face" style="--progress:${progress}deg"><div style="text-align:center"><strong data-timer-time>${formatTime(left)}</strong><p class="muted" data-timer-status>${timerStatusText()}</p></div></div><div class="timer-controls"><div class="actions"><button class="secondary-btn" onclick="adjustRest(-15)">-15s</button><button class="secondary-btn" onclick="adjustRest(15)">+15s</button></div><div class="actions">${restPresetButtons(false)}</div><button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button><button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button></div></aside></div>`;
 };
 
 const baseStartTimer = startTimer;
@@ -803,6 +856,8 @@ function handleNativeHealthKit(payload) {
     state.healthKitEnabled = state.healthKitPermissions.workoutWrite;
   }
   if (Number(payload.steps) > 0) {
+    const today = new Date().toDateString();
+    state.prepLogs = state.prepLogs.filter((entry) => !(entry.cardioType === "HealthKit" && new Date(entry.date).toDateString() === today));
     state.prepLogs.unshift({ id: crypto.randomUUID(), date: new Date().toISOString(), cardioType: "HealthKit", cardioMinutes: 0, steps: Number(payload.steps), posingMinutes: 0, notes: "Imported from Apple Health" });
   } else if (payload.status === "stepsImported") {
     state.healthKitStatus = "No steps recorded in Apple Health today.";
@@ -826,7 +881,7 @@ renderProgress = function renderToolkitProgress() {
     <div class="grid three"><article class="card stat"><p class="value">${average ? average.toFixed(1) : "--"}</p><p class="label">7-day average weight</p></article><article class="card stat"><p class="value">${prep?.steps?.toLocaleString() || "--"}</p><p class="label">Latest steps</p></article><article class="card stat"><p class="value">${checkIn?.recovery || "--"}</p><p class="label">Latest recovery / 5</p></article></div>
     <div class="grid two progress-grid" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Frequent log</p><h2>Body Weight</h2><div class="grid two"><div class="field"><label>Scale weight</label><input id="logWeight" type="number" step="0.1" value="${latestWeight?.bodyweight || ""}" /></div><div class="field"><label>Note</label><input id="logWeightNote" placeholder="Morning fasted..." /></div></div><button class="primary-btn" onclick="saveWeight()">Save Weight</button><div class="actions" style="margin-top:10px"><button class="secondary-btn" onclick="requestHealthKit('authorize')">Connect Apple Health</button><button class="secondary-btn" onclick="requestHealthKit('readSteps')">Import Steps</button><button class="secondary-btn" onclick="requestHealthKit('syncWeight')">Send Weight</button></div><p class="muted">${escapeHtml(state.healthKitStatus)}</p></section><section class="card pad"><h2>Body Weight Trend</h2>${weights.length > 1 ? sparkline(weights) : '<div class="empty"><p class="muted">Add two weigh-ins.</p></div>'}</section></div>
     <div class="grid two progress-grid" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Physique check-in</p><h2>Expanded Measurements</h2><div class="measurement-grid">${measurementFields("measure")}</div><button class="primary-btn" onclick="saveMeasurement()">Save Measurements</button></section><section class="card pad"><div class="card-head"><h2>Measurement Trend</h2><select onchange="setMeasurementTrend(this.value)">${measurementDefinitions.map(([key,label]) => `<option value="${key}" ${key === trendKey ? "selected" : ""}>${label}</option>`).join("")}</select></div>${trendValues.length > 1 ? sparkline(trendValues) : '<div class="empty"><p class="muted">Add two measurements for this marker.</p></div>'}${latestMeasurement ? `<div class="measurement-grid" style="margin-top:12px">${measurementDefinitions.map(([key,label]) => `<div class="stat card"><p class="value">${latestMeasurement[key] ?? "--"}</p><p class="label">${label}</p></div>`).join("")}</div>` : ""}</section></div>
-    <div class="grid two" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Weekly check-in</p><h2>Recovery and readiness</h2><div class="grid three">${[["checkSleep","Sleep","0.5"],["checkEnergy","Energy / 5","1"],["checkHunger","Hunger / 5","1"],["checkDigestion","Digestion / 5","1"],["checkRecovery","Recovery / 5","1"]].map(([id,label,step]) => `<div class="field"><label>${label}</label><input id="${id}" type="number" min="1" max="${id === "checkSleep" ? 12 : 5}" step="${step}" /></div>`).join("")}</div><div class="field"><label>Notes</label><textarea id="checkNotes" rows="3" placeholder="Sleep, joints, appetite, stress..."></textarea></div><button class="primary-btn" onclick="saveWeeklyCheckIn()">Save Weekly Check-In</button></section><section class="card pad"><p class="eyebrow">Contest-prep adherence</p><h2>Cardio, Steps, and Posing</h2><div class="grid two"><div class="field"><label>Cardio type</label><input id="prepCardioType" placeholder="Incline treadmill" /></div><div class="field"><label>Minutes</label><input id="prepCardioMinutes" type="number" min="0" /></div><div class="field"><label>Steps</label><input id="prepSteps" type="number" min="0" /></div><div class="field"><label>Posing minutes</label><input id="prepPosing" type="number" min="0" /></div></div><div class="field"><label>Notes</label><input id="prepNotes" placeholder="Coach-prescribed work and adherence..." /></div><button class="primary-btn" onclick="savePrepLog()">Save Prep Activity</button></section></div>
+    <div class="grid two" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Weekly check-in</p><h2>Recovery and readiness</h2><div class="grid three">${[["checkSleep","Sleep","0.5"],["checkEnergy","Energy / 5","1"],["checkHunger","Hunger / 5","1"],["checkDigestion","Digestion / 5","1"],["checkRecovery","Recovery / 5","1"]].map(([id,label,step]) => `<div class="field"><label>${label}</label><input id="${id}" type="number" min="1" max="${id === "checkSleep" ? 24 : 5}" step="${step}" /></div>`).join("")}</div><div class="field"><label>Notes</label><textarea id="checkNotes" rows="3" placeholder="Sleep, joints, appetite, stress..."></textarea></div><button class="primary-btn" onclick="saveWeeklyCheckIn()">Save Weekly Check-In</button></section><section class="card pad"><p class="eyebrow">Contest-prep adherence</p><h2>Cardio, Steps, and Posing</h2><div class="grid two"><div class="field"><label>Cardio type</label><input id="prepCardioType" placeholder="Incline treadmill" /></div><div class="field"><label>Minutes</label><input id="prepCardioMinutes" type="number" min="0" /></div><div class="field"><label>Steps</label><input id="prepSteps" type="number" min="0" /></div><div class="field"><label>Posing minutes</label><input id="prepPosing" type="number" min="0" /></div></div><div class="field"><label>Notes</label><input id="prepNotes" placeholder="Coach-prescribed work and adherence..." /></div><button class="primary-btn" onclick="savePrepLog()">Save Prep Activity</button></section></div>
     <section class="card pad" style="margin-top:12px"><h2>Recent Check-Ins</h2><div class="grid two"><div>${state.weeklyCheckIns.slice(0,6).map((entry) => `<div class="exercise-row"><span>${formatShortDate(entry.date)} · Sleep ${entry.sleep || "--"}h</span><strong>Recovery ${entry.recovery || "--"}/5</strong></div>`).join("") || '<p class="muted">No weekly check-ins.</p>'}</div><div>${state.prepLogs.slice(0,6).map((entry) => `<div class="exercise-row"><span>${formatShortDate(entry.date)} · ${escapeHtml(entry.cardioType || "Activity")}</span><strong>${entry.cardioMinutes || 0} min · ${(entry.steps || 0).toLocaleString()} steps · ${entry.posingMinutes || 0} posing</strong></div>`).join("") || '<p class="muted">No prep activity.</p>'}</div></div></section>`;
 };
 
@@ -866,9 +921,13 @@ renderLogbook = function renderToolkitLogbook() {
 };
 
 resetDemoData = function resetToolkitData() {
+  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel" });
+  clearInterval(timerTick);
+  timerTick = null;
   localStorage.removeItem(STORE_KEY);
-  state = structuredClone(defaultState);
+  state = freshDefaultState();
   builderDraft = [];
+  coachNoteDraft = "";
   toolkitMigrateState();
   render();
 };
