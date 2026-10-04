@@ -222,8 +222,15 @@ final class PeakSetIncomingFiles {
     func open(_ url: URL) {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url), data.count < 50_000_000,
-              let text = String(data: data, encoding: .utf8) else { return }
+        // Check the size before reading: the app opens any .json file.
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard size > 0, size < 50_000_000,
+              let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else {
+            // An empty string reaches the web app's "could not be read" message.
+            if let deliver { deliver("") } else { pending.append("") }
+            return
+        }
         if let deliver {
             deliver(text)
         } else {

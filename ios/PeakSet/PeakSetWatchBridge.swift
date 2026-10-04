@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import WatchConnectivity
 
 /// Phone side of the watch link. The web app publishes a workout snapshot;
@@ -120,7 +121,31 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
         // A command already stored (sendMessage plus its transferUserInfo
         // fallback) is delivered once.
         guard store(command) else { return }
-        deliver(command)
+        DispatchQueue.main.async {
+            // With the phone locked the web app is paused, so rest commands
+            // must reach the notification and Live Activity natively. When the
+            // web app later applies the same command it computes the same end
+            // time from its own state, so nothing is applied twice.
+            if UIApplication.shared.applicationState != .active {
+                Self.applyRestCommandNatively(command)
+            }
+            self.deliver(command)
+        }
+    }
+
+    private static func applyRestCommandNatively(_ command: [String: Any]) {
+        switch command["action"] as? String {
+        case "skipRest":
+            PeakSetTimerService.shared.cancel()
+            PeakSetLiveActivityManager.shared.end()
+        case "adjustRest":
+            let seconds = (command["seconds"] as? NSNumber)?.doubleValue ?? 0
+            guard seconds != 0 else { return }
+            PeakSetTimerService.shared.shift(by: seconds)
+            PeakSetLiveActivityManager.shared.shift(by: seconds)
+        default:
+            break
+        }
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {

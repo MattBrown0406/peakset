@@ -156,6 +156,8 @@ private struct RestView: View {
     let endsAt: Date
 
     var body: some View {
+        // Scrolls so +15s and Skip stay reachable at large text sizes.
+        ScrollView {
         VStack(spacing: 8) {
             Text("Rest")
                 .font(.caption.weight(.bold))
@@ -180,6 +182,7 @@ private struct RestView: View {
                 Button("Skip") { model.skipRest() }
                     .tint(teal)
             }
+        }
         }
     }
 }

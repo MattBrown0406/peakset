@@ -42,6 +42,24 @@ final class PeakSetTimerService {
         }
     }
 
+    /// Moves the pending rest notification (watch +/-15s while the phone's web
+    /// app is paused). A rest moved into the past is cancelled.
+    func shift(by seconds: TimeInterval) {
+        let notificationID = self.notificationID
+        center.getPendingNotificationRequests { [weak self] requests in
+            guard let self,
+                  let request = requests.first(where: { $0.identifier == notificationID }),
+                  let trigger = request.trigger as? UNTimeIntervalNotificationTrigger,
+                  let fireDate = trigger.nextTriggerDate() else { return }
+            let remaining = fireDate.addingTimeInterval(seconds).timeIntervalSinceNow
+            DispatchQueue.main.async {
+                guard remaining >= 1 else { return self.cancel() }
+                let shifted = UNNotificationRequest(identifier: notificationID, content: request.content, trigger: UNTimeIntervalNotificationTrigger(timeInterval: remaining, repeats: false))
+                self.center.add(shifted)
+            }
+        }
+    }
+
     func cancel() {
         generation = UUID()
         center.removePendingNotificationRequests(withIdentifiers: [notificationID])

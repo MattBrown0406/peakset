@@ -853,3 +853,36 @@ const legacyName = makeContext({ profile: { bodyweight: 200 }, workoutLogs: [{ i
 assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].exerciseId", legacyName.context), "seated-calf-raise", "renamed exercises still match old logs");
 assert.match(read("ios/MassMethodWatch/WatchWorkoutModel.swift"), /unitChanged/, "the watch reloads its draft after a unit switch");
 console.log("Audit round 4 holistic checks passed.");
+
+// Audit round 5 follow-ups.
+const r5 = makeContext({ profile: { bodyweight: 200 }, weightLogs: [{ id: "mine", date: new Date(Date.now() - 86400000).toISOString(), bodyweight: 200 }], measurements: [{ id: "tape", date: new Date(Date.now() - 86400000).toISOString(), waist: 32 }] });
+const r5run = (code) => vm.runInContext(code, r5.context);
+r5run("state.healthBody.enabled = true");
+r5run(`applyHealthBodySamples(${JSON.stringify([
+  { type: "weight", id: "h1", date: new Date().toISOString(), value: 198, source: "Scale" },
+  { type: "bodyFat", id: "h2", date: new Date().toISOString(), value: 14.5, source: "Scale" },
+  { type: "leanMass", id: "h3", date: new Date(Date.now() - 86400000).toISOString(), value: 170, source: "Scale" },
+  { type: "weight", id: "h4", date: new Date(Date.now() - 300 * 86400000).toISOString(), value: 210, source: "Scale" }
+])})`);
+r5run("setUnits('metric')");
+const snap = JSON.stringify(r5run("nativeBackupPayload()"));
+assert.ok(!snap.includes("_unitOrigin"), "iCloud snapshots carry no unit-switch memory (it can hold Health values)");
+assert.equal(JSON.parse(snap).state.profile.bodyweight, r5run("state.weightLogs.find((entry) => entry.id === 'mine').bodyweight"), "iCloud snapshots never carry a Health-derived profile weight");
+assert.ok(Date.now() - Date.parse(JSON.parse(snap).state.healthBody.resyncFrom) > 299 * 86400000, "restores re-import Health history as far back as it went");
+// Pending blocks are validated and cleared when superseded.
+r5run("state.trainingBlock = null; state.pendingTrainingBlock = { name: 'X', startDate: '2026-01-05', accumulationWeeks: 1e8, focus: 'abc' }; volumeMigrateState()");
+assert.equal(r5run("state.pendingTrainingBlock.accumulationWeeks + ':' + Array.isArray(state.pendingTrainingBlock.focus)"), "6:true", "queued blocks are validated");
+r5run("state.blockDraft = { weeks: 4, start: 'this', focus: [] }; startTrainingBlock()");
+assert.equal(r5run("state.pendingTrainingBlock"), null, "starting your own block clears a queued coach block");
+// Today picks expire; coach check-ins cover the gap since the last send.
+r5run("state.customPlans = [{ id: 'sched', title: 'Scheduled', muscle: 'chest', phase: 'offseason', scheduleDay: new Date().toLocaleDateString('en-US', { weekday: 'long' }), exercises: [['barbell-bench', 3, '8', 90]] }]; state.todayPlanId = 'chest-density'; state.todayPlanDate = 'Mon Jan 01 2001'");
+assert.equal(r5run("todaysSelectedPlan().id"), "sched", "a workout picked on an earlier day no longer overrides today's schedule");
+const gapCtx = makeContext({ profile: { bodyweight: 200 }, athleteName: "A", lastCoachPackageAt: new Date(Date.now() - 9 * 86400000).toISOString(), weeklyCheckIns: [{ id: "c8", date: new Date(Date.now() - 8 * 86400000).toISOString(), recovery: 2, notes: "knee" }] });
+vm.runInContext("window.webkit = { messageHandlers: { peaksetSharePdf: { postMessage(m) { window.__shared = m; } } } }; FileReader = class { readAsDataURL(blob) { blob.text().then((t) => { this.result = 'data:x;base64,' + Buffer.from(t).toString('base64'); this.onloadend(); }); } }", gapCtx.context);
+gapCtx.context.Buffer = Buffer;
+await vm.runInContext("sendCheckInToCoach()", gapCtx.context);
+const sentPkg = JSON.parse(Buffer.from(vm.runInContext("window.__shared.base64", gapCtx.context), "base64").toString());
+assert.equal(sentPkg.weeklyCheckIns.length, 1, "a check-in sent 9 days after the last one covers the whole gap");
+const bfCtx = makeContext({ profile: { bodyweight: 200 }, weightLogs: [{ id: "w", date: new Date().toISOString(), bodyweight: 200, bodyFat: 20 }], measurements: [{ id: "t", date: new Date(Date.now() - 5 * 86400000).toISOString(), chest: 40 }] });
+assert.equal(vm.runInContext("mergedLatestMeasurement().bodyFat", bfCtx.context), 20, "coach check-ins include smart-scale body fat");
+console.log("Audit round 5 checks passed.");

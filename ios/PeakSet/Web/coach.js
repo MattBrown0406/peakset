@@ -59,14 +59,18 @@ function weeklyVolumeHistory(weeks = 4) {
 }
 
 function mergedLatestMeasurement() {
-  if (!state.measurements.length) return null;
-  const merged = { id: `latest-${state.measurements[0].date}`, date: state.measurements[0].date };
+  if (!state.measurements.length && !state.weightLogs.some((entry) => Number(entry.bodyFat) > 0)) return null;
+  const newest = state.measurements[0]?.date || state.weightLogs.find((entry) => Number(entry.bodyFat) > 0)?.date;
+  const merged = { id: `latest-${newest}`, date: newest };
   state.measurements.forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
       if (["id", "date", "note", "source", "healthFields", "_unitOrigin"].includes(key)) return;
       if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") merged[key] = value;
     });
   });
+  // Smart-scale body fat lives on weigh-ins; show the newest reading.
+  const scaleBodyFat = state.weightLogs.find((entry) => Number(entry.bodyFat) > 0);
+  if (scaleBodyFat && (!merged.bodyFat || Date.parse(scaleBodyFat.date) > Date.parse(merged.date))) merged.bodyFat = Number(scaleBodyFat.bodyFat);
   return merged;
 }
 
@@ -119,7 +123,11 @@ async function sendCheckInToCoach() {
     return;
   }
   toast("Preparing your check-in...");
-  const pkg = await buildCoachPackage();
+  // Cover everything since the last check-in (plus a day of overlap; the coach
+  // side de-duplicates), so a late send never drops data.
+  const since = Date.parse(state.lastCoachPackageAt || "");
+  const gapDays = Number.isFinite(since) ? Math.ceil((Date.now() - since) / 86400000) + 1 : 0;
+  const pkg = await buildCoachPackage(Math.min(60, Math.max(Number(state.logbookRange || 7), gapDays)));
   const name = `${fileSafe(state.athleteName)} check-in ${todayStamp()}.massmethod`;
   const result = await shareOrDownload(JSON.stringify(pkg), name, "application/x-massmethod");
   state.lastCoachPackageAt = new Date().toISOString();
@@ -354,6 +362,7 @@ function importProgram(program) {
     else {
       if (state.trainingBlock) archiveTrainingBlock("replaced by coach");
       state.trainingBlock = incoming;
+      state.pendingTrainingBlock = null;
     }
   }
   state.coachMessage = { from, message: String(program.message || "").slice(0, 2000), receivedAt: new Date().toISOString(), planCount: plans.length };

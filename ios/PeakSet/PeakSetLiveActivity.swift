@@ -25,6 +25,22 @@ final class PeakSetLiveActivityManager {
         Task { @MainActor in self.enqueue { await self.performShow(rest) } }
     }
 
+    nonisolated func shift(by seconds: TimeInterval) {
+        Task { @MainActor in
+            self.enqueue {
+                for activity in Activity<RestTimerAttributes>.activities {
+                    var state = activity.content.state
+                    state.endsAt = state.endsAt.addingTimeInterval(seconds)
+                    if state.endsAt <= Date() {
+                        await activity.end(nil, dismissalPolicy: .immediate)
+                    } else {
+                        await activity.update(ActivityContent(state: state, staleDate: state.endsAt))
+                    }
+                }
+            }
+        }
+    }
+
     nonisolated func end() {
         Task { @MainActor in self.enqueue { await self.endAll() } }
     }

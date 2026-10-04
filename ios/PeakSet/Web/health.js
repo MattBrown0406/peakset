@@ -45,9 +45,11 @@ function syncHealthBody(force = false) {
   // Re-read a few days of overlap so late-arriving scale readings are caught.
   // Start at local midnight so the oldest day in the window is read whole and
   // its first reading stays the first reading.
+  const resyncFrom = Date.parse(state.healthBody.resyncFrom || "");
+  const firstSyncStart = Math.min(Date.now() - HEALTH_INITIAL_DAYS * 86400000, Number.isFinite(resyncFrom) ? resyncFrom : Infinity);
   const since = startOfLocalDay(Number.isFinite(last)
     ? new Date(last - HEALTH_RESYNC_OVERLAP_DAYS * 86400000)
-    : new Date(Date.now() - HEALTH_INITIAL_DAYS * 86400000));
+    : new Date(firstSyncStart));
   healthSyncInFlight = true;
   setTimeout(() => { healthSyncInFlight = false; }, 30000);
   bridge.postMessage({ action: "readBody", since: since.toISOString(), unit: weightUnit(), lengthUnit: lengthUnit() });
@@ -145,6 +147,7 @@ function applyHealthBodySamples(samples) {
   state.measurements.sort(newestFirst);
   if (state.profile && state.weightLogs[0]?.bodyweight) state.profile.bodyweight = state.weightLogs[0].bodyweight;
   state.healthBody.lastSyncAt = new Date().toISOString();
+  delete state.healthBody.resyncFrom;
   state.healthBody.lastResult = changedDays
     ? `Updated ${changedDays} ${changedDays === 1 ? "day" : "days"} from Apple Health.`
     : "Up to date with Apple Health.";

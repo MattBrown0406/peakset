@@ -114,10 +114,34 @@ function nativeBackupPayload() {
     delete entry.healthFields;
     return entry;
   };
+  const healthDates = [...(copy.weightLogs || []), ...(copy.measurements || [])].filter(fromHealth).map((entry) => Date.parse(entry.date)).filter(Number.isFinite);
   copy.weightLogs = (copy.weightLogs || []).filter((entry) => !fromHealth(entry)).map(strip);
   copy.measurements = (copy.measurements || []).filter((entry) => !fromHealth(entry)).map(strip);
   copy.prepLogs = (copy.prepLogs || []).filter((entry) => entry?.cardioType !== "HealthKit");
-  if (copy.healthBody) copy.healthBody.lastSyncAt = null;
+  // A coach's roster holds athletes' Health-derived readings too.
+  Object.values(copy.coach?.athletes || {}).forEach((athlete) => {
+    if (!athlete || typeof athlete !== "object") return;
+    athlete.weightLogs = (Array.isArray(athlete.weightLogs) ? athlete.weightLogs : []).filter((entry) => !fromHealth(entry));
+    athlete.measurements = (Array.isArray(athlete.measurements) ? athlete.measurements : []).filter((entry) => !fromHealth(entry));
+  });
+  // Unit-switch memory can hold a Health value; it only affects exact
+  // lb<->kg round-trips, so leave it out of snapshots entirely.
+  const dropOrigins = (value) => {
+    if (Array.isArray(value)) value.forEach(dropOrigins);
+    else if (value && typeof value === "object") {
+      delete value[UNIT_ORIGIN_KEY];
+      Object.values(value).forEach(dropOrigins);
+    }
+  };
+  dropOrigins(copy);
+  // The profile weight follows the newest weigh-in, which may be from Health.
+  if (copy.profile && healthDates.length) copy.profile.bodyweight = copy.weightLogs.find((entry) => Number(entry.bodyweight) > 0)?.bodyweight ?? null;
+  if (copy.healthBody) {
+    copy.healthBody.lastSyncAt = null;
+    // After a restore, re-import from the oldest Health reading we had, not
+    // just the default 180 days.
+    copy.healthBody.resyncFrom = healthDates.length ? new Date(Math.min(...healthDates)).toISOString() : null;
+  }
   return { format: BACKUP_FORMAT, version: BACKUP_VERSION, app: APP_NAME, exportedAt: new Date().toISOString(), state: copy };
 }
 

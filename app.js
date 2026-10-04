@@ -845,6 +845,7 @@ function sanitizeStoredState(next) {
       : key === "_unitOrigin" ? (value && typeof value === "object" ? value : undefined)
       : textFields.includes(key) ? String(value ?? "") : finiteOrNull(value)
   ])));
+  next.customPlans = next.customPlans.map((plan) => ({ ...plan, title: String(plan.title ?? "Workout"), exercises: Array.isArray(plan.exercises) ? plan.exercises.filter((spec) => Array.isArray(spec) || isObject(spec)) : [] }));
   next.weeklyCheckIns = objects(next.weeklyCheckIns).map((entry) => ({
     ...entry,
     ...Object.fromEntries(["sleep", "energy", "hunger", "digestion", "recovery"].map((key) => [key, finiteOrNull(entry[key])])),
@@ -1001,6 +1002,8 @@ function chooseTodayWorkout(pick) {
   }
 
   state.todayPlanId = selected.id;
+  // A pick is for today only; tomorrow Today follows the schedule again.
+  state.todayPlanDate = new Date().toDateString();
   saveState();
   render();
 }
@@ -1379,7 +1382,8 @@ function todaysRecommendedPlan() {
 }
 
 function todaysSelectedPlan() {
-  const selected = state.todayPlanId ? allPlans().find((plan) => plan.id === state.todayPlanId) : null;
+  const pickedToday = state.todayPlanId && state.todayPlanDate === new Date().toDateString();
+  const selected = pickedToday ? allPlans().find((plan) => plan.id === state.todayPlanId) : null;
   return selected || todaysRecommendedPlan();
 }
 

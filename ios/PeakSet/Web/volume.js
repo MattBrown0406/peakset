@@ -117,14 +117,25 @@ function weeklyTotalsHistory(weeks = 8) {
 
 // ---------- Training blocks ----------
 
+// Blocks can come from a restored backup or a coach file: rebuild them from
+// validated fields (a huge week count or non-array focus crashed rendering).
+function validTrainingBlock(block) {
+  if (!block || typeof block !== "object" || !parseDateKey(block.startDate)) return null;
+  return {
+    ...block,
+    id: String(block.id || crypto.randomUUID()),
+    name: String(block.name || "Training block").slice(0, 40),
+    accumulationWeeks: Math.max(3, Math.min(6, Math.trunc(Number(block.accumulationWeeks)) || 4)),
+    deload: block.deload !== false,
+    focus: (Array.isArray(block.focus) ? block.focus : []).filter((key) => MUSCLE_GROUPS.some((group) => group.key === key)).slice(0, 3)
+  };
+}
+
 function volumeMigrateState() {
   const block = state.trainingBlock;
   if (block && (typeof block !== "object" || !parseDateKey(block.startDate))) state.trainingBlock = null;
-  if (state.trainingBlock) {
-    state.trainingBlock.accumulationWeeks = Math.max(3, Math.min(6, Math.trunc(Number(state.trainingBlock.accumulationWeeks)) || 4));
-    state.trainingBlock.deload = state.trainingBlock.deload !== false;
-    if (!Array.isArray(state.trainingBlock.focus)) state.trainingBlock.focus = [];
-  }
+  state.trainingBlock = validTrainingBlock(state.trainingBlock);
+  state.pendingTrainingBlock = validTrainingBlock(state.pendingTrainingBlock);
   state.blockHistory = Array.isArray(state.blockHistory) ? state.blockHistory.filter((entry) => entry && typeof entry === "object") : [];
   if (!state.blockDraft || typeof state.blockDraft !== "object") state.blockDraft = { weeks: 4, start: "this", focus: [] };
   const validFocus = (focus) => (Array.isArray(focus) ? focus : []).filter((key) => MUSCLE_GROUPS.some((group) => group.key === key)).slice(0, 3);
@@ -137,8 +148,8 @@ volumeMigrateState();
 
 // A block sent by a coach while another block is running starts on its date.
 function promotePendingBlock() {
-  const pending = state.pendingTrainingBlock;
-  if (!pending || typeof pending !== "object") {
+  const pending = validTrainingBlock(state.pendingTrainingBlock);
+  if (!pending) {
     state.pendingTrainingBlock = null;
     return;
   }
@@ -225,6 +236,8 @@ function toggleBlockFocus(key) {
 }
 
 function startTrainingBlock() {
+  // Starting a block yourself replaces anything a coach had queued.
+  state.pendingTrainingBlock = null;
   const draft = state.blockDraft || {};
   const thisWeek = startOfWeek();
   const start = draft.start === "next" ? addDays(thisWeek, 7) : thisWeek;
@@ -257,6 +270,27 @@ function archiveTrainingBlock(reason = "ended") {
 function endTrainingBlock() {
   if (!state.trainingBlock || !window.confirm("End this training block now?")) return;
   archiveTrainingBlock("ended");
+  // Start a queued coach block now rather than leaving it hidden until its date.
+  if (state.pendingTrainingBlock) {
+    state.trainingBlock = { ...state.pendingTrainingBlock, startDate: dateKey(startOfWeek()) };
+    state.pendingTrainingBlock = null;
+  }
+  saveState();
+  render();
+}
+
+function startPendingBlockNow() {
+  if (!state.pendingTrainingBlock) return;
+  if (state.trainingBlock) archiveTrainingBlock("replaced by coach");
+  state.trainingBlock = { ...state.pendingTrainingBlock, startDate: dateKey(startOfWeek()) };
+  state.pendingTrainingBlock = null;
+  saveState();
+  render();
+}
+
+function discardPendingBlock() {
+  if (!state.pendingTrainingBlock || !window.confirm("Discard the queued training block?")) return;
+  state.pendingTrainingBlock = null;
   saveState();
   render();
 }
@@ -343,6 +377,16 @@ function renderTrainingBlockCard() {
     `;
   }
   const draft = state.blockDraft || { weeks: 4, start: "this", focus: [] };
+  const queued = state.pendingTrainingBlock;
+  if (queued) {
+    return `
+    <section class="card pad training-block">
+      <p class="eyebrow">Training block</p>
+      <h2>${escapeHtml(queued.name)} starts ${formatShortDate(queued.startDate)}</h2>
+      <p class="muted">${queued.accumulationWeeks} build weeks, then a deload.${queued.focus.length ? ` Weak-point focus: ${escapeHtml(queued.focus.map(muscleGroupLabel).join(", "))}.` : ""}</p>
+      <div class="actions"><button class="primary-btn" onclick="startPendingBlockNow()">Start Now</button><button class="ghost-btn danger" onclick="discardPendingBlock()">Discard</button></div>
+    </section>`;
+  }
   return `
     <section class="card pad training-block">
       <p class="eyebrow">Training block</p>
