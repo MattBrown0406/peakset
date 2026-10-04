@@ -66,6 +66,7 @@ function buildWatchSnapshot() {
       index,
       id: exercise.id,
       restAfterNext: !partnerPending,
+      group: String(exercise.group || ""),
       rest: Number(exercise.rest) || DEFAULT_REST_SECONDS,
       name: exercise.name,
       targetReps: String(exercise.targetReps || ""),

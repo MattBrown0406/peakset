@@ -69,6 +69,8 @@ final class PeakSetTimerService {
     /// app is paused). A rest moved into the past is cancelled.
     func shift(by seconds: TimeInterval) {
         guard let current = currentFireDate else { return }
+        // The rest already fired; moving it would ring a second time.
+        guard current > Date() else { scheduledFireDate = nil; return }
         let fireDate = current.addingTimeInterval(seconds)
         guard fireDate.timeIntervalSinceNow >= 1 else { return cancel() }
         let token = UUID()

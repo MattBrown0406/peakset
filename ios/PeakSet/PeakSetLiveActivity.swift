@@ -30,12 +30,32 @@ final class PeakSetLiveActivityManager {
             self.enqueue {
                 for activity in Activity<RestTimerAttributes>.activities {
                     var state = activity.content.state
+                    // Nothing to move once the rest is over.
+                    guard state.endsAt > Date() else { continue }
                     state.endsAt = state.endsAt.addingTimeInterval(seconds)
                     if state.endsAt <= Date() {
                         await activity.end(nil, dismissalPolicy: .immediate)
                     } else {
                         await activity.update(ActivityContent(state: state, staleDate: state.endsAt))
                     }
+                }
+            }
+        }
+    }
+
+    /// Rest over (or skipped) mid-workout: keep the activity in a "next set
+    /// ready" state. iOS only lets the app start an activity in the
+    /// foreground, so ending it would leave later rests logged on the watch
+    /// (phone locked) with no Lock Screen countdown.
+    nonisolated func settle() {
+        Task { @MainActor in
+            self.enqueue {
+                let now = Date()
+                for activity in Activity<RestTimerAttributes>.activities {
+                    var state = activity.content.state
+                    state.startedAt = now
+                    state.endsAt = now
+                    await activity.update(ActivityContent(state: state, staleDate: nil))
                 }
             }
         }

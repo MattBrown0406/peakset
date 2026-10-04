@@ -1012,7 +1012,31 @@ vm.runInContext(`
 `, sc.context);
 const prepItems = vm.runInContext("stageChecklist({ phase: 'prep' })", sc.context);
 assert.ok(prepItems.filter((item) => /Posing|Cardio|Waist/.test(item.label)).every((item) => item.done), "logged posing, cardio and waist/scale data check the prep items");
-vm.runInContext("state.trainingBlock = { id: 'b', name: 'Block', startDate: new Date().toISOString().slice(0, 10), accumulationWeeks: 4, deload: true, focus: ['biceps'] }", sc.context);
+// Blocks start on the first day of a week.
+vm.runInContext("state.trainingBlock = { id: 'b', name: 'Block', startDate: ((d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)(startOfWeek(new Date())), accumulationWeeks: 4, deload: true, focus: ['biceps'] }", sc.context);
 const bulkItems = vm.runInContext("stageChecklist({ phase: 'bulking' })", sc.context);
 assert.ok(bulkItems.filter((item) => /Weak body part|Progressive overload|Waist gain/.test(item.label)).every((item) => item.done), "a running block with a weak point checks the bulking items");
 console.log("Stage checklist checks passed.");
+
+// Audit round 8 (web lows).
+const r8 = makeContext({ profile: { bodyweight: 200 } });
+const r8run = (code) => vm.runInContext(code, r8.context);
+r8run(`
+  const day = localDayKey(new Date().toISOString());
+  state.measurements = [{ id: "hk-m-" + day, date: new Date().toISOString(), waist: 32, healthFields: ["waist"], source: "healthkit" }];
+  state.measurements.unshift({ id: "tape", date: new Date().toISOString(), chest: 44 });
+  upsertHealthMeasurement(day, { waist: 32 }, new Date().toISOString());
+`);
+assert.equal(r8run("state.measurements.filter((entry) => entry.waist).length"), 1, "a Health waist folded into the day's tape check-in is not counted twice");
+const nextWeek = new Date(Date.now() + 8 * 86400000);
+r8run(`state.trainingBlock = { id: "b", name: "Block", startDate: "${nextWeek.getFullYear()}-${String(nextWeek.getMonth() + 1).padStart(2, "0")}-${String(nextWeek.getDate()).padStart(2, "0")}", accumulationWeeks: 4, deload: true, focus: ["biceps"] }`);
+assert.equal(r8run("stageChecklist({ phase: 'bulking' }).find((item) => /Progressive overload/.test(item.label)).done"), false, "a block that hasn't started doesn't count as running");
+r8run("window.__toasts = []; toast = (message) => window.__toasts.push(message); state.timer.running = true; state.timer.endsAt = Date.now() - 60000; handleNativeTimerReconcile({ delivered: false })");
+assert.equal(r8run("JSON.stringify(window.__toasts)"), JSON.stringify(["Rest complete."]), "a rest that ended while away still says so");
+console.log("Audit round 8 checks passed.");
+{
+  const sg = makeContext({ profile: { bodyweight: 200 } });
+  vm.runInContext("startWorkout('chest-density'); state.activeWorkout.exercises[0].group = 'A'", sg.context);
+  assert.equal(vm.runInContext("buildWatchSnapshot().exercises[0].group + '|' + buildWatchSnapshot().exercises[2].group", sg.context), "A|", "the watch snapshot carries superset groups so the watch can apply rest rules on its own");
+  console.log("Watch superset snapshot checks passed.");
+}

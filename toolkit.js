@@ -897,6 +897,7 @@ function handleNativeTimerReconcile(payload) {
     Object.assign(state.timer, { running: false, left: 0, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null });
     saveState();
     render();
+    toast("Rest complete.");
   } else if (state.timer.running) {
     ensureTimerTick();
   }

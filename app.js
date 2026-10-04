@@ -2195,7 +2195,9 @@ function stageChecklist(timeline) {
   }
 
   if (timeline.phase === "bulking") {
-    const block = state.trainingBlock && typeof validTrainingBlock === "function" ? validTrainingBlock(state.trainingBlock) : null;
+    // Only a block in progress counts (not one queued or already finished).
+    const running = typeof blockWeekInfo === "function" && blockWeekInfo()?.status === "active";
+    const block = running && typeof validTrainingBlock === "function" ? validTrainingBlock(state.trainingBlock) : null;
     return [
       ...base,
       { done: Boolean(block?.focus.length), label: "Weak body part priority selected", detail: block?.focus.length ? "" : "Pick weak points when you start a training block in Plans." },

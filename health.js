@@ -69,7 +69,14 @@ function markHealthField(entry, field, value) {
 
 function upsertHealthMeasurement(day, fields, sourceDate) {
   const manual = state.measurements.find((entry) => !isHealthEntry(entry) && localDayKey(entry.date) === day);
-  if (manual) return Object.entries(fields).filter(([field, value]) => markHealthField(manual, field, value)).length;
+  if (manual) {
+    const changed = Object.entries(fields).filter(([field, value]) => markHealthField(manual, field, value)).length;
+    // The day's Health-only entry is now folded into the tape check-in;
+    // keeping both would count one reading twice.
+    const duplicate = state.measurements.findIndex((item) => item.id === `hk-m-${day}`);
+    if (duplicate !== -1) state.measurements.splice(duplicate, 1);
+    return changed + (duplicate !== -1 ? 1 : 0);
+  }
   const id = `hk-m-${day}`;
   let entry = state.measurements.find((item) => item.id === id);
   if (!entry) {

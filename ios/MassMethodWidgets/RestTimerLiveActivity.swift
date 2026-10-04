@@ -25,7 +25,7 @@ struct RestTimerLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Next: \(context.state.exerciseName) · \(context.state.nextSetLabel)")
+                        Text(nextLine(context.state))
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         RestProgress(state: context.state, isStale: context.isStale)
@@ -59,7 +59,7 @@ private struct RestTimerLockScreenView: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(accent)
                         .lineLimit(1)
-                    Text(context.isStale ? "Rest complete" : "Resting")
+                    Text(context.state.endsAt <= context.state.startedAt ? "Next set ready" : context.isStale ? "Rest complete" : "Resting")
                         .font(.headline)
                         .foregroundStyle(.white)
                 }
@@ -71,7 +71,7 @@ private struct RestTimerLockScreenView: View {
             }
             RestProgress(state: context.state, isStale: context.isStale)
             HStack {
-                Text("Next: \(context.state.exerciseName) · \(context.state.nextSetLabel)")
+                Text(nextLine(context.state))
                     .lineLimit(1)
                 Spacer()
                 Text("\(context.state.completedSets)/\(context.state.totalSets) sets")
@@ -81,6 +81,10 @@ private struct RestTimerLockScreenView: View {
         }
         .padding(16)
     }
+}
+
+private func nextLine(_ state: RestTimerAttributes.ContentState) -> String {
+    state.nextSetLabel.isEmpty ? "Next: \(state.exerciseName)" : "Next: \(state.exerciseName) · \(state.nextSetLabel)"
 }
 
 private struct RestCountdown: View {

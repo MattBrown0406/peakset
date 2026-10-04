@@ -19,6 +19,8 @@ struct WatchSnapshot: Codable, Equatable {
         let id: String?
         let rest: Double?
         let restAfterNext: Bool?
+        /// Superset letter ("" for none); nil from older iPhone builds.
+        let group: String?
         let name: String
         let targetReps: String
         let repsOnly: Bool
@@ -56,13 +58,13 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     @Published var weight: Double = 0 { didSet { if !loadingDraft { draftEdited = true } } }
     @Published var reps: Double = 8 { didSet { if !loadingDraft { draftEdited = true } } }
     @Published private(set) var reachable = false
-    @Published private(set) var localRest: (start: Date, end: Date)?
+    @Published private(set) var localRest: (start: Date, end: Date)? { didSet { persistLocalState() } }
     /// Only rests started here get a watch-local alert; a phone rest adjusted
     /// here keeps relying on the phone's (mirrored) notification.
-    private var localRestStartedOnWatch = false
+    private var localRestStartedOnWatch = false { didSet { persistLocalState() } }
     /// Skip pressed on the watch while the phone (possibly locked) still
     /// reports an older rest as running.
-    private var restSkippedAt: Date?
+    private var restSkippedAt: Date? { didSet { persistLocalState() } }
     private let restNotificationID = "mass-method-watch-rest"
 
     private var followCurrent = true
@@ -70,7 +72,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     private var loadingDraft = false
     private var draftEdited = false
     /// Sets completed here that the phone has not confirmed yet.
-    private struct PendingCompletion {
+    private struct PendingCompletion: Codable {
         let exerciseIndex: Int
         let setIndex: Int
         let exerciseID: String
@@ -80,10 +82,43 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         let completedAt: Date
         var unconfirmedSnapshots = 0
     }
-    private var pendingCompletions: [PendingCompletion] = []
+    private var pendingCompletions: [PendingCompletion] = [] { didSet { persistLocalState() } }
+
+    /// watchOS can terminate the suspended watch app mid-workout while the
+    /// phone is locked. Local completions and rests are kept on disk so a
+    /// relaunch doesn't reopen a logged set or drop the rest alert.
+    private struct LocalState: Codable {
+        let workoutId: String
+        let pending: [PendingCompletion]
+        let restStart: Date?
+        let restEnd: Date?
+        let startedOnWatch: Bool
+        let skippedAt: Date?
+    }
+    private static let localStateKey = "MassMethodWatchLocalState"
+    private var restoredWorkoutId: String?
+
+    private func persistLocalState() {
+        let defaults = UserDefaults.standard
+        guard let workoutId = snapshot?.workoutId ?? restoredWorkoutId,
+              !(pendingCompletions.isEmpty && localRest == nil && restSkippedAt == nil),
+              let data = try? JSONEncoder().encode(LocalState(workoutId: workoutId, pending: pendingCompletions, restStart: localRest?.start, restEnd: localRest?.end, startedOnWatch: localRestStartedOnWatch, skippedAt: restSkippedAt)) else {
+            defaults.removeObject(forKey: Self.localStateKey)
+            return
+        }
+        defaults.set(data, forKey: Self.localStateKey)
+    }
 
     override init() {
         super.init()
+        if let data = UserDefaults.standard.data(forKey: Self.localStateKey),
+           let saved = try? JSONDecoder().decode(LocalState.self, from: data) {
+            restoredWorkoutId = saved.workoutId
+            pendingCompletions = saved.pending
+            if let start = saved.restStart, let end = saved.restEnd { localRest = (start, end) }
+            localRestStartedOnWatch = saved.startedOnWatch
+            restSkippedAt = saved.skippedAt
+        }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
@@ -128,13 +163,58 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         loadDraft()
     }
 
+    /// Superset rules from the phone (toolkit completeSet): no rest while a
+    /// partner's matching working (or drop) set is still open; that partner
+    /// is what to do next.
+    private static func supersetNext(in snapshot: WatchSnapshot, exerciseIndex: Int, setIndex: Int) -> (restFollows: Bool, partner: Int?) {
+        let exercise = snapshot.exercises[exerciseIndex]
+        // Older iPhone builds send only a precomputed flag.
+        guard let group = exercise.group else { return (exercise.restAfterNext != false, nil) }
+        guard !group.isEmpty, exercise.sets.indices.contains(setIndex) else { return (true, nil) }
+        let set = exercise.sets[setIndex]
+        let ordinal = exercise.sets.prefix(setIndex + 1).filter { $0.drop == set.drop }.count
+        let partner = snapshot.exercises.indices.first { index in
+            guard index != exerciseIndex, snapshot.exercises[index].group == group else { return false }
+            let matching = snapshot.exercises[index].sets.filter { $0.drop == set.drop }
+            return matching.count >= ordinal && !matching[ordinal - 1].done
+        }
+        return (partner == nil, partner)
+    }
+
     func completeSet() {
         guard var current = snapshot, let exercise, let set = nextSet else { return }
+        let exerciseIndex = selectedExercise
         let weightText = exercise.repsOnly ? "" : Self.format(weight)
         let repsText = String(Int(reps.rounded()))
+        let completedAt = Date()
+        // Apply locally so the next set and the rest timer appear immediately.
+        pendingCompletions.append(PendingCompletion(exerciseIndex: exercise.index, setIndex: set.index, exerciseID: exercise.id ?? "", label: set.label, weight: weightText, reps: repsText, completedAt: completedAt))
+        Self.markDone(&current, exerciseIndex: exerciseIndex, setIndex: set.index, weight: weightText, reps: repsText)
+        snapshot = current
+        let (restFollows, partner) = Self.supersetNext(in: current, exerciseIndex: exerciseIndex, setIndex: set.index)
+        let restEnds = completedAt.addingTimeInterval(max(15, exercise.rest ?? 120))
+        if restFollows {
+            localRest = (completedAt, restEnds)
+            localRestStartedOnWatch = true
+        }
+        followCurrent = true
+        draftEdited = false
+        let group = exercise.group ?? ""
+        if let partner {
+            selectedExercise = partner
+        } else if !group.isEmpty, let first = current.exercises.firstIndex(where: { $0.group == group && $0.sets.contains { !$0.done } }) {
+            // Superset round finished: back to its first exercise.
+            selectedExercise = first
+        } else if current.exercises[exerciseIndex].sets.allSatisfy(\.done),
+                  let next = current.exercises.firstIndex(where: { $0.sets.contains { !$0.done } }) {
+            selectedExercise = next
+        }
+        loadDraft()
+        let upcoming = self.exercise
+        let upcomingSet = nextSet
         send([
             "commandId": UUID().uuidString,
-            "sentAt": Date().timeIntervalSince1970 * 1000,
+            "sentAt": completedAt.timeIntervalSince1970 * 1000,
             "action": "completeSet",
             "workoutId": current.workoutId ?? "",
             "exerciseId": exercise.id ?? "",
@@ -143,31 +223,15 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             "setLabel": set.label,
             "weight": weightText,
             "reps": repsText,
-            "completedAt": Date().timeIntervalSince1970 * 1000,
+            "completedAt": completedAt.timeIntervalSince1970 * 1000,
             // Lets a locked iPhone show this rest on the Lock Screen.
-            "restEndsAt": exercise.restAfterNext == false ? 0 : Date().addingTimeInterval(max(15, exercise.rest ?? 120)).timeIntervalSince1970 * 1000,
+            "restEndsAt": restFollows ? restEnds.timeIntervalSince1970 * 1000 : 0,
             "workoutTitle": current.title,
-            "exerciseName": exercise.name,
-            "completedSets": current.completedSets + 1,
+            "exerciseName": upcomingSet == nil ? "Workout complete" : (upcoming?.name ?? exercise.name),
+            "nextSetLabel": upcomingSet.map { "Set \($0.label) of \(upcoming?.sets.count ?? 0)" } ?? "",
+            "completedSets": current.completedSets,
             "totalSets": current.totalSets
         ])
-        // Apply locally so the next set and the rest timer appear immediately.
-        pendingCompletions.append(PendingCompletion(exerciseIndex: exercise.index, setIndex: set.index, exerciseID: exercise.id ?? "", label: set.label, weight: weightText, reps: repsText, completedAt: Date()))
-        Self.markDone(&current, exerciseIndex: selectedExercise, setIndex: set.index, weight: weightText, reps: repsText)
-        snapshot = current
-        let restSeconds = max(15, exercise.rest ?? 120)
-        let restEnds = Date().addingTimeInterval(restSeconds)
-        if exercise.restAfterNext != false {
-            localRest = (Date(), restEnds)
-            localRestStartedOnWatch = true
-        }
-        followCurrent = true
-        draftEdited = false
-        if current.exercises[selectedExercise].sets.allSatisfy(\.done),
-           let next = current.exercises.firstIndex(where: { $0.sets.contains { !$0.done } }) {
-            selectedExercise = next
-        }
-        loadDraft()
         scheduleRestAlert()
         WKInterfaceDevice.current().play(.success)
     }
@@ -242,7 +306,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     private func apply(_ text: String) {
         guard let data = text.data(using: .utf8),
               var next = try? JSONDecoder().decode(WatchSnapshot.self, from: data) else { return }
-        if next.workoutId != snapshot?.workoutId || !next.active {
+        if next.workoutId != (snapshot?.workoutId ?? restoredWorkoutId) || !next.active {
             pendingCompletions.removeAll()
             localRest = nil
         }

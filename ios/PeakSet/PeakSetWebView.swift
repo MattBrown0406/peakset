@@ -274,7 +274,11 @@ struct PeakSetWebView: UIViewRepresentable {
             guard let payload = body as? [String: Any], let action = payload["action"] as? String else { return }
             if action == "cancel" {
                 PeakSetTimerService.shared.cancel()
-                PeakSetLiveActivityManager.shared.end()
+                if PeakSetWatchBridge.shared.workoutActive {
+                    PeakSetLiveActivityManager.shared.settle()
+                } else {
+                    PeakSetLiveActivityManager.shared.end()
+                }
                 return
             }
             if action == "reconcile" {
@@ -416,13 +420,13 @@ struct PeakSetWebView: UIViewRepresentable {
         }
 
         private func presentShareSheet(for fileURL: URL) {
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 let activityController = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
                 guard let presenter = Self.topViewController() else {
                     try? FileManager.default.removeItem(at: fileURL)
                     return
                 }
-                activityController.completionWithItemsHandler = { [weak self] _, completed, _, _ in
+                activityController.completionWithItemsHandler = { _, completed, _, _ in
                     try? FileManager.default.removeItem(at: fileURL)
                     // Lets the web app tell a sent check-in from a cancelled share.
                     self?.callJavaScript("handleNativeShare", argument: ["filename": fileURL.lastPathComponent, "completed": completed])

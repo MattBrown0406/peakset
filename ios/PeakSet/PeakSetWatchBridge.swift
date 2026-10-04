@@ -84,7 +84,15 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
         }
     }
 
-    func publish(snapshotJSON: String) {
+    /// Whether the web app's latest snapshot has a workout in progress. Only
+    /// touched on main (script message handlers).
+    @MainActor private(set) var workoutActive = false
+
+    @MainActor func publish(snapshotJSON: String) {
+        let active = (snapshotJSON.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any])?["active"] as? Bool ?? false
+        // The Lock Screen activity lives for the whole workout.
+        if workoutActive, !active { PeakSetLiveActivityManager.shared.end() }
+        workoutActive = active
         lock.lock()
         pendingSnapshot = snapshotJSON
         lock.unlock()
@@ -137,7 +145,7 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
         switch command["action"] as? String {
         case "skipRest":
             PeakSetTimerService.shared.cancel()
-            PeakSetLiveActivityManager.shared.end()
+            PeakSetLiveActivityManager.shared.settle()
         case "completeSet":
             let endsAtMs = (command["restEndsAt"] as? NSNumber)?.doubleValue ?? 0
             guard endsAtMs > 0 else { return }
@@ -150,7 +158,7 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
                 endsAt: endsAt,
                 workoutTitle: command["workoutTitle"] as? String ?? "Mass Method",
                 exerciseName: command["exerciseName"] as? String ?? "Next set",
-                nextSetLabel: "",
+                nextSetLabel: command["nextSetLabel"] as? String ?? "",
                 completedSets: (command["completedSets"] as? NSNumber)?.intValue ?? 0,
                 totalSets: (command["totalSets"] as? NSNumber)?.intValue ?? 0
             ))
