@@ -211,6 +211,7 @@ function applyWatchCommand(command) {
     // completion started a new rest (start times can match to the millisecond).
     const timerObjectBefore = state.timer;
     const timerBefore = { ...state.timer };
+    const anchorBefore = state.activeWorkout.lastExerciseIndex;
     completeSet(exIndex, setIndex);
     const startedNewRest = state.timer !== timerObjectBefore && state.timer.running && state.timer.exerciseIndex === exIndex;
     const completedAt = Number(command.completedAt);
@@ -219,6 +220,9 @@ function applyWatchCommand(command) {
       const remaining = Math.ceil((Number(timerBefore.endsAt) - Date.now()) / 1000);
       if (remaining > 0) startTimer(remaining, Boolean(timerBefore.fullscreen), timerBefore.exerciseIndex, false);
       else stopTimer();
+      // The athlete is still on the newer set's exercise.
+      if (state.activeWorkout) state.activeWorkout.lastExerciseIndex = anchorBefore;
+      saveState();
       return Boolean(set.done);
     }
     // Rest started when the set was finished on the watch, not when the phone

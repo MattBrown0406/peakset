@@ -803,6 +803,8 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
   // Where the athlete is working: the watch returns here after a rest even
   // when exercises are done out of order.
   if (set.done) state.activeWorkout.lastExerciseIndex = exIndex;
+  // Undoing a mis-tap on an untouched exercise lets the watch move on.
+  else if (state.activeWorkout.lastExerciseIndex === exIndex && !exercise.sets.some((item) => item.done)) state.activeWorkout.lastExerciseIndex = null;
   saveState();
   if (set.done) {
     const group = exercise.group;

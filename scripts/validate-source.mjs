@@ -1074,3 +1074,10 @@ console.log("Audit round 8 checks passed.");
   assert.equal(run("nativeBackupPayload().state.profile.bodyweight ?? null"), null, "a profile weight that came from Health stays out of iCloud after its entries are removed");
   console.log("Audit round 10 checks passed.");
 }
+{
+  const r11 = makeContext({ profile: { bodyweight: 200 } });
+  const run = (code) => vm.runInContext(code, r11.context);
+  run("startWorkout('chest-density'); const ex = state.activeWorkout.exercises[2]; ex.sets[0].weight = '60'; ex.sets[0].reps = '10'; completeSet(2, 0); completeSet(2, 0); stopTimer()");
+  assert.equal(run("currentWatchExerciseIndex(state.activeWorkout)"), 0, "undoing a mis-tapped set sends the watch back to the first open exercise");
+  console.log("Audit round 11 checks passed.");
+}
