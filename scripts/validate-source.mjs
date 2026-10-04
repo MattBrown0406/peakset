@@ -579,3 +579,93 @@ assert.match(read("ios/PeakSet/PeakSetNativeServices.swift"), /bodyFatPercentage
 assert.match(read("ios/PeakSet/PeakSetNativeServices.swift"), /bundleIdentifier == ownBundle/, "weights this app wrote are not re-imported");
 
 console.log("Apple Health body data checks passed.");
+
+// Audit round 1 regressions.
+const r1 = makeContext({ profile: { bodyweight: 200, gender: "Male", age: 40 } });
+const run = (code) => vm.runInContext(code, r1.context);
+run("window.confirm = () => true; window.location = { reload() { window.__reloaded = true; } }; window.webkit = { messageHandlers: { peaksetHealthKit: { postMessage(m) { (window.__hk = window.__hk || []).push(m); } } } }");
+// Untrusted plan text never becomes markup.
+run(`handleIncomingFileText(${JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "X", plans: [{ title: "P", exercises: [["hip-thrust", 3, "<img src=x onerror=alert(1)>", 90, 0, { group: "<b>", setType: "evil" }], null] }] }))})`);
+const evilPlan = JSON.parse(run("JSON.stringify(state.customPlans.find((plan) => plan.fromCoach))"));
+assert.equal(evilPlan.exercises[0][2], "8-12", "coach program reps are validated");
+assert.equal(evilPlan.exercises[0][5].setType, "standard", "coach program set types are validated");
+assert.ok(!run("state.view = 'plans'; renderPlans()").includes("<img src=x"), "plan reps are escaped");
+run("state.customPlans.unshift({ id: \"x');alert(1);('\", title: 'T', muscle: 'chest', phase: 'offseason', exercises: [['barbell-bench', 3, '<i>8</i>', 90]] }); toolkitMigrateState()");
+assert.ok(/^[A-Za-z0-9_-]+$/.test(run("state.customPlans[0].id")), "unsafe plan ids are replaced on load");
+assert.ok(!run("renderPlans()").includes("<i>8</i>"), "hand-made plan reps are escaped");
+// Running-rest adjustments do not rewrite the exercise's planned rest.
+run("state.activeWorkout = null; startWorkout('chest-density'); updateSet(0,0,'weight','100'); updateSet(0,0,'reps','8'); completeSet(0,0)");
+const plannedRest = run("state.activeWorkout.exercises[0].rest");
+run("state.timer.endsAt = Date.now() + 20000; state.timer.left = 99; adjustRest(15)");
+assert.equal(run("state.activeWorkout.exercises[0].rest"), plannedRest, "+15s during rest keeps the exercise's planned rest");
+assert.ok(Math.abs(run("state.timer.left") - 35) <= 1, "+15s uses the real remaining time, not a stale tick value");
+run("state.timer.endsAt = Date.now() + 10000; adjustRest(-15)");
+assert.ok(run("state.timer.left") <= 1, "-15s near the end shortens the rest instead of clamping up to 15s");
+run("stopTimer()");
+// Reopened sets are announced and unsaved entries are confirmed before saving.
+run("updateSet(0,0,'weight','105')");
+assert.equal(run("state.activeWorkout.exercises[0].sets[0].done"), false, "editing a completed set reopens it");
+run("window.confirm = () => false; finishWorkout()");
+assert.ok(run("state.activeWorkout !== null"), "declining the unlogged-sets warning keeps the session open");
+run("window.confirm = () => true");
+// Superset partners are matched by set number, not raw index.
+run("state.activeWorkout.exercises[0].group = 'A'; state.activeWorkout.exercises[1].group = 'A'; state.activeWorkout.exercises[0].sets.unshift({ set: 0, label: 'D0', dropSet: true, weight: '', reps: '', done: false })");
+run("updateSet(1,0,'weight','50'); updateSet(1,0,'reps','10'); completeSet(1,0); stopTimer(); updateSet(0,1,'weight','100'); updateSet(0,1,'reps','8'); completeSet(0,1)");
+assert.equal(run("state.timer.running"), true, "superset rest starts once the matching working set of each partner is done");
+run("stopTimer(); state.activeWorkout = null");
+// Builder exercise follows the active equipment profile.
+run("state.equipmentProfiles.push({ id: 'machines', name: 'Machines', equipment: ['Machine'] }); state.activeEquipmentProfileId = 'machines'; state.view = 'builder'; renderBuilder()");
+assert.ok(run("toolkitBuilderExerciseRows(state.builderFormDraft.exerciseFocus).some((exercise) => exercise.id === state.builderFormDraft.exerciseId)"), "the builder's remembered exercise is valid for the active profile");
+// Coach data is sanitized, bounded, and unit-consistent.
+const r1Pkg = { format: "mass-method-coach-package", version: 1, generatedAt: new Date().toISOString(), athlete: { id: "athlete-0001", name: "A", units: "imperial" }, note: "n".repeat(10000),
+  weightLogs: [{ id: "w1", date: new Date(Date.now() - 86400000).toISOString(), bodyweight: 200 }], weeklyCheckIns: [{ id: "c", date: new Date().toISOString(), recovery: "<img src=x onerror=alert(1)>" }], workoutLogs: [{ id: "l", date: new Date().toISOString(), title: "<b>x</b>", sets: [1, 2, 3] }] };
+await run(`importCoachPackage(${JSON.stringify(r1Pkg)})`);
+assert.equal(run("state.coach.athletes['athlete-0001'].lastNote.length"), 2000, "athlete notes are capped");
+assert.equal(run("state.coach.athletes['athlete-0001'].weeklyCheckIns[0].recovery"), null, "non-numeric recovery is dropped");
+assert.ok(!run("state.view = 'coach'; state.coach.selectedAthleteId = ''; renderCoach()").includes("<img src=x"), "roster never renders athlete markup");
+assert.ok(!run("state.coach.selectedAthleteId = 'athlete-0001'; renderCoach()").includes("<b>x</b>"), "athlete workout titles are escaped");
+await run(`importCoachPackage(${JSON.stringify({ ...r1Pkg, generatedAt: new Date(Date.now() + 1000).toISOString(), athlete: { ...r1Pkg.athlete, units: "metric" }, weightLogs: [{ id: "w2", date: new Date().toISOString(), bodyweight: 91 }] })})`);
+assert.deepEqual(Array.from(run("state.coach.athletes['athlete-0001'].weightLogs.map((entry) => Math.round(entry.bodyweight))")), [91, 91], "an athlete's switch to kg converts their stored history");
+run("state.coach.athletes[\"x');alert(1);('\"] = { id: \"x');alert(1);('\" }; coachMigrateState()");
+assert.equal(run("Object.keys(state.coach.athletes).length"), 1, "unsafe athlete ids are dropped on load");
+// Unit round-trips land back on gym numbers.
+run("state.workoutLogs = [{ id: 'u', date: new Date().toISOString(), sets: [{ exerciseId: 'barbell-bench', exercise: 'Barbell Bench Press', weight: '135', reps: '5' }, { exerciseId: 'barbell-bench', exercise: 'Barbell Bench Press', weight: '2.5', reps: '5' }] }]; setUnits('metric'); setUnits('imperial')");
+assert.deepEqual(Array.from(run("state.workoutLogs[0].sets.map((set) => set.weight)")), ["135", "2.5"], "lb -> kg -> lb round-trips exactly");
+// Health: midnight-aligned windows, tagged replies, stale replies ignored.
+run("state.healthBody.enabled = true; state.healthBody.lastSyncAt = new Date(2026, 9, 4, 15, 30).toISOString(); healthSyncInFlight = false; syncHealthBody(true)");
+const since = new Date(run("window.__hk.at(-1).since"));
+assert.equal(since.getHours() + since.getMinutes(), 0, "Health re-syncs start at local midnight");
+run("handleNativeHealthKit({ status: 'error', action: 'syncWeight', message: 'nope' })");
+assert.ok(!/import failed/i.test(run("state.healthBody.lastResult")), "a failed weight export is not reported as a failed import");
+run("state.healthBody.enabled = false; handleNativeHealthKit({ status: 'bodySamples', unit: 'lb', samples: [{ type: 'weight', id: 'z', date: new Date().toISOString(), value: 150 }] })");
+assert.ok(!run("state.weightLogs.some((entry) => entry.id.startsWith('hk-'))"), "a read that finishes after Health is turned off is ignored");
+// Restore never overwrites today's backup and blocks stray saves while reloading.
+run(`restoreBackupPayload({ format: "mass-method-backup", version: 1, state: { profile: { bodyweight: 1 }, backupStatus: { at: "2020-01-01T00:00:00Z" } } })`);
+const restoredState = JSON.parse(r1.storage.get("stageforge-v1"));
+assert.ok(Date.now() - Date.parse(restoredState.backupStatus.at) < 60000, "restored data does not trigger an immediate snapshot over today's backup");
+run("state.profile = { bodyweight: 999 }; saveState()");
+assert.equal(JSON.parse(r1.storage.get("stageforge-v1")).profile.bodyweight, 1, "saves are blocked while a restore reloads the page");
+
+// DST-safe block weeks and deload rules.
+const r1b = makeContext({ profile: { bodyweight: 200 } });
+const runB = (code) => vm.runInContext(code, r1b.context);
+runB("state.trainingBlock = { id: 'b', name: 'B', startDate: '2026-03-02', accumulationWeeks: 4, deload: true, focus: [], createdAt: '' }");
+assert.equal(runB("blockWeekInfo(state.trainingBlock, new Date(2026, 2, 10, 12)).weekNumber"), 2, "block weeks survive the spring-forward clock change");
+assert.equal(runB("blockWeekInfo(state.trainingBlock, new Date(2026, 3, 6, 12)).status"), "complete", "a block ends when its card says it ends");
+runB("state.trainingBlock.startDate = dateKey(addDays(startOfWeek(), -28)); quickStartExercise('barbell-curl')");
+assert.equal(runB("state.activeWorkout.exercises[0].targetSets"), 4, "quick logs are not halved in a deload week");
+runB("state.activeWorkout = null; startWorkout('chest-density')");
+assert.ok(!runB("state.activeWorkout.title").includes("Deload"), "deload does not rename the workout");
+runB("saveActiveWorkoutAsTemplate()");
+assert.equal(runB("state.customPlans[0].exercises[0][1]"), 4, "a template saved in deload week keeps the full sets");
+// Watch commands follow the exercise, not a stale index.
+runB("state.trainingBlock = null; state.activeWorkout = null; startWorkout('chest-density')");
+const firstExerciseId = runB("state.activeWorkout.exercises[0].id");
+runB("moveActiveWorkoutExercise(0, 1)");
+runB(`handleWatchCommand({ action: 'completeSet', workoutId: state.activeWorkout.id, exerciseId: '${firstExerciseId}', exIndex: 0, setIndex: 0, setLabel: '1', weight: '70', reps: '9', completedAt: Date.now() - 600000 })`);
+assert.equal(runB("state.activeWorkout.exercises[1].sets[0].weight"), "70", "a watch set lands on the exercise it named after a reorder");
+assert.equal(runB("state.timer.running"), false, "a queued watch set whose rest already elapsed does not start a new rest");
+assert.equal(runB("handleWatchCommand({ action: 'completeSet', workoutId: 'another-workout', exIndex: 0, setIndex: 1, weight: '1', reps: '1' })"), false, "commands for a different workout are rejected");
+assert.match(read("ios/PeakSet/PeakSetWebView.swift"), /runJavaScriptConfirmPanelWithMessage/, "the web view must answer confirm() dialogs on iOS");
+
+console.log("Audit round 1 checks passed.");

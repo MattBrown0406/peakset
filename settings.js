@@ -27,11 +27,20 @@ function roundTo(value, places = 2) {
   return Math.round(value * factor) / factor;
 }
 
-function convertNumber(value, factor) {
+// Bar loads snap to the nearest quarter (plates come in quarter steps) when
+// within the rounding error of a conversion, so 135 lb -> 61.25 kg -> 135 lb.
+// A 0.25 kg step is ~0.55 lb, hence the wider tolerance into pounds.
+function snapLoad(value, toMetric) {
+  const rounded = roundTo(value);
+  const quarter = Math.round(rounded * 4) / 4;
+  return Math.abs(rounded - quarter) <= (toMetric ? 0.03 : 0.06) + 1e-9 ? quarter : rounded;
+}
+
+function convertNumber(value, factor, snapToMetric = null) {
   if (value === null || value === undefined || value === "") return value;
   const number = Number(value);
   if (!Number.isFinite(number)) return value;
-  const converted = roundTo(number * factor);
+  const converted = snapToMetric === null ? roundTo(number * factor) : snapLoad(number * factor, snapToMetric);
   return typeof value === "string" ? String(converted) : converted;
 }
 
@@ -43,7 +52,7 @@ function convertStoredUnits(target) {
   const weightFactor = toMetric ? KG_PER_LB : 1 / KG_PER_LB;
   const lengthFactor = toMetric ? CM_PER_IN : 1 / CM_PER_IN;
   const convertSets = (sets) => (Array.isArray(sets) ? sets : []).forEach((set) => {
-    if (set && typeof set === "object") set.weight = convertNumber(set.weight, weightFactor);
+    if (set && typeof set === "object") set.weight = convertNumber(set.weight, weightFactor, toMetric);
   });
 
   if (state.profile) state.profile.bodyweight = convertNumber(state.profile.bodyweight, weightFactor);
@@ -112,15 +121,22 @@ function restoreBackupPayload(payload, sourceLabel = "this backup") {
     toast("That file is not a Mass Method backup.");
     return false;
   }
-  const confirmed = window.confirm(`Replace everything on this device with ${sourceLabel} (${backupSummary(payload.state)})? Your current data is kept in a recovery copy.`);
+  const native = Boolean(nativeBackupBridge());
+  const confirmed = window.confirm(`Replace everything on this device with ${sourceLabel} (${backupSummary(payload.state)})? ${native ? "Your current data is saved to your backups first, so you can switch back." : "Export a backup first if you might want your current data back."}`);
   if (!confirmed) return false;
+  if (native && state.profile) {
+    // A separately named file, never overwritten by the daily snapshot.
+    nativeBackupBridge().postMessage({ action: "snapshot", reason: "before-restore", filename: `mass-method-before-restore-${new Date().toISOString().replace(/[:.]/g, "-")}.json`, json: JSON.stringify(backupPayload()) });
+  }
+  // The restored data's old backup time must not trigger an immediate
+  // snapshot that overwrites today's backup with older data.
+  const restored = { ...payload.state, backupStatus: { message: `Restored ${sourceLabel}.`, at: new Date().toISOString() } };
   try {
-    const current = localStorage.getItem(STORE_KEY);
-    // Keep exactly one pre-restore copy so repeated restores cannot fill storage.
     Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-before-restore-`)).forEach((key) => localStorage.removeItem(key));
-    if (current) localStorage.setItem(`${STORE_KEY}-before-restore-${Date.now()}`, current);
-    localStorage.setItem(STORE_KEY, JSON.stringify(payload.state));
+    restoringState = true;
+    localStorage.setItem(STORE_KEY, JSON.stringify(restored));
   } catch {
+    restoringState = false;
     toast("Could not write the backup to this device's storage.");
     return false;
   }

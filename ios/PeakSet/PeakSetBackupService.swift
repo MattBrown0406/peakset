@@ -82,9 +82,11 @@ final class PeakSetBackupService {
             for location in [Location.iCloud, .device] {
                 guard let directory = self.backupsDirectory(for: location),
                       let urls = try? self.fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]) else { continue }
-                for url in urls where url.pathExtension == "json" {
+                for url in urls {
+                    // Not-yet-downloaded iCloud files appear as ".name.json.icloud".
+                    guard let name = Self.realName(of: url), name.hasSuffix(".json") else { continue }
                     let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                    files.append(BackupFile(name: url.lastPathComponent, date: values?.contentModificationDate ?? .distantPast, bytes: values?.fileSize ?? 0, location: location))
+                    files.append(BackupFile(name: name, date: values?.contentModificationDate ?? .distantPast, bytes: values?.fileSize ?? 0, location: location))
                 }
             }
             completion(files.sorted { $0.date > $1.date })
@@ -150,15 +152,41 @@ final class PeakSetBackupService {
         copyMissingFiles(from: cloudPhotos, to: PeakSetPhotoStore.directory)
     }
 
+    /// Copies photos the destination lacks. Coordinated reads make iCloud
+    /// download placeholders before copying. Athletes' photos ("coach-") stay local.
     private func copyMissingFiles(from source: URL, to destination: URL) {
         guard let urls = try? fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) else { return }
         try? fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-        for url in urls where url.pathExtension == "jpg" {
-            let target = destination.appendingPathComponent(url.lastPathComponent)
-            if !fileManager.fileExists(atPath: target.path) {
-                try? fileManager.copyItem(at: url, to: target)
+        for url in urls {
+            guard let name = Self.realName(of: url), name.hasSuffix(".jpg"), !name.hasPrefix("coach-") else { continue }
+            let target = destination.appendingPathComponent(name)
+            let placeholder = destination.appendingPathComponent(".\(name).icloud")
+            guard !fileManager.fileExists(atPath: target.path), !fileManager.fileExists(atPath: placeholder.path) else { continue }
+            let realSource = source.appendingPathComponent(name)
+            if let data = try? readCoordinated(realSource) {
+                try? data.write(to: target, options: .atomic)
             }
         }
+    }
+
+    func deleteMirroredPhoto(named name: String) {
+        queue.async {
+            guard let url = self.iCloudDocuments()?.appendingPathComponent("ProgressPhotos", isDirectory: true).appendingPathComponent(name),
+                  Self.realName(of: url) == name else { return }
+            var coordinationError: NSError?
+            NSFileCoordinator().coordinate(writingItemAt: url, options: .forDeleting, error: &coordinationError) { target in
+                try? self.fileManager.removeItem(at: target)
+            }
+        }
+    }
+
+    /// Maps ".name.ext.icloud" placeholders to "name.ext"; nil for other hidden files.
+    static func realName(of url: URL) -> String? {
+        let name = url.lastPathComponent
+        if name.hasPrefix("."), name.hasSuffix(".icloud") {
+            return String(name.dropFirst().dropLast(".icloud".count))
+        }
+        return name.hasPrefix(".") ? nil : name
     }
 
     static func safeFilename(_ name: String) -> String {

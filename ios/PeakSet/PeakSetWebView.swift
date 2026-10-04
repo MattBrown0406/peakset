@@ -22,6 +22,8 @@ struct PeakSetWebView: UIViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        // Without a UI delegate WKWebView answers every confirm() with "Cancel".
+        webView.uiDelegate = context.coordinator
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         // Match the app's navy background so launch never flashes white.
         let background = UIColor(red: 0.039, green: 0.055, blue: 0.102, alpha: 1)
@@ -48,7 +50,7 @@ struct PeakSetWebView: UIViewRepresentable {
         coordinator.webView = nil
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler, WKUIDelegate {
         weak var webView: WKWebView?
         let photoSchemeHandler = PeakSetPhotoSchemeHandler()
         private let photoCoordinator = PeakSetPhotoCoordinator()
@@ -87,14 +89,37 @@ struct PeakSetWebView: UIViewRepresentable {
             }
         }
 
+        func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+            guard let presenter = Self.topViewController() else { return completionHandler() }
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
+            presenter.present(alert, animated: true)
+        }
+
+        func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+            guard let presenter = Self.topViewController() else { return completionHandler(false) }
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
+            presenter.present(alert, animated: true)
+        }
+
+        func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+            guard let presenter = Self.topViewController() else { return completionHandler(nil) }
+            let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
+            alert.addTextField { $0.text = defaultText }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak alert] _ in completionHandler(alert?.textFields?.first?.text) })
+            presenter.present(alert, animated: true)
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             PeakSetIncomingFiles.shared.attach { [weak self] text in
                 self?.callJavaScript("handleIncomingFileText", argument: text)
             }
-            PeakSetWatchBridge.shared.onCommand = { [weak self] command in
+            PeakSetWatchBridge.shared.attach { [weak self] command in
                 self?.callJavaScript("handleWatchCommand", argument: command)
             }
-            PeakSetWatchBridge.shared.activate()
             #if DEBUG
             // Simulator smoke tests: `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='...' xcrun simctl launch ...`
             if let script = ProcessInfo.processInfo.environment["MASSMETHOD_DEBUG_JS"], !script.isEmpty {
@@ -136,8 +161,9 @@ struct PeakSetWebView: UIViewRepresentable {
                       dataURL.hasPrefix("data:image/"),
                       let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])),
                       let image = UIImage(data: data) else { return }
+                let prefix = (payload["prefix"] as? String) == "coach" ? "coach-" : ""
                 DispatchQueue.global(qos: .userInitiated).async {
-                    let id = (try? PeakSetPhotoStore.save(image)) ?? ""
+                    let id = (try? PeakSetPhotoStore.save(image, idPrefix: prefix)) ?? ""
                     report(["status": "imported", "requestId": requestID, "id": id])
                 }
             case "thumbnail":
@@ -232,7 +258,7 @@ struct PeakSetWebView: UIViewRepresentable {
             switch action {
             case "authorize":
                 service.requestAuthorization { [weak self] result in
-                    self?.sendHealthKitResult(result.map { summary -> [String: Any] in [
+                    self?.sendHealthKitResult(action: action, result.map { summary -> [String: Any] in [
                         "status": "authorizationCompleted",
                         "message": "Apple Health authorization request completed",
                         "weightWrite": summary.bodyMassWrite,
@@ -242,22 +268,22 @@ struct PeakSetWebView: UIViewRepresentable {
             case "readBody":
                 let since = (payload["since"] as? String).flatMap(parseISODate) ?? Date().addingTimeInterval(-180 * 86400)
                 service.readBodySamples(since: since, kilograms: (payload["unit"] as? String) == "kg", centimeters: (payload["lengthUnit"] as? String) == "cm") { [weak self] result in
-                    self?.sendHealthKitResult(result.map { samples -> [String: Any] in ["status": "bodySamples", "samples": samples] })
+                    self?.sendHealthKitResult(action: action, result.map { samples -> [String: Any] in ["status": "bodySamples", "samples": samples, "unit": (payload["unit"] as? String) ?? "lb"] })
                 }
             case "readSteps":
                 service.readTodaySteps { [weak self] result in
-                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "stepsImported", "message": "Today's steps imported", "steps": value] })
+                    self?.sendHealthKitResult(action: action, result.map { value -> [String: Any] in ["status": "stepsImported", "message": "Today's steps imported", "steps": value] })
                 }
             case "syncWeight":
                 guard let weight = Self.doubleValue(payload["weight"]), weight.isFinite, weight > 0,
                       let dateText = payload["date"] as? String,
                       let date = parseISODate(dateText) else {
-                    sendHealthKitResult(.failure(PeakSetHealthKitService.ServiceError.invalidPayload))
+                    sendHealthKitResult(action: action, .failure(PeakSetHealthKitService.ServiceError.invalidPayload))
                     return
                 }
                 let kilograms = (payload["unit"] as? String) == "kg"
                 service.saveWeight(value: weight, kilograms: kilograms, date: date) { [weak self] result in
-                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "weightSaved", "message": value] })
+                    self?.sendHealthKitResult(action: action, result.map { value -> [String: Any] in ["status": "weightSaved", "message": value] })
                 }
             case "saveWorkout":
                 let title = payload["title"] as? String ?? "Mass Method Workout"
@@ -267,25 +293,28 @@ struct PeakSetWebView: UIViewRepresentable {
                       let start = parseISODate(startText),
                       let end = parseISODate(endText),
                       end > start else {
-                    sendHealthKitResult(.failure(PeakSetHealthKitService.ServiceError.invalidPayload))
+                    sendHealthKitResult(action: action, .failure(PeakSetHealthKitService.ServiceError.invalidPayload))
                     return
                 }
                 service.saveWorkout(id: workoutID, title: title, start: start, end: end) { [weak self] result in
-                    self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "workoutSaved", "message": value] })
+                    self?.sendHealthKitResult(action: action, result.map { value -> [String: Any] in ["status": "workoutSaved", "message": value] })
                 }
             default:
                 break
             }
         }
 
-        private func sendHealthKitResult(_ result: Result<[String: Any], Error>) {
-            let payload: [String: Any]
+        /// Every reply names the request it answers so the web app never mistakes
+        /// a failed weight export for a failed import.
+        private func sendHealthKitResult(action: String, _ result: Result<[String: Any], Error>) {
+            var payload: [String: Any]
             switch result {
             case .success(let value):
                 payload = value
             case .failure(let error):
                 payload = ["status": "error", "message": error.localizedDescription]
             }
+            payload["action"] = action
             guard JSONSerialization.isValidJSONObject(payload),
                   let data = try? JSONSerialization.data(withJSONObject: payload),
                   let json = String(data: data, encoding: .utf8) else { return }

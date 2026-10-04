@@ -17,6 +17,9 @@ final class PeakSetAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificat
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        // Activate early so watch commands queued while the phone was locked
+        // are received even before the web app has loaded.
+        PeakSetWatchBridge.shared.activate()
         return true
     }
 

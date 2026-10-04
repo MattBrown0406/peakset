@@ -7,20 +7,22 @@ struct WatchSnapshot: Codable, Equatable {
     struct WorkoutSet: Codable, Equatable {
         let index: Int
         let label: String
-        let weight: String
-        let reps: String
-        let done: Bool
+        var weight: String
+        var reps: String
+        var done: Bool
         let drop: Bool
     }
 
     struct Exercise: Codable, Equatable {
         let index: Int
+        let id: String?
+        let rest: Double?
         let name: String
         let targetReps: String
         let repsOnly: Bool
         let suggestedWeight: String
         let suggestedReps: String
-        let sets: [WorkoutSet]
+        var sets: [WorkoutSet]
     }
 
     struct Rest: Codable, Equatable {
@@ -30,26 +32,36 @@ struct WatchSnapshot: Codable, Equatable {
     }
 
     let active: Bool
+    let workoutId: String?
     let title: String
     let unit: String
     let blockLine: String
-    let completedSets: Int
+    var completedSets: Int
     let totalSets: Int
     let currentExercise: Int
-    let exercises: [Exercise]
+    var exercises: [Exercise]
     let rest: Rest
     let nextPlanTitle: String
 }
 
+/// The watch keeps working when the iPhone is locked (its web app is paused):
+/// completions and rest run locally right away and stay applied until a phone
+/// snapshot confirms them.
 @MainActor
 final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     @Published private(set) var snapshot: WatchSnapshot?
     @Published var selectedExercise = 0
-    @Published var weight: Double = 0
-    @Published var reps: Double = 8
+    @Published var weight: Double = 0 { didSet { if !loadingDraft { draftEdited = true } } }
+    @Published var reps: Double = 8 { didSet { if !loadingDraft { draftEdited = true } } }
     @Published private(set) var reachable = false
+    @Published private(set) var localRest: (start: Date, end: Date)?
+
     private var followCurrent = true
     private var restAlertTask: Task<Void, Never>?
+    private var loadingDraft = false
+    private var draftEdited = false
+    /// Sets completed here that the phone has not confirmed yet, keyed "exerciseId|label".
+    private var pendingCompletions: [String: (weight: String, reps: String)] = [:]
 
     override init() {
         super.init()
@@ -68,12 +80,14 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     var restEndsAt: Date? {
+        if let localRest, localRest.end > Date() { return localRest.end }
         guard let rest = snapshot?.rest, rest.running, let endsAt = rest.endsAt else { return nil }
         let date = Date(timeIntervalSince1970: endsAt / 1000)
         return date > Date() ? date : nil
     }
 
     var restStartedAt: Date {
+        if let localRest, localRest.end > Date() { return localRest.start }
         guard let started = snapshot?.rest.startedAt else { return Date() }
         return Date(timeIntervalSince1970: started / 1000)
     }
@@ -90,24 +104,50 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     func completeSet() {
-        guard let exercise, let set = nextSet else { return }
+        guard var current = snapshot, let exercise, let set = nextSet else { return }
+        let weightText = exercise.repsOnly ? "" : Self.format(weight)
+        let repsText = String(Int(reps.rounded()))
         send([
             "action": "completeSet",
+            "workoutId": current.workoutId ?? "",
+            "exerciseId": exercise.id ?? "",
             "exIndex": exercise.index,
             "setIndex": set.index,
-            "weight": exercise.repsOnly ? "" : Self.format(weight),
-            "reps": String(Int(reps.rounded()))
+            "setLabel": set.label,
+            "weight": weightText,
+            "reps": repsText,
+            "completedAt": Date().timeIntervalSince1970 * 1000
         ])
+        // Apply locally so the next set and the rest timer appear immediately.
+        pendingCompletions[Self.key(exercise, set)] = (weightText, repsText)
+        Self.markDone(&current, exerciseIndex: selectedExercise, setIndex: set.index, weight: weightText, reps: repsText)
+        snapshot = current
+        let restSeconds = max(15, exercise.rest ?? 120)
+        localRest = (Date(), Date().addingTimeInterval(restSeconds))
         followCurrent = true
+        draftEdited = false
+        if current.exercises[selectedExercise].sets.allSatisfy(\.done),
+           let next = current.exercises.firstIndex(where: { $0.sets.contains { !$0.done } }) {
+            selectedExercise = next
+        }
+        loadDraft()
+        scheduleRestAlert()
         WKInterfaceDevice.current().play(.success)
     }
 
     func adjustRest(_ seconds: Int) {
-        send(["action": "adjustRest", "seconds": seconds])
+        if let rest = localRest, rest.end > Date() {
+            localRest = (rest.start, max(Date().addingTimeInterval(1), rest.end.addingTimeInterval(TimeInterval(seconds))))
+            scheduleRestAlert()
+        }
+        send(["action": "adjustRest", "seconds": seconds, "workoutId": snapshot?.workoutId ?? ""])
     }
 
     func skipRest() {
-        send(["action": "skipRest"])
+        localRest = nil
+        restAlertTask?.cancel()
+        send(["action": "skipRest", "workoutId": snapshot?.workoutId ?? ""])
+        objectWillChange.send()
     }
 
     private func send(_ command: [String: Any]) {
@@ -120,21 +160,59 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
                 session.transferUserInfo(message)
             }
         } else {
+            // Delivered when the iPhone app next runs; the phone applies it by
+            // workout, exercise, and set, using completedAt for the rest timer.
             session.transferUserInfo(message)
         }
     }
 
+    private static func key(_ exercise: WatchSnapshot.Exercise, _ set: WatchSnapshot.WorkoutSet) -> String {
+        "\(exercise.id ?? String(exercise.index))|\(set.label)"
+    }
+
+    private static func markDone(_ snapshot: inout WatchSnapshot, exerciseIndex: Int, setIndex: Int, weight: String, reps: String) {
+        guard snapshot.exercises.indices.contains(exerciseIndex),
+              snapshot.exercises[exerciseIndex].sets.indices.contains(setIndex),
+              !snapshot.exercises[exerciseIndex].sets[setIndex].done else { return }
+        snapshot.exercises[exerciseIndex].sets[setIndex].done = true
+        snapshot.exercises[exerciseIndex].sets[setIndex].weight = weight
+        snapshot.exercises[exerciseIndex].sets[setIndex].reps = reps
+        snapshot.completedSets += 1
+    }
+
     private func apply(_ text: String) {
         guard let data = text.data(using: .utf8),
-              let next = try? JSONDecoder().decode(WatchSnapshot.self, from: data),
-              next != snapshot else { return }
+              var next = try? JSONDecoder().decode(WatchSnapshot.self, from: data) else { return }
+        if next.workoutId != snapshot?.workoutId || !next.active {
+            pendingCompletions.removeAll()
+            localRest = nil
+        }
+        // Keep local completions the phone has not caught up with yet.
+        for (key, values) in pendingCompletions {
+            var confirmed = false
+            for (exerciseIndex, exercise) in next.exercises.enumerated() {
+                guard let setIndex = exercise.sets.firstIndex(where: { Self.key(exercise, $0) == key }) else { continue }
+                if exercise.sets[setIndex].done {
+                    confirmed = true
+                } else {
+                    Self.markDone(&next, exerciseIndex: exerciseIndex, setIndex: setIndex, weight: values.weight, reps: values.reps)
+                }
+            }
+            if confirmed { pendingCompletions[key] = nil }
+        }
+        if pendingCompletions.isEmpty { localRest = nil }
+        guard next != snapshot else { return }
         let previousSet = nextSet?.index
         let previousExercise = selectedExercise
+        let previousValues = nextSet.map { ($0.weight, $0.reps) }
         snapshot = next
         if followCurrent || !next.exercises.indices.contains(selectedExercise) {
             selectedExercise = next.exercises.indices.contains(next.currentExercise) ? next.currentExercise : 0
         }
-        if previousExercise != selectedExercise || previousSet != nextSet?.index {
+        let valuesChanged = nextSet.map { ($0.weight, $0.reps) }.map { $0 != (previousValues?.0 ?? "", previousValues?.1 ?? "") } ?? false
+        // Reload when the target set moved, or when the phone typed new values
+        // and the athlete has not started editing on the watch.
+        if previousExercise != selectedExercise || previousSet != nextSet?.index || (valuesChanged && !draftEdited) {
             loadDraft()
         }
         scheduleRestAlert()
@@ -143,8 +221,11 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     private func loadDraft() {
         guard let exercise else { return }
         let set = exercise.sets.first { !$0.done }
+        loadingDraft = true
         weight = Double(set?.weight.isEmpty == false ? set!.weight : exercise.suggestedWeight) ?? 0
         reps = Double(set?.reps.isEmpty == false ? set!.reps : exercise.suggestedReps) ?? 8
+        loadingDraft = false
+        draftEdited = false
     }
 
     private func scheduleRestAlert() {

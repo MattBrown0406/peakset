@@ -49,7 +49,7 @@ function buildWatchSnapshot() {
   if (!workout) {
     const next = typeof todaysSelectedPlan === "function" ? todaysSelectedPlan() : null;
     return {
-      version: WATCH_SNAPSHOT_VERSION, active: false, title: "", unit: weightUnit(), blockLine,
+      version: WATCH_SNAPSHOT_VERSION, active: false, workoutId: "", title: "", unit: weightUnit(), blockLine,
       completedSets: 0, totalSets: 0, currentExercise: 0, exercises: [],
       rest: { running: false, startedAt: null, endsAt: null }, nextPlanTitle: next?.title || ""
     };
@@ -59,6 +59,8 @@ function buildWatchSnapshot() {
     const suggestion = suggestedSetValues(exercise, nextSetIndex);
     return {
       index,
+      id: exercise.id,
+      rest: Number(exercise.rest) || DEFAULT_REST_SECONDS,
       name: exercise.name,
       targetReps: String(exercise.targetReps || ""),
       repsOnly: isRepsOnlyExercise(exercise),
@@ -78,6 +80,7 @@ function buildWatchSnapshot() {
   return {
     version: WATCH_SNAPSHOT_VERSION,
     active: true,
+    workoutId: String(workout.id),
     title: workout.title,
     unit: weightUnit(),
     blockLine,
@@ -119,15 +122,33 @@ saveState = function saveStateAndPublish() {
 function handleWatchCommand(command) {
   if (!command || typeof command !== "object") return false;
   const workout = state.activeWorkout;
+  // Commands can arrive long after they were sent (queued while the phone was
+  // locked), so they name the workout, exercise, and set rather than trusting
+  // indexes that may have moved.
+  if (command.workoutId && workout && String(command.workoutId) !== String(workout.id)) return false;
   if (command.action === "completeSet") {
-    const exIndex = Number(command.exIndex);
-    const setIndex = Number(command.setIndex);
+    let exIndex = Number(command.exIndex);
+    if (command.exerciseId && workout?.exercises?.[exIndex]?.id !== command.exerciseId) {
+      exIndex = workout?.exercises?.findIndex((item) => item.id === command.exerciseId) ?? -1;
+    }
     const exercise = workout?.exercises?.[exIndex];
+    let setIndex = Number(command.setIndex);
+    if (command.setLabel && String(exercise?.sets?.[setIndex]?.label) !== String(command.setLabel)) {
+      setIndex = exercise?.sets?.findIndex((item) => String(item.label) === String(command.setLabel)) ?? -1;
+    }
     const set = exercise?.sets?.[setIndex];
     if (!set || set.done) return false;
     if (!isRepsOnlyExercise(exercise)) updateSet(exIndex, setIndex, "weight", String(command.weight ?? ""));
     updateSet(exIndex, setIndex, "reps", String(command.reps ?? ""));
     completeSet(exIndex, setIndex);
+    // Rest started when the set was finished on the watch, not when the phone
+    // caught up.
+    const completedAt = Number(command.completedAt);
+    if (set.done && state.timer.running && Number.isFinite(completedAt) && Date.now() - completedAt > 3000) {
+      const remaining = Math.ceil((completedAt + (Number(exercise.rest) || DEFAULT_REST_SECONDS) * 1000 - Date.now()) / 1000);
+      if (remaining > 0) startTimer(remaining, true, exIndex, false);
+      else stopTimer();
+    }
     return Boolean(set.done);
   }
   if (command.action === "adjustRest") {

@@ -47,7 +47,16 @@ function toolkitMigrateState() {
       { id: "road-gym", name: "Road Gym", equipment: ["Dumbbells", "Cable", "Bench", "Bodyweight", "Bands"] }
     ];
   }
-  if (!state.activeEquipmentProfileId) state.activeEquipmentProfileId = state.equipmentProfiles[0].id;
+  // Ids are interpolated into inline handlers; repair any a crafted backup could abuse.
+  const safeId = /^[A-Za-z0-9_-]{1,64}$/;
+  state.equipmentProfiles = state.equipmentProfiles.filter((profile) => profile && typeof profile === "object").map((profile) => ({
+    ...profile,
+    id: safeId.test(String(profile.id)) ? profile.id : `equipment-${crypto.randomUUID()}`,
+    name: String(profile.name || "Equipment").slice(0, 40),
+    equipment: (Array.isArray(profile.equipment) ? profile.equipment : []).filter((item) => equipmentOptions.includes(item))
+  }));
+  if (!state.equipmentProfiles.length) state.equipmentProfiles = [{ id: "all-equipment", name: "Commercial Gym", equipment: [] }];
+  if (!state.equipmentProfiles.some((profile) => profile.id === state.activeEquipmentProfileId)) state.activeEquipmentProfileId = state.equipmentProfiles[0].id;
   if (!Array.isArray(state.weeklyCheckIns)) state.weeklyCheckIns = [];
   if (!Array.isArray(state.prepLogs)) state.prepLogs = [];
   if (!state.librarySearch) state.librarySearch = "";
@@ -57,8 +66,9 @@ function toolkitMigrateState() {
   if (typeof state.healthKitEnabled !== "boolean") state.healthKitEnabled = false;
   if (!state.healthKitPermissions || typeof state.healthKitPermissions !== "object") state.healthKitPermissions = { weightWrite: false, workoutWrite: false };
   if (!state.builderFormDraft || typeof state.builderFormDraft !== "object") state.builderFormDraft = defaultBuilderFormDraft();
-  state.customPlans = (state.customPlans || []).filter((plan) => !String(plan?.id || "").startsWith("quick-")).map((plan) => ({
+  state.customPlans = (state.customPlans || []).filter((plan) => plan && typeof plan === "object" && !String(plan.id || "").startsWith("quick-")).map((plan) => ({
     ...plan,
+    id: safeId.test(String(plan.id)) ? plan.id : `custom-${crypto.randomUUID()}`,
     exercises: (Array.isArray(plan?.exercises) ? plan.exercises : []).map((draft) => {
       if (Array.isArray(draft)) return draft;
       const spec = normalizePlanExercise(draft);
@@ -93,6 +103,7 @@ function clampDropSetCount(value) {
 }
 
 function normalizePlanExercise(spec) {
+  if (!spec || typeof spec !== "object") return { id: "", sets: 3, reps: "8-12", rest: DEFAULT_REST_SECONDS, dropSets: 0, group: "", setType: "standard" };
   if (Array.isArray(spec)) {
     const [id, sets, reps, rest, dropSets = 0, metadata = {}] = spec;
     return { id, sets: clampSetCount(sets), reps: String(reps || "8-12"), rest: clampRestSeconds(rest), dropSets: clampDropSetCount(dropSets), group: metadata?.group || "", setType: metadata?.setType || "standard" };
@@ -440,7 +451,7 @@ function saveBuilderTemplate() {
 
 startCustomWorkout = function startToolkitCustomWorkout() {
   if (!builderDraft.length) return toast("Add at least one exercise.");
-  const plan = builderPlanFromForm();
+  const plan = { ...builderPlanFromForm(), adHoc: true };
   if (!beginWorkoutFromPlan(plan)) return;
   builderDraft = [];
   state.builderFormDraft = defaultBuilderFormDraft();
@@ -488,6 +499,11 @@ function updateCustomPlanSchedule(id, scheduleDay) {
 renderBuilder = function renderToolkitBuilder() {
   const profile = activeEquipmentProfile();
   const form = state.builderFormDraft || defaultBuilderFormDraft();
+  // A new or switched equipment profile can hide the remembered exercise;
+  // fall back to the first one the select will actually show.
+  const availableForForm = toolkitBuilderExerciseRows(form.exerciseFocus);
+  if (!availableForForm.some((exercise) => exercise.id === form.exerciseId)) form.exerciseId = availableForForm[0]?.id || "";
+  state.builderFormDraft = form;
   const normalizedDraft = builderDraft.map(normalizePlanExercise);
   builderDraft = normalizedDraft;
   return `
@@ -642,6 +658,7 @@ function adjustLiveSets(exIndex, delta) {
   } else if (delta < 0 && exercise.sets.filter((set) => !set.dropSet).length > 1) {
     const index = exercise.sets.map((set, setIndex) => ({ set, setIndex })).filter(({ set }) => !set.dropSet).at(-1).setIndex;
     if (exercise.sets[index].done) return toast("Uncheck the final working set before removing it.");
+    if ((exercise.sets[index].weight !== "" || exercise.sets[index].reps !== "") && !window.confirm("The last set has entries. Remove it anyway?")) return;
     exercise.sets.splice(index, 1);
     exercise.targetSets = Math.max(1, exercise.targetSets - 1);
   }
@@ -663,10 +680,10 @@ function saveActiveWorkoutAsTemplate() {
     equipmentProfileId: state.activeEquipmentProfileId,
     exercises: workout.exercises.map((exercise) => [
       exercise.id,
-      exercise.sets.filter((set) => !set.dropSet).length,
+      exercise.fullSets ?? exercise.sets.filter((set) => !set.dropSet).length,
       exercise.targetReps,
       exercise.rest,
-      exercise.sets.filter((set) => set.dropSet).length,
+      exercise.fullDropSets ?? exercise.sets.filter((set) => set.dropSet).length,
       { group: exercise.group || "", setType: exercise.defaultSetType || "standard" }
     ])
   });
@@ -694,7 +711,13 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
   if (set.done) {
     const group = exercise.group;
     const groupExercises = group ? state.activeWorkout.exercises.filter((item) => item.group === group) : [];
-    const groupPending = groupExercises.some((item) => item.sets[setIndex] && !item.sets[setIndex].done);
+    // Match partners by the same working (or drop) set number; raw indexes
+    // drift when partners have different set or drop counts.
+    const ordinal = exercise.sets.slice(0, setIndex + 1).filter((item) => Boolean(item.dropSet) === Boolean(set.dropSet)).length;
+    const groupPending = groupExercises.some((item) => {
+      const partnerSet = item.sets.filter((candidate) => Boolean(candidate.dropSet) === Boolean(set.dropSet))[ordinal - 1];
+      return partnerSet && !partnerSet.done;
+    });
     if (!groupPending) startTimer(exercise.rest, true, exIndex);
     else toast(`Complete the remaining ${group} exercise before resting.`);
   }
@@ -704,6 +727,8 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
 finishWorkout = function finishToolkitWorkout() {
   const workout = state.activeWorkout;
   if (!workout) return;
+  const unlogged = workout.exercises.flatMap((exercise) => exercise.sets).filter((set) => !set.done && (set.weight !== "" || set.reps !== "")).length;
+  if (unlogged && !window.confirm(`${unlogged} ${unlogged === 1 ? "set has" : "sets have"} entries but ${unlogged === 1 ? "isn't" : "aren't"} marked Complete and won't be saved. Save the session anyway?`)) return;
   const sets = workout.exercises.flatMap((exercise) => exercise.sets.filter((set) => set.done).map((set) => ({
     exercise: exercise.name, exerciseId: exercise.id, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps,
     rir: set.rir ?? "", setType: set.setType || "standard", group: exercise.group || "", repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set), targetReps: exercise.targetReps
@@ -729,7 +754,7 @@ function renderToolkitExerciseControls(exercise, exIndex) {
 }
 
 function renderToolkitSetFields(exercise, exIndex, set, setIndex) {
-  return `<div class="set-row toolkit-set-row ${isRepsOnlyExercise(exercise) ? "reps-only" : ""}"><div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex},${setIndex},'weight',this.value)" />`}<input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex},${setIndex},'reps',this.value)" /><select aria-label="RIR" onchange="updateSet(${exIndex},${setIndex},'rir',this.value)"><option value="">RIR</option>${[0,1,2,3,4].map((value) => `<option value="${value}" ${String(set.rir) === String(value) ? "selected" : ""}>${value} RIR</option>`).join("")}<option value="failure" ${set.rir === "failure" ? "selected" : ""}>Failure</option></select><select aria-label="Set type" onchange="updateSetType(${exIndex},${setIndex},this.value)">${setTypeOptions.map(([value,label]) => `<option value="${value}" ${set.setType === value ? "selected" : ""}>${label}</option>`).join("")}</select><button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex},${setIndex})">${set.done ? "Done" : "Complete"}</button></div>`;
+  return `<div class="set-row toolkit-set-row ${isRepsOnlyExercise(exercise) ? "reps-only" : ""}"><div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex},${setIndex},'weight',this.value)" />`}<input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex},${setIndex},'reps',this.value)" /><select aria-label="RIR" onchange="updateSet(${exIndex},${setIndex},'rir',this.value)"><option value="">RIR</option>${[0,1,2,3,4].map((value) => `<option value="${value}" ${String(set.rir) === String(value) ? "selected" : ""}>${value} RIR</option>`).join("")}<option value="failure" ${set.rir === "failure" ? "selected" : ""}>Failure</option></select><select aria-label="Set type" onchange="updateSetType(${exIndex},${setIndex},this.value)">${setTypeOptions.map(([value,label]) => `<option value="${value}" ${set.setType === value ? "selected" : ""}>${label}</option>`).join("")}</select><button class="${set.done ? "secondary-btn" : "primary-btn"}" data-set-button="${exIndex}-${setIndex}" onclick="completeSet(${exIndex},${setIndex})">${set.done ? "Done" : "Complete"}</button></div>`;
 }
 
 const baseRenderSession = renderSession;
@@ -742,12 +767,12 @@ renderSession = function renderToolkitSession() {
   const totalTimer = Math.max(1, state.timer.seconds);
   const progress = state.timer.running || state.timer.fullscreen ? (totalTimer - left) / totalTimer * 360 : 0;
   setTimeout(ensureTimerTick, 0);
-  return `${renderRestOverlay(left,progress)}<div class="topbar"><div><p class="eyebrow">Live workout</p><h1>${escapeHtml(workout.title)}</h1><p class="muted">${completed} of ${total} sets completed</p></div><div class="actions"><select id="liveExerciseAdd" aria-label="Add exercise"><option value="">Add exercise...</option>${liveExerciseCandidates().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button class="secondary-btn" onclick="addLiveExercise()">Add</button><button class="secondary-btn" onclick="saveActiveWorkoutAsTemplate()">Save Template</button><button class="secondary-btn" onclick="finishWorkout()">Save Session</button><button class="ghost-btn danger" onclick="cancelWorkout()">Cancel</button></div></div><div class="session-shell"><section class="session">${workout.exercises.map((exercise,exIndex) => `<article class="card pad"><div class="card-head"><div>${exercise.group ? `<span class="badge green">Superset ${escapeHtml(exercise.group)}</span>` : ""}<span class="badge blue">${exercise.targetSets} sets${exercise.targetDropSets ? ` + ${exercise.targetDropSets} drop` : ""} × ${escapeHtml(exercise.targetReps)}</span><h2 style="margin-top:10px">${escapeHtml(exercise.name)}</h2></div><span class="badge">${exercise.rest}s rest</span></div>${renderToolkitExerciseControls(exercise,exIndex)}<div class="set-table">${exercise.sets.map((set,setIndex) => renderToolkitSetFields(exercise,exIndex,set,setIndex)).join("")}</div></article>`).join("")}</section><aside class="card pad"><p class="eyebrow">Rest timer</p><div class="timer-face" style="--progress:${progress}deg"><div style="text-align:center"><strong data-timer-time>${formatTime(left)}</strong><p class="muted" data-timer-status>${timerStatusText()}</p></div></div><div class="timer-controls"><div class="actions"><button class="secondary-btn" onclick="adjustRest(-15)">-15s</button><button class="secondary-btn" onclick="adjustRest(15)">+15s</button></div><div class="actions">${restPresetButtons(false)}</div><button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button><button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button></div></aside></div>`;
+  return `${renderRestOverlay(left,progress)}<div class="topbar"><div><p class="eyebrow">Live workout</p><h1>${escapeHtml(workout.title)}</h1><p class="muted" data-sets-completed>${completed} of ${total} sets completed</p></div><div class="actions"><select id="liveExerciseAdd" aria-label="Add exercise"><option value="">Add exercise...</option>${liveExerciseCandidates().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button class="secondary-btn" onclick="addLiveExercise()">Add</button><button class="secondary-btn" onclick="saveActiveWorkoutAsTemplate()">Save Template</button><button class="secondary-btn" onclick="finishWorkout()">Save Session</button><button class="ghost-btn danger" onclick="cancelWorkout()">Cancel</button></div></div><div class="session-shell"><section class="session">${workout.exercises.map((exercise,exIndex) => `<article class="card pad"><div class="card-head"><div>${exercise.group ? `<span class="badge green">Superset ${escapeHtml(exercise.group)}</span>` : ""}<span class="badge blue">${exercise.targetSets} sets${exercise.targetDropSets ? ` + ${exercise.targetDropSets} drop` : ""} × ${escapeHtml(exercise.targetReps)}</span><h2 style="margin-top:10px">${escapeHtml(exercise.name)}</h2></div><span class="badge">${exercise.rest}s rest</span></div>${renderToolkitExerciseControls(exercise,exIndex)}<div class="set-table">${exercise.sets.map((set,setIndex) => renderToolkitSetFields(exercise,exIndex,set,setIndex)).join("")}</div></article>`).join("")}</section><aside class="card pad"><p class="eyebrow">Rest timer</p><div class="timer-face" style="--progress:${progress}deg"><div style="text-align:center"><strong data-timer-time>${formatTime(left)}</strong><p class="muted" data-timer-status>${timerStatusText()}</p></div></div><div class="timer-controls"><div class="actions"><button class="secondary-btn" onclick="adjustRest(-15)">-15s</button><button class="secondary-btn" onclick="adjustRest(15)">+15s</button></div><div class="actions">${restPresetButtons(false)}</div><button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button><button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button></div></aside></div>`;
 };
 
 const baseStartTimer = startTimer;
-startTimer = function startNativeBackedTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null) {
-  baseStartTimer(seconds, fullscreen, exerciseIndex);
+startTimer = function startNativeBackedTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null, persistRest = true) {
+  baseStartTimer(seconds, fullscreen, exerciseIndex, persistRest);
   // restTimerContext (watch.js) adds the Live Activity details when loaded.
   if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: state.timer.seconds, endsAt: state.timer.endsAt, ...(typeof restTimerContext === "function" ? restTimerContext() : {}) });
 };
@@ -760,6 +785,7 @@ stopTimer = function stopNativeBackedTimer() {
 
 function handleNativeTimerReconcile(payload) {
   if (payload?.delivered) {
+    window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel" });
     state.timer.running = false;
     state.timer.left = 0;
     state.timer.startedAt = null;
@@ -940,6 +966,10 @@ resetDemoData = function resetToolkitData() {
   toolkitMigrateState();
   render();
 };
+
+// No rest is running after a cold launch: clear any leftover Live Activity
+// and pending notification from a session that was killed mid-rest.
+if (!state.timer.running) window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel" });
 
 saveState();
 render();

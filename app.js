@@ -803,8 +803,11 @@ function loadState() {
 }
 
 let storageWarningShown = false;
+// Set while a restore reloads the page so a timer tick cannot overwrite it.
+let restoringState = false;
 
 function saveState() {
+  if (restoringState) return;
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
     storageWarningShown = false;
@@ -2163,7 +2166,7 @@ function renderToday() {
           ${plan.exercises.map(([id, sets, reps]) => `
             <div class="exercise-row">
               <strong>${escapeHtml(exerciseById(id).name)}</strong>
-              <span class="badge">${sets} x ${reps}</span>
+              <span class="badge">${escapeHtml(sets)} x ${escapeHtml(reps)}</span>
             </div>
           `).join("")}
         </div>
@@ -2214,7 +2217,7 @@ function renderPlanCard(plan) {
         ${plan.exercises.slice(0, 5).map(([id, sets, reps]) => `
           <div class="exercise-row">
             <span class="truncate">${escapeHtml(exerciseById(id).name)}</span>
-            <span class="badge">${sets} x ${reps}</span>
+            <span class="badge">${escapeHtml(sets)} x ${escapeHtml(reps)}</span>
           </div>
         `).join("")}
       </div>
@@ -2612,9 +2615,27 @@ function updateSet(exIndex, setIndex, field, value) {
   if (!set || !["weight", "reps", "rir", "setType"].includes(field)) return;
   // Changing the load or reps of a completed set reopens it; RIR and set-type
   // annotations do not change what was lifted.
-  if (set.done && ["weight", "reps"].includes(field) && set[field] !== value) set.done = false;
+  const reopened = set.done && ["weight", "reps"].includes(field) && set[field] !== value;
+  if (reopened) set.done = false;
   set[field] = value;
   saveState();
+  if (reopened) reflectReopenedSet(exIndex, setIndex);
+}
+
+function reflectReopenedSet(exIndex, setIndex) {
+  const button = document.querySelector?.(`[data-set-button="${exIndex}-${setIndex}"]`);
+  if (button) {
+    button.className = "primary-btn";
+    button.textContent = "Complete";
+  }
+  const counter = document.querySelector?.("[data-sets-completed]");
+  const workout = state.activeWorkout;
+  if (counter && workout) {
+    const completed = workout.exercises.reduce((sum, exercise) => sum + exercise.sets.filter((item) => item.done).length, 0);
+    const total = workout.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0);
+    counter.textContent = `${completed} of ${total} sets completed`;
+  }
+  toast("Set reopened. Tap Complete again to log the change.");
 }
 
 function completeSet(exIndex, setIndex) {
@@ -2637,21 +2658,32 @@ function completeSet(exIndex, setIndex) {
 
 function adjustRest(seconds) {
   const timer = state.timer;
-  const next = Math.max(15, Math.min(300, (timer.running ? timer.left : timer.seconds) + seconds));
   if (timer.running) {
-    startTimer(next, Boolean(timer.fullscreen), timer.exerciseIndex ?? null);
-  } else {
+    // The tick pauses while the page is hidden; read the real remaining time.
+    const remaining = Math.ceil((Number(timer.endsAt) - Date.now()) / 1000);
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      stopTimer();
+      return;
+    }
+    timer.left = remaining;
+    // Adjusting a running rest changes only this rest, never the exercise's
+    // planned rest, and -15 near the end shortens instead of clamping up.
+    startTimer(Math.max(1, Math.min(600, timer.left + seconds)), Boolean(timer.fullscreen), timer.exerciseIndex ?? null, false);
+    return;
+  }
+  const next = Math.max(15, Math.min(300, timer.seconds + seconds));
+  {
     state.timer.seconds = next;
     saveState();
     render();
   }
 }
 
-function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null) {
+function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null, persistRest = true) {
   primeTimerAudio();
   const now = Date.now();
-  const duration = clampRestSeconds(seconds);
-  if (state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
+  const duration = persistRest ? clampRestSeconds(seconds) : Math.max(1, Math.min(600, Math.round(Number(seconds)) || 1));
+  if (persistRest && state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
     state.activeWorkout.exercises[exerciseIndex].rest = duration;
   }
   state.timer = {
@@ -2850,7 +2882,7 @@ function renderSession() {
       <div>
         <p class="eyebrow">Live workout</p>
         <h1>${escapeHtml(workout.title)}</h1>
-        <p class="muted">${completed} of ${total} sets completed</p>
+        <p class="muted" data-sets-completed>${completed} of ${total} sets completed</p>
       </div>
       <div class="actions">
         <button class="secondary-btn" onclick="finishWorkout()">Save Session</button>
@@ -2913,7 +2945,7 @@ function renderSession() {
                   <div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>
                   ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
                   <input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
-                  <button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
+                  <button class="${set.done ? "secondary-btn" : "primary-btn"}" data-set-button="${exIndex}-${setIndex}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
                 </div>
               `).join("")}
             </div>

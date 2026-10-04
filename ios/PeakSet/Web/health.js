@@ -33,15 +33,21 @@ function localDayKey(value) {
   return Number.isFinite(date.getTime()) ? dateKey(date) : null;
 }
 
+function startOfLocalDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
 function syncHealthBody(force = false) {
   const bridge = healthBridge();
   if (!bridge || !state.healthBody?.enabled || healthSyncInFlight) return false;
   const last = Date.parse(state.healthBody.lastSyncAt || "");
   if (!force && Number.isFinite(last) && Date.now() - last < HEALTH_AUTO_SYNC_MS) return false;
   // Re-read a few days of overlap so late-arriving scale readings are caught.
-  const since = Number.isFinite(last)
+  // Start at local midnight so the oldest day in the window is read whole and
+  // its first reading stays the first reading.
+  const since = startOfLocalDay(Number.isFinite(last)
     ? new Date(last - HEALTH_RESYNC_OVERLAP_DAYS * 86400000)
-    : new Date(Date.now() - HEALTH_INITIAL_DAYS * 86400000);
+    : new Date(Date.now() - HEALTH_INITIAL_DAYS * 86400000));
   healthSyncInFlight = true;
   setTimeout(() => { healthSyncInFlight = false; }, 30000);
   bridge.postMessage({ action: "readBody", since: since.toISOString(), unit: weightUnit(), lengthUnit: lengthUnit() });
@@ -110,8 +116,8 @@ function applyHealthBodySamples(samples) {
         id: hkId,
         date: slot.weight.date,
         bodyweight: slot.weight.value,
-        bodyFat: slot.bodyFat?.value ?? null,
-        leanMass: slot.leanMass?.value ?? null,
+        bodyFat: slot.bodyFat?.value ?? state.weightLogs.find((entry) => entry.id === hkId)?.bodyFat ?? null,
+        leanMass: slot.leanMass?.value ?? state.weightLogs.find((entry) => entry.id === hkId)?.leanMass ?? null,
         note: `Apple Health · ${slot.weight.source}`,
         source: "healthkit"
       };
@@ -189,10 +195,12 @@ const baseHandleNativeHealthKit = window.handleNativeHealthKit;
 window.handleNativeHealthKit = function handleNativeHealthKitWithBody(payload) {
   if (payload?.status === "bodySamples") {
     healthSyncInFlight = false;
+    // Ignore a read that finished after Health was turned off or units changed.
+    if (!state.healthBody?.enabled || (payload.unit && payload.unit !== weightUnit())) return;
     applyHealthBodySamples(payload.samples);
     return;
   }
-  if (payload?.status === "error" && healthSyncInFlight) {
+  if (payload?.status === "error" && payload.action === "readBody") {
     healthSyncInFlight = false;
     state.healthBody.lastResult = /not determined|authoriz/i.test(String(payload.message || ""))
       ? "Apple Health access isn't set up yet. Tap Sync Now and allow access, or turn on Mass Method in Settings › Health › Data Access & Devices."

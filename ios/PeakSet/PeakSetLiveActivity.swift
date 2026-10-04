@@ -2,11 +2,16 @@ import ActivityKit
 import Foundation
 
 /// Mirrors the rest timer onto the Lock Screen and Dynamic Island.
+/// Operations run one at a time on the main actor so a quick end-then-show
+/// never ends the new activity or leaves two on screen.
+@MainActor
 final class PeakSetLiveActivityManager {
     static let shared = PeakSetLiveActivityManager()
+    private var queue: Task<Void, Never>?
+
     private init() {}
 
-    struct Rest {
+    struct Rest: Sendable {
         let startedAt: Date
         let endsAt: Date
         let workoutTitle: String
@@ -16,7 +21,23 @@ final class PeakSetLiveActivityManager {
         let totalSets: Int
     }
 
-    func show(_ rest: Rest) {
+    nonisolated func show(_ rest: Rest) {
+        Task { @MainActor in self.enqueue { await self.performShow(rest) } }
+    }
+
+    nonisolated func end() {
+        Task { @MainActor in self.enqueue { await self.endAll() } }
+    }
+
+    private func enqueue(_ operation: @escaping @MainActor () async -> Void) {
+        let previous = queue
+        queue = Task { @MainActor in
+            await previous?.value
+            await operation()
+        }
+    }
+
+    private func performShow(_ rest: Rest) async {
         guard ActivityAuthorizationInfo().areActivitiesEnabled, rest.endsAt > Date() else {
             #if DEBUG
             NSLog("MassMethod Live Activity skipped: enabled=%d", ActivityAuthorizationInfo().areActivitiesEnabled ? 1 : 0)
@@ -32,27 +53,21 @@ final class PeakSetLiveActivityManager {
             totalSets: rest.totalSets
         )
         let content = ActivityContent(state: state, staleDate: rest.endsAt)
-        Task {
-            if let current = Activity<RestTimerAttributes>.activities.first(where: { $0.attributes.workoutTitle == rest.workoutTitle }) {
-                await current.update(content)
-                for other in Activity<RestTimerAttributes>.activities where other.id != current.id {
-                    await other.end(nil, dismissalPolicy: .immediate)
-                }
-            } else {
-                await endAll()
-                do {
-                    _ = try Activity.request(attributes: RestTimerAttributes(workoutTitle: rest.workoutTitle), content: content, pushType: nil)
-                } catch {
-                    #if DEBUG
-                    NSLog("MassMethod Live Activity request failed: %@", String(describing: error))
-                    #endif
-                }
+        if let current = Activity<RestTimerAttributes>.activities.first(where: { $0.attributes.workoutTitle == rest.workoutTitle }) {
+            await current.update(content)
+            for other in Activity<RestTimerAttributes>.activities where other.id != current.id {
+                await other.end(nil, dismissalPolicy: .immediate)
+            }
+        } else {
+            await endAll()
+            do {
+                _ = try Activity.request(attributes: RestTimerAttributes(workoutTitle: rest.workoutTitle), content: content, pushType: nil)
+            } catch {
+                #if DEBUG
+                NSLog("MassMethod Live Activity request failed: %@", String(describing: error))
+                #endif
             }
         }
-    }
-
-    func end() {
-        Task { await endAll() }
     }
 
     private func endAll() async {

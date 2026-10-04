@@ -145,7 +145,10 @@ function blockWeekInfo(block = state.trainingBlock, date = new Date()) {
   if (!block) return null;
   const start = parseDateKey(block.startDate);
   if (!start) return null;
-  const weekIndex = Math.floor((startOfWeek(date) - start) / (7 * 86400000));
+  // Compare calendar days in UTC: local midnights across a DST change are not
+  // a whole number of 24-hour days apart.
+  const utcDay = (day) => Date.UTC(day.getFullYear(), day.getMonth(), day.getDate()) / 86400000;
+  const weekIndex = Math.floor(Math.round(utcDay(startOfWeek(date)) - utcDay(start)) / 7);
   const length = blockLength(block);
   const status = weekIndex < 0 ? "upcoming" : weekIndex >= length ? "complete" : "active";
   const deload = status === "active" && block.deload && weekIndex === block.accumulationWeeks;
@@ -393,7 +396,6 @@ renderToday = function renderTodayWithVolume() {
 function deloadPlan(plan) {
   return {
     ...plan,
-    title: `${plan.title} (Deload)`,
     exercises: (Array.isArray(plan.exercises) ? plan.exercises : []).map((spec) => {
       const normalized = normalizePlanExercise(spec);
       return [normalized.id, Math.max(1, Math.ceil(normalized.sets / 2)), normalized.reps, normalized.rest, 0, { group: normalized.group, setType: "standard" }];
@@ -404,9 +406,21 @@ function deloadPlan(plan) {
 const baseBeginWorkoutForVolume = beginWorkoutFromPlan;
 beginWorkoutFromPlan = function beginWorkoutWithBlock(plan) {
   const info = blockWeekInfo();
-  if (!info?.deload || state.activeWorkout) return baseBeginWorkoutForVolume(plan);
+  // Quick logs and ad-hoc Builder sessions are exactly what the athlete asked for.
+  const exempt = String(plan?.id || "").startsWith("quick-") || plan?.adHoc;
+  if (!info?.deload || state.activeWorkout || exempt) return baseBeginWorkoutForVolume(plan);
   const started = baseBeginWorkoutForVolume(deloadPlan(plan));
-  if (started) toast("Deload week: sets halved, stop 4+ reps short of failure.");
+  if (started && state.activeWorkout) {
+    // Remember the full plan so "Save Template" never stores halved sets.
+    const full = (Array.isArray(plan.exercises) ? plan.exercises : []).map(normalizePlanExercise).filter((spec) => exerciseLibrary.some((item) => item.id === spec.id));
+    state.activeWorkout.deload = true;
+    state.activeWorkout.exercises.forEach((exercise, index) => {
+      exercise.fullSets = full[index]?.sets ?? exercise.targetSets;
+      exercise.fullDropSets = full[index]?.dropSets ?? exercise.targetDropSets;
+    });
+    saveState();
+    toast("Deload week: sets halved, stop 4+ reps short of failure.");
+  }
   return started;
 };
 

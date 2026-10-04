@@ -27,8 +27,10 @@ enum PeakSetPhotoStore {
     }
 
     /// Scales to `maxEdge`, bakes in orientation, and writes a JPEG. Returns the new id.
-    static func save(_ image: UIImage, mirrored: Bool = false) throws -> String {
-        let id = UUID().uuidString
+    /// `idPrefix` "coach-" marks photos imported from athletes' check-ins; they
+    /// are never mirrored to this user's iCloud Drive.
+    static func save(_ image: UIImage, mirrored: Bool = false, idPrefix: String = "") throws -> String {
+        let id = idPrefix + UUID().uuidString
         guard let url = url(for: id),
               let data = resized(image, maxEdge: maxEdge, mirrored: mirrored).jpegData(compressionQuality: 0.85) else {
             throw CocoaError(.fileWriteUnknown)
@@ -41,6 +43,8 @@ enum PeakSetPhotoStore {
     static func delete(_ id: String) {
         guard let url = url(for: id) else { return }
         try? FileManager.default.removeItem(at: url)
+        // Deleted photos must also leave the user-visible iCloud Drive mirror.
+        PeakSetBackupService.shared.deleteMirroredPhoto(named: url.lastPathComponent)
     }
 
     static func thumbnailDataURL(for id: String, maxEdge: CGFloat) -> String? {
@@ -277,6 +281,7 @@ final class PeakSetCameraViewController: UIViewController, AVCapturePhotoCapture
         shutterButton.layer.borderColor = UIColor(red: 1, green: 0.47, blue: 0.29, alpha: 1).cgColor
         shutterButton.accessibilityLabel = "Take photo"
         shutterButton.addAction(UIAction { [weak self] _ in self?.shutterTapped() }, for: .touchUpInside)
+        shutterButton.isEnabled = false
 
         countdownLabel.font = .monospacedDigitSystemFont(ofSize: 120, weight: .black)
         countdownLabel.textColor = .white
@@ -348,10 +353,13 @@ final class PeakSetCameraViewController: UIViewController, AVCapturePhotoCapture
             }
             self.session.commitConfiguration()
             if !self.session.isRunning { self.session.startRunning() }
+            let ready = self.session.isRunning && self.photoOutput.connection(with: .video)?.isEnabled == true
+            DispatchQueue.main.async { self.shutterButton.isEnabled = ready && self.countdown == nil }
         }
     }
 
     private func flipCamera() {
+        shutterButton.isEnabled = false
         position = position == .back ? .front : .back
         configureSession()
     }
@@ -386,8 +394,15 @@ final class PeakSetCameraViewController: UIViewController, AVCapturePhotoCapture
 
     private func takePhoto() {
         shutterButton.isEnabled = false
-        let settings = AVCapturePhotoSettings()
-        photoOutput.capturePhoto(with: settings, delegate: self)
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            // capturePhoto raises an uncatchable exception without a live connection.
+            guard self.session.isRunning, self.photoOutput.connection(with: .video)?.isEnabled == true else {
+                DispatchQueue.main.async { self.shutterButton.isEnabled = true }
+                return
+            }
+            self.photoOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
+        }
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {

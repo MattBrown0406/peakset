@@ -240,7 +240,8 @@ async function photoThumbnail(photo, size = 640) {
 
 // Stores a photo that arrived in a coach file (data URL) without adding it to
 // this athlete's own gallery. Resolves to { id, storage } or null.
-async function storeImportedPhoto(dataUrl) {
+// prefix "coach" keeps athletes' photos out of this user's iCloud mirror.
+async function storeImportedPhoto(dataUrl, prefix = "") {
   if (typeof dataUrl !== "string" || !/^data:image\/(jpeg|png);base64,/.test(dataUrl) || dataUrl.length > 4_000_000) return null;
   const bridge = nativePhotoBridge();
   if (bridge) {
@@ -251,12 +252,12 @@ async function storeImportedPhoto(dataUrl) {
         if (pendingThumbnailRequests.delete(requestId)) resolve(null);
       }, 8000);
     });
-    bridge.postMessage({ action: "import", dataUrl, requestId });
+    bridge.postMessage({ action: "import", dataUrl, requestId, prefix: prefix === "coach" ? "coach" : "" });
     return result;
   }
   try {
     const blob = await (await fetch(dataUrl)).blob();
-    const id = crypto.randomUUID();
+    const id = `${prefix === "coach" ? "coach-" : ""}${crypto.randomUUID()}`;
     await photoDbRequest("readwrite", (store) => store.put(blob, id));
     return { id, storage: "browser" };
   } catch {
