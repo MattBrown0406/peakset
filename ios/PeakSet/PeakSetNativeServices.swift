@@ -20,7 +20,24 @@ final class PeakSetTimerService {
 
     /// When the pending rest notification fires. A time-interval trigger's
     /// nextTriggerDate() always reports now + its interval, so it can't be used.
-    private var scheduledFireDate: Date?
+    private var scheduledFireDate: Date? {
+        didSet {
+            if let scheduledFireDate {
+                UserDefaults.standard.set(scheduledFireDate.timeIntervalSince1970, forKey: fireDateKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: fireDateKey)
+            }
+        }
+    }
+    private let fireDateKey = "MassMethodRestFireDate"
+
+    /// After iOS relaunches the app (e.g. for a watch command) the in-memory
+    /// value is gone; fall back to the persisted one.
+    private var currentFireDate: Date? {
+        if let scheduledFireDate { return scheduledFireDate }
+        let stored = UserDefaults.standard.double(forKey: fireDateKey)
+        return stored > 0 ? Date(timeIntervalSince1970: stored) : nil
+    }
 
     private func schedule(fireDate: Date, token: UUID) {
         center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
@@ -51,7 +68,7 @@ final class PeakSetTimerService {
     /// Moves the pending rest notification (watch +/-15s while the phone's web
     /// app is paused). A rest moved into the past is cancelled.
     func shift(by seconds: TimeInterval) {
-        guard let current = scheduledFireDate else { return }
+        guard let current = currentFireDate else { return }
         let fireDate = current.addingTimeInterval(seconds)
         guard fireDate.timeIntervalSinceNow >= 1 else { return cancel() }
         let token = UUID()

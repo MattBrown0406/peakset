@@ -63,18 +63,21 @@ function mergedLatestMeasurement() {
   const newest = state.measurements[0]?.date || state.weightLogs.find((entry) => Number(entry.bodyFat) > 0)?.date;
   const merged = { id: `latest-${newest}`, date: newest, healthFields: [] };
   const fromHealth = (entry, key) => String(entry.id || "").startsWith("hk-") || (Array.isArray(entry.healthFields) && entry.healthFields.includes(key));
+  let bodyFatDate = null;
   state.measurements.forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
       if (["id", "date", "note", "source", "healthFields", "_unitOrigin"].includes(key)) return;
       if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") {
         merged[key] = value;
+        if (key === "bodyFat") bodyFatDate = entry.date;
         if (fromHealth(entry, key)) merged.healthFields.push(key);
       }
     });
   });
   // Smart-scale body fat lives on weigh-ins; show the newest reading.
   const scaleBodyFat = state.weightLogs.find((entry) => Number(entry.bodyFat) > 0);
-  if (scaleBodyFat && (!merged.bodyFat || Date.parse(scaleBodyFat.date) > Date.parse(merged.date))) {
+  // Compare against the date of the body-fat reading it would replace.
+  if (scaleBodyFat && (!merged.bodyFat || Date.parse(scaleBodyFat.date) > Date.parse(bodyFatDate))) {
     merged.bodyFat = Number(scaleBodyFat.bodyFat);
     merged.healthFields = merged.healthFields.filter((key) => key !== "bodyFat");
     if (fromHealth(scaleBodyFat, "bodyFat")) merged.healthFields.push("bodyFat");

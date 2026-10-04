@@ -954,3 +954,65 @@ vm.runInContext("state.todayWorkoutPick = 'chest'; state.todayPlanDate = 'Mon Ja
 assert.match(vm.runInContext("todayWorkoutSelect()", shareCtx.context), /value="recommended" selected/, "an expired pick no longer shows as selected");
 assert.match(read("ios/PeakSet/PeakSetNativeServices.swift"), /scheduledFireDate/, "rest notifications shift from their real fire date");
 console.log("Share completion and pick checks passed.");
+
+// Audit round 7 rest and coach details.
+const r7 = makeContext({ profile: { bodyweight: 200 } });
+const r7run = (code) => vm.runInContext(code, r7.context);
+r7run("startWorkout('chest-density'); state.view = 'progress'");
+r7run("handleWatchCommand({ commandId: 'late', action: 'completeSet', workoutId: state.activeWorkout.id, exIndex: 0, setIndex: 0, weight: '70', reps: '10', completedAt: Date.now() - 10000 })");
+assert.equal(r7run("state.timer.fullscreen"), false, "a late watch set off the workout screen does not force the full-screen overlay");
+r7run("state.timer.endsAt = Date.now() - 600000; state.timer.running = true; window.__bells = 0; playBoxingBell = () => { window.__bells += 1; }; handleNativeTimerReconcile({ delivered: false })");
+assert.equal(r7run("state.timer.running") + ":" + r7run("window.__bells"), "false:0", "returning after a rest ended (notification already handled) never rings again");
+r7run("state.activeWorkout.exercises[0].group = 'A'; state.activeWorkout.exercises[1].group = 'A'");
+assert.equal(r7run("buildWatchSnapshot().exercises[0].restAfterNext"), false, "the watch skips the rest between superset partners");
+const bfDates = makeContext({ profile: { bodyweight: 200 }, weightLogs: [{ id: "w", date: new Date(Date.now() - 86400000).toISOString(), bodyweight: 200, bodyFat: 13.7 }], measurements: [
+  { id: "t1", date: new Date().toISOString(), chest: 44 }, { id: "t0", date: new Date(Date.now() - 60 * 86400000).toISOString(), bodyFat: 18 }] });
+assert.equal(vm.runInContext("mergedLatestMeasurement().bodyFat", bfDates.context), 13.7, "a newer scale body fat beats an older tape body fat");
+console.log("Audit round 7 checks passed.");
+
+// Equipment profiles: "or" means any alternative, commas mean all parts.
+const eq = makeContext({ profile: { bodyweight: 200 } });
+const eqNames = (equipment) => vm.runInContext(`exerciseLibrary.filter((exercise) => exerciseMatchesEquipmentProfile(exercise, { equipment: ${JSON.stringify(equipment)} })).map((exercise) => exercise.name)`, eq.context);
+const dbBench = eqNames(["Dumbbells", "Bench"]);
+["Rear Delt Fly", "Hip Thrust", "Weighted Crunch", "Reverse Crunch", "Incline Dumbbell Press"].forEach((name) => {
+  if (vm.runInContext(`exerciseLibrary.some((exercise) => exercise.name.includes(${JSON.stringify(name)}))`, eq.context))
+    assert.ok(dbBench.some((item) => item.includes(name)), `${name} is available with dumbbells and a bench`);
+});
+["Leg Extension", "T-Bar Row", "EZ-Bar Curl", "Captain", "Nordic", "Barbell Bench Press", "Low Cable Fly"].forEach((name) => {
+  assert.ok(!dbBench.some((item) => item.includes(name)), `${name} needs equipment a dumbbells-and-bench profile lacks`);
+});
+const roadGym = eqNames(["Dumbbells", "Cable", "Bench", "Bodyweight", "Bands"]);
+assert.ok(roadGym.some((item) => item.includes("Plank")), "Road Gym keeps the bodyweight-or-plate plank");
+assert.ok(!roadGym.some((item) => /Leg Extension|T-Bar|EZ-Bar/.test(item)), "Road Gym hides machine, T-bar and EZ-bar work");
+console.log("Equipment profile checks passed.");
+
+// Progress forms keep typed values when another form saves.
+const pd = makeContext({ profile: { bodyweight: 200 } });
+const pdField = (id, value) => { const field = { id, value, defaultValue: "", innerHTML: "", classList: { add() {}, remove() {} } }; pd.elements.set(id, field); return field; };
+vm.runInContext("state.view = 'progress'", pd.context);
+const typedFields = [pdField("logWeight", "199"), pdField("measurechest", "44"), pdField("checkSleep", "7"), pdField("prepPosing", "20")];
+pd.context.document.querySelectorAll = (selector) => (selector.includes("input[id]") ? typedFields : []);
+// Re-rendering the page recreates every input empty.
+Object.defineProperty(pd.context.document.getElementById("app"), "innerHTML", {
+  get() { return ""; },
+  set() { typedFields.forEach((field) => { field.value = field.defaultValue; }); }
+});
+vm.runInContext("saveWeight()", pd.context);
+assert.equal(vm.runInContext("state.weightLogs[0].bodyweight", pd.context), 199, "the weight saved");
+assert.deepEqual(typedFields.map((field) => field.value), ["", "44", "7", "20"], "saving weight keeps the other forms' typed values and clears its own");
+console.log("Progress draft checks passed.");
+
+// Prep and bulking checklist items come from saved logs.
+const sc = makeContext({ profile: { bodyweight: 200 } });
+vm.runInContext(`
+  const now = Date.now();
+  state.prepLogs = [{ id: "p", date: new Date().toISOString(), cardioType: "Bike", cardioMinutes: 40, steps: 12000, posingMinutes: 20 }];
+  state.measurements = [{ id: "m1", date: new Date(now).toISOString(), waist: 32 }, { id: "m2", date: new Date(now - 5 * 86400000).toISOString(), waist: 32.4 }];
+  state.weightLogs = [{ id: "w1", date: new Date(now).toISOString(), bodyweight: 200 }, { id: "w2", date: new Date(now - 4 * 86400000).toISOString(), bodyweight: 201 }];
+`, sc.context);
+const prepItems = vm.runInContext("stageChecklist({ phase: 'prep' })", sc.context);
+assert.ok(prepItems.filter((item) => /Posing|Cardio|Waist/.test(item.label)).every((item) => item.done), "logged posing, cardio and waist/scale data check the prep items");
+vm.runInContext("state.trainingBlock = { id: 'b', name: 'Block', startDate: new Date().toISOString().slice(0, 10), accumulationWeeks: 4, deload: true, focus: ['biceps'] }", sc.context);
+const bulkItems = vm.runInContext("stageChecklist({ phase: 'bulking' })", sc.context);
+assert.ok(bulkItems.filter((item) => /Weak body part|Progressive overload|Waist gain/.test(item.label)).every((item) => item.done), "a running block with a weak point checks the bulking items");
+console.log("Stage checklist checks passed.");

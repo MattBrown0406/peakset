@@ -2173,21 +2173,34 @@ function stageChecklist(timeline) {
     { done: !workoutDue, label: "Training log is current" }
   ];
 
+  // Waist vs scale needs two waist readings (tape or Health) and two weigh-ins
+  // in the last two weeks to compare the trends.
+  const recentWaist = state.measurements.filter((entry) => entry.waist && isWithinDays(entry.date, 14)).length;
+  const recentWeighIns = state.weightLogs.filter((entry) => entry.bodyweight && isWithinDays(entry.date, 14)).length;
+  const waistReady = recentWaist >= 2 && recentWeighIns >= 2;
+  const waistItem = (label) => ({
+    done: waistReady,
+    label,
+    detail: waistReady ? "" : `Needs 2 waist readings and 2 weigh-ins in the last 14 days. ${Math.min(recentWaist, 2)}/2 waist · ${Math.min(recentWeighIns, 2)}/2 weigh-ins.`
+  });
+  const weekPrep = state.prepLogs.filter((entry) => isWithinDays(entry.date, 7));
+
   if (timeline.phase === "prep") {
     return [
       ...base,
-      { done: false, label: "Posing practice scheduled" },
-      { done: false, label: "Cardio target reviewed" },
-      { done: false, label: "Waist trend checked against scale trend" }
+      { done: weekPrep.some((entry) => Number(entry.posingMinutes) > 0), label: "Posing practice logged this week" },
+      { done: weekPrep.some((entry) => Number(entry.cardioMinutes) > 0), label: "Cardio logged this week" },
+      waistItem("Waist trend checked against scale trend")
     ];
   }
 
   if (timeline.phase === "bulking") {
+    const block = state.trainingBlock && typeof validTrainingBlock === "function" ? validTrainingBlock(state.trainingBlock) : null;
     return [
       ...base,
-      { done: false, label: "Weak body part priority selected" },
-      { done: false, label: "Progressive overload target set" },
-      { done: false, label: "Waist gain checked before adding food" }
+      { done: Boolean(block?.focus.length), label: "Weak body part priority selected", detail: block?.focus.length ? "" : "Pick weak points when you start a training block in Plans." },
+      { done: Boolean(block), label: "Progressive overload block running", detail: block ? "" : "Start a training block in Plans for weekly progression targets." },
+      waistItem("Waist gain checked before adding food")
     ];
   }
 

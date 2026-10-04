@@ -18,6 +18,7 @@ struct WatchSnapshot: Codable, Equatable {
         let index: Int
         let id: String?
         let rest: Double?
+        let restAfterNext: Bool?
         let name: String
         let targetReps: String
         let repsOnly: Bool
@@ -56,6 +57,9 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     @Published var reps: Double = 8 { didSet { if !loadingDraft { draftEdited = true } } }
     @Published private(set) var reachable = false
     @Published private(set) var localRest: (start: Date, end: Date)?
+    /// Only rests started here get a watch-local alert; a phone rest adjusted
+    /// here keeps relying on the phone's (mirrored) notification.
+    private var localRestStartedOnWatch = false
     /// Skip pressed on the watch while the phone (possibly locked) still
     /// reports an older rest as running.
     private var restSkippedAt: Date?
@@ -139,14 +143,24 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             "setLabel": set.label,
             "weight": weightText,
             "reps": repsText,
-            "completedAt": Date().timeIntervalSince1970 * 1000
+            "completedAt": Date().timeIntervalSince1970 * 1000,
+            // Lets a locked iPhone show this rest on the Lock Screen.
+            "restEndsAt": exercise.restAfterNext == false ? 0 : Date().addingTimeInterval(max(15, exercise.rest ?? 120)).timeIntervalSince1970 * 1000,
+            "workoutTitle": current.title,
+            "exerciseName": exercise.name,
+            "completedSets": current.completedSets + 1,
+            "totalSets": current.totalSets
         ])
         // Apply locally so the next set and the rest timer appear immediately.
         pendingCompletions.append(PendingCompletion(exerciseIndex: exercise.index, setIndex: set.index, exerciseID: exercise.id ?? "", label: set.label, weight: weightText, reps: repsText, completedAt: Date()))
         Self.markDone(&current, exerciseIndex: selectedExercise, setIndex: set.index, weight: weightText, reps: repsText)
         snapshot = current
         let restSeconds = max(15, exercise.rest ?? 120)
-        localRest = (Date(), Date().addingTimeInterval(restSeconds))
+        let restEnds = Date().addingTimeInterval(restSeconds)
+        if exercise.restAfterNext != false {
+            localRest = (Date(), restEnds)
+            localRestStartedOnWatch = true
+        }
         followCurrent = true
         draftEdited = false
         if current.exercises[selectedExercise].sets.allSatisfy(\.done),
@@ -164,6 +178,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         // Adjust whichever rest is showing, even one the phone started.
         let current = (localRest.flatMap { $0.end > Date() ? $0 : nil }) ?? snapshotRest
         if let rest = current {
+            localRestStartedOnWatch = localRest != nil && localRestStartedOnWatch
             localRest = (rest.start, max(Date().addingTimeInterval(1), rest.end.addingTimeInterval(TimeInterval(seconds))))
             scheduleRestAlert()
         }
@@ -242,7 +257,10 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             Self.markDone(&next, exerciseIndex: exerciseIndex, setIndex: setIndex, weight: pending.weight, reps: pending.reps)
             return pending
         }
-        if pendingCompletions.isEmpty { localRest = nil }
+        if pendingCompletions.isEmpty {
+            localRest = nil
+            localRestStartedOnWatch = false
+        }
         // A rest the phone started after the watch's Skip replaces the skip.
         if let skipped = restSkippedAt, let started = next.rest.startedAt, Date(timeIntervalSince1970: started / 1000) > skipped {
             restSkippedAt = nil
@@ -285,7 +303,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         // A rest started on the watch has no phone notification behind it
         // (the phone may be locked), so the watch schedules its own; it fires
         // even with the wrist down when the app is suspended.
-        if let localRest, localRest.end == endsAt {
+        if localRestStartedOnWatch, let localRest, localRest.end == endsAt {
             let content = UNMutableNotificationContent()
             content.title = "Rest complete"
             content.body = "Your next set is ready."

@@ -57,9 +57,15 @@ function buildWatchSnapshot() {
   const exercises = workout.exercises.map((exercise, index) => {
     const nextSetIndex = Math.max(0, exercise.sets.findIndex((set) => !set.done));
     const suggestion = suggestedSetValues(exercise, nextSetIndex);
+    // In a superset no rest follows a set while a partner's matching set is open.
+    const nextSet = exercise.sets[nextSetIndex];
+    const ordinal = nextSet ? exercise.sets.slice(0, nextSetIndex + 1).filter((item) => Boolean(item.dropSet) === Boolean(nextSet.dropSet)).length : 0;
+    const partnerPending = Boolean(exercise.group) && workout.exercises.some((partner, partnerIndex) => partnerIndex !== index && partner.group === exercise.group
+      && partner.sets.filter((item) => Boolean(item.dropSet) === Boolean(nextSet?.dropSet))[ordinal - 1]?.done === false);
     return {
       index,
       id: exercise.id,
+      restAfterNext: !partnerPending,
       rest: Number(exercise.rest) || DEFAULT_REST_SECONDS,
       name: exercise.name,
       targetReps: String(exercise.targetReps || ""),
@@ -200,7 +206,7 @@ function applyWatchCommand(command) {
     // caught up.
     if (set.done && startedNewRest && Number.isFinite(completedAt) && Date.now() - completedAt > 3000) {
       const remaining = Math.ceil((completedAt + (Number(exercise.rest) || DEFAULT_REST_SECONDS) * 1000 - Date.now()) / 1000);
-      if (remaining > 0) startTimer(remaining, true, exIndex, false);
+      if (remaining > 0) startTimer(remaining, state.view === "session", exIndex, false);
       else stopTimer();
     }
     return Boolean(set.done);

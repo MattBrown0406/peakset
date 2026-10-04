@@ -79,8 +79,8 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
         let handler = commandHandler
         lock.unlock()
         guard let handler, let id = command["commandId"] as? String else { return }
-        DispatchQueue.main.async {
-            handler(command) { [weak self] in self?.acknowledge(id) }
+        DispatchQueue.main.async { [weak self] in
+            handler(command) { self?.acknowledge(id) }
         }
     }
 
@@ -133,11 +133,27 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
         }
     }
 
-    private static func applyRestCommandNatively(_ command: [String: Any]) {
+    @MainActor private static func applyRestCommandNatively(_ command: [String: Any]) {
         switch command["action"] as? String {
         case "skipRest":
             PeakSetTimerService.shared.cancel()
             PeakSetLiveActivityManager.shared.end()
+        case "completeSet":
+            let endsAtMs = (command["restEndsAt"] as? NSNumber)?.doubleValue ?? 0
+            guard endsAtMs > 0 else { return }
+            let endsAt = Date(timeIntervalSince1970: endsAtMs / 1000)
+            guard endsAt > Date() else { return }
+            // The watch alerts for its own rests, so only the Lock Screen
+            // countdown is updated here (no phone notification).
+            PeakSetLiveActivityManager.shared.show(.init(
+                startedAt: Date(),
+                endsAt: endsAt,
+                workoutTitle: command["workoutTitle"] as? String ?? "Mass Method",
+                exerciseName: command["exerciseName"] as? String ?? "Next set",
+                nextSetLabel: "",
+                completedSets: (command["completedSets"] as? NSNumber)?.intValue ?? 0,
+                totalSets: (command["totalSets"] as? NSNumber)?.intValue ?? 0
+            ))
         case "adjustRest":
             let seconds = (command["seconds"] as? NSNumber)?.doubleValue ?? 0
             guard seconds != 0 else { return }

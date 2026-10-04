@@ -141,28 +141,49 @@ function activeEquipmentProfile() {
   return state.equipmentProfiles.find((profile) => profile.id === state.activeEquipmentProfileId) || state.equipmentProfiles[0];
 }
 
+// Most specific phrases first; each match is removed so "cable bar" or
+// "pull-up bar" never also counts as a barbell.
+const EQUIPMENT_KEYWORDS = [
+  ["pull-up bar", ["pull-up bar"]],
+  ["dip station", ["dip bar", "dip station", "captain chair"]],
+  ["landmine", ["landmine", "t-bar"]],
+  ["cable", ["cable bar", "cable", "rope", "handle", "ankle cuff"]],
+  ["smith", ["smith machine", "smith"]],
+  ["barbell", ["barbell", "ez bar", "bar"]],
+  ["dumbbells", ["dumbbell"]],
+  ["machine", ["machine", "pec deck", "leg press", "leg extension"]],
+  ["bench", ["bench", "step"]],
+  ["bodyweight", ["bodyweight", "floor"]],
+  ["bands", ["band"]],
+  ["rack", ["rack"]],
+  ["plates", ["plate"]],
+  ["stability ball", ["stability ball"]],
+  ["ab wheel", ["ab wheel"]]
+];
+
+function equipmentRequirements(text) {
+  let rest = text;
+  const requirements = [];
+  EQUIPMENT_KEYWORDS.forEach(([name, matches]) => {
+    matches.forEach((match) => {
+      if (!rest.includes(match)) return;
+      if (!requirements.includes(name)) requirements.push(name);
+      rest = rest.split(match).join(" ");
+    });
+  });
+  return requirements;
+}
+
+// "Barbell or dumbbell, bench" = (barbell or dumbbells) and a bench. An
+// alternative with no known equipment (e.g. "partner") counts as unavailable.
 function exerciseMatchesEquipmentProfile(exercise, profile = activeEquipmentProfile()) {
   if (!profile || !profile.equipment?.length) return true;
-  const equipment = exercise.equipment.toLowerCase();
   const available = new Set(profile.equipment.map((item) => item.toLowerCase()));
-  const requirements = [];
-  const add = (name, matches) => { if (matches.some((match) => equipment.includes(match))) requirements.push(name); };
-  add("barbell", ["barbell"]);
-  add("dumbbells", ["dumbbell"]);
-  add("cable", ["cable", "rope"]);
-  if (!equipment.includes("smith") && !equipment.includes("cable")) add("machine", ["machine", "pec deck", "leg press", "hack squat"]);
-  add("smith", ["smith"]);
-  add("bench", ["bench"]);
-  add("bodyweight", ["bodyweight", "floor"]);
-  add("bands", ["band"]);
-  add("rack", ["rack"]);
-  add("pull-up bar", ["pull-up bar"]);
-  add("dip station", ["dip bar", "dip station"]);
-  add("plates", ["plate"]);
-  add("landmine", ["landmine"]);
-  add("stability ball", ["stability ball"]);
-  add("ab wheel", ["ab wheel"]);
-  return requirements.length === 0 || requirements.every((requirement) => available.has(requirement));
+  return String(exercise?.equipment || "").toLowerCase().split(",").map((part) => part.trim()).filter(Boolean).every((part) =>
+    part.split(/\s+or\s+/).some((alternative) => {
+      const requirements = equipmentRequirements(alternative);
+      return requirements.length > 0 && requirements.every((requirement) => available.has(requirement));
+    }));
 }
 
 function exerciseSetting(id) {
@@ -869,6 +890,13 @@ function handleNativeTimerReconcile(payload) {
     saveState();
     toast("Rest complete. Next set.");
     render();
+  } else if (state.timer.running && Date.now() - Number(state.timer.endsAt) > 1500) {
+    // The rest ended while the app was away and its notification was already
+    // tapped or cleared: settle quietly instead of ringing again.
+    window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel" });
+    Object.assign(state.timer, { running: false, left: 0, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null });
+    saveState();
+    render();
   } else if (state.timer.running) {
     ensureTimerTick();
   }
@@ -1056,3 +1084,31 @@ if (!state.timer.running) window.webkit?.messageHandlers?.peaksetTimer?.postMess
 
 saveState();
 render();
+
+// Progress has four separate forms, and every save (or trend/pose tap)
+// redraws the page. Typed-but-unsaved values in the other forms are carried
+// across the redraw; the form being saved starts fresh.
+const PROGRESS_DRAFT_FIELD = /^(logWeight|logWeightNote|measure[A-Za-z]+|check[A-Z][A-Za-z]*|prep[A-Z][A-Za-z]*)$/;
+let progressFormBeingSaved = null;
+const baseRenderForProgressDrafts = render;
+render = function renderKeepingProgressDrafts() {
+  const typed = state.view === "progress"
+    ? [...document.querySelectorAll("#app input[id], #app textarea[id]")]
+      .filter((field) => PROGRESS_DRAFT_FIELD.test(field.id) && !progressFormBeingSaved?.test(field.id) && field.value !== field.defaultValue)
+      .map((field) => [field.id, field.value])
+    : [];
+  baseRenderForProgressDrafts();
+  if (state.view !== "progress") return;
+  typed.forEach(([id, value]) => {
+    const field = document.getElementById(id);
+    if (field) field.value = value;
+  });
+};
+
+[["saveWeight", /^logWeight/], ["saveMeasurement", /^measure/], ["saveWeeklyCheckIn", /^check[A-Z]/], ["savePrepLog", /^prep[A-Z]/]].forEach(([name, fields]) => {
+  const baseSave = globalThis[name];
+  globalThis[name] = function saveProgressForm(...args) {
+    progressFormBeingSaved = fields;
+    try { return baseSave.apply(this, args); } finally { progressFormBeingSaved = null; }
+  };
+});
