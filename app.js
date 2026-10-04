@@ -678,21 +678,40 @@ const defaultState = {
   timer: { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null }
 };
 
+function freshDefaultState() {
+  return {
+    ...defaultState,
+    customPlans: [],
+    workoutLogs: [],
+    weightLogs: [],
+    measurements: [],
+    timer: { ...defaultState.timer }
+  };
+}
+
 let state = loadState();
 let timerTick = null;
 let audioContext = null;
 let bellAudio = null;
 let bellPlaybackStatus = { mode: "idle", error: "" };
+let coachNoteDraft = "";
+let liveCustomizerOpen = false;
+let exerciseHistorySelection = "";
+
+function clampRestSeconds(value) {
+  return Math.max(15, Math.min(300, Number(value) || DEFAULT_REST_SECONDS));
+}
 
 function loadState() {
   try {
-    const stored = JSON.parse(localStorage.getItem(STORE_KEY)) || {};
-    // Deep-copy the defaults: a shallow spread shares the default arrays with
-    // live state, so first-run logs silently mutated defaultState itself.
-    const next = { ...structuredClone(defaultState), ...stored };
-    if (!Array.isArray(next.weightLogs)) next.weightLogs = [];
+    const parsed = JSON.parse(localStorage.getItem(STORE_KEY));
+    const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    const next = { ...freshDefaultState(), ...stored };
+    ["customPlans", "workoutLogs", "weightLogs", "measurements"].forEach((key) => {
+      next[key] = Array.isArray(next[key]) ? [...next[key]] : [];
+    });
     if (next.weightLogs.length === 0) {
-      const migratedWeights = (next.measurements || [])
+      const migratedWeights = next.measurements
         .filter((entry) => entry.bodyweight)
         .map((entry) => ({
           id: `migrated-${entry.id || entry.date}`,
@@ -711,15 +730,34 @@ function loadState() {
         }];
       }
     }
-    if (!next.timer?.running) {
-      next.timer = { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null };
+    const savedTimer = next.timer && typeof next.timer === "object" ? next.timer : {};
+    const seconds = clampRestSeconds(savedTimer.seconds);
+    const endsAt = Number(savedTimer.endsAt);
+    if (savedTimer.running && Number.isFinite(endsAt) && endsAt > Date.now()) {
+      next.timer = {
+        seconds,
+        left: Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)),
+        running: true,
+        startedAt: Number(savedTimer.startedAt) || null,
+        endsAt,
+        fullscreen: Boolean(savedTimer.fullscreen),
+        exerciseIndex: Number.isInteger(savedTimer.exerciseIndex) ? savedTimer.exerciseIndex : null
+      };
     } else {
-      next.timer = { fullscreen: false, exerciseIndex: null, ...next.timer };
+      next.timer = {
+        seconds,
+        left: 0,
+        running: false,
+        startedAt: null,
+        endsAt: null,
+        fullscreen: Boolean(savedTimer.running && savedTimer.fullscreen),
+        exerciseIndex: Number.isInteger(savedTimer.exerciseIndex) ? savedTimer.exerciseIndex : null
+      };
     }
-    next.measurements = (next.measurements || []).map(({ bodyweight, ...entry }) => entry);
+    next.measurements = next.measurements.map(({ bodyweight, ...entry }) => entry);
     return next;
   } catch {
-    return structuredClone(defaultState);
+    return freshDefaultState();
   }
 }
 
@@ -826,7 +864,9 @@ function setChoice(inputId, value, button) {
   if (!input) return;
   input.value = value;
   document.querySelectorAll(`[data-choice="${inputId}"]`).forEach((item) => item.classList.remove("active"));
+  document.querySelectorAll(`[data-choice="${inputId}"]`).forEach((item) => item.setAttribute("aria-pressed", "false"));
   button.classList.add("active");
+  button.setAttribute("aria-pressed", "true");
 }
 
 function toast(message) {
@@ -834,6 +874,8 @@ function toast(message) {
   if (old) old.remove();
   const el = document.createElement("div");
   el.className = "toast";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
   el.textContent = message;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2600);
@@ -1019,7 +1061,8 @@ function saveProfile() {
     bodyweight: profile.bodyweight,
     note: "Starting profile"
   });
-  if (Object.values(measurements).some((value) => value !== null && Number.isFinite(value))) {
+  const hasMeasurements = Object.values(measurements).some((value) => value !== null && Number.isFinite(value));
+  if (hasMeasurements) {
     state.measurements.unshift({
       id: crypto.randomUUID(),
       date: new Date().toISOString(),
@@ -1116,10 +1159,11 @@ function navHtml() {
     ["library", "Library"],
     ["builder", "Builder"],
     ["progress", "Progress"],
+    ["history", "History"],
     ["logbook", "Logbook"]
   ];
   return items.map(([id, label]) => `
-    <button class="${state.view === id ? "active" : ""}" onclick="setView('${id}')">${label}</button>
+    <button class="${state.view === id ? "active" : ""}" ${state.view === id ? 'aria-current="page"' : ""} onclick="setView('${id}')">${label}</button>
   `).join("");
 }
 
@@ -1183,13 +1227,211 @@ function stats() {
   return { lastWeight, weeklyVolume, weightDelta, workouts: lastSeven.length };
 }
 
+function normalizedExerciseName(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function loggedExerciseId(set) {
+  const stableMatch = exerciseLibrary.find((exercise) => exercise.id === set?.exerciseId);
+  if (stableMatch) return stableMatch.id;
+  const loggedName = normalizedExerciseName(set?.exercise);
+  return exerciseLibrary.find((exercise) => normalizedExerciseName(exercise.name) === loggedName)?.id || null;
+}
+
+function workoutLogSets(log) {
+  return Array.isArray(log?.sets) ? log.sets : [];
+}
+
+function selectedExerciseHistoryId() {
+  if (exerciseLibrary.some((exercise) => exercise.id === exerciseHistorySelection)) return exerciseHistorySelection;
+  const recentId = [...state.workoutLogs]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .flatMap(workoutLogSets)
+    .map(loggedExerciseId)
+    .find(Boolean);
+  exerciseHistorySelection = recentId || exerciseLibrary[0]?.id || "";
+  return exerciseHistorySelection;
+}
+
+function setExerciseHistory(id) {
+  if (!exerciseLibrary.some((exercise) => exercise.id === id)) return false;
+  exerciseHistorySelection = id;
+  render();
+  return true;
+}
+
+function exerciseHistoryData(exerciseId) {
+  const exercise = exerciseLibrary.find((item) => item.id === exerciseId);
+  if (!exercise) return null;
+
+  const sessions = state.workoutLogs.map((log) => {
+    const sets = workoutLogSets(log)
+      .filter((set) => loggedExerciseId(set) === exerciseId)
+      .map((set) => {
+        const rawWeight = Number(set.weight);
+        const rawReps = Number(set.reps);
+        const weight = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : null;
+        const reps = Number.isFinite(rawReps) && rawReps > 0 ? rawReps : null;
+        const volume = weight !== null && reps !== null ? weight * reps : 0;
+        const estimatedOneRepMax = weight !== null && reps !== null && reps <= 30
+          ? weight * (1 + reps / 30)
+          : 0;
+        return {
+          weight,
+          reps,
+          volume,
+          estimatedOneRepMax,
+          dropSet: Boolean(set.dropSet),
+          label: set.label || ""
+        };
+      });
+    return {
+      id: log.id,
+      title: log.title || "Workout",
+      date: log.date,
+      sets,
+      volume: sets.reduce((sum, set) => sum + set.volume, 0)
+    };
+  })
+    .filter((session) => session.sets.length)
+    .sort((a, b) => {
+      const aTime = new Date(a.date).getTime();
+      const bTime = new Date(b.date).getTime();
+      return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+    });
+
+  const sets = sessions.flatMap((session) => session.sets.map((set) => ({ ...set, date: session.date, title: session.title })));
+  const bestSet = sets.reduce((best, set) => set.estimatedOneRepMax > (best?.estimatedOneRepMax || 0) ? set : best, null);
+  const sessionVolumes = sessions.slice(0, 12).reverse().map((session) => ({
+    date: session.date,
+    title: session.title,
+    volume: session.volume
+  }));
+  return {
+    exercise,
+    sessionCount: sessions.length,
+    setCount: sets.length,
+    totalVolume: sets.reduce((sum, set) => sum + set.volume, 0),
+    bestWeight: sets.reduce((best, set) => Math.max(best, set.weight || 0), 0),
+    bestReps: sets.reduce((best, set) => Math.max(best, set.reps || 0), 0),
+    estimatedOneRepMax: bestSet?.estimatedOneRepMax || 0,
+    bestSet,
+    bestSessionVolume: sessions.reduce((best, session) => Math.max(best, session.volume), 0),
+    sessionVolumes,
+    recentSessions: sessions.slice(0, 8)
+  };
+}
+
+function historyMetric(value, suffix = "") {
+  if (!Number.isFinite(value) || value <= 0) return "--";
+  return `${Number(value.toFixed(1)).toLocaleString()}${suffix}`;
+}
+
+function exerciseVolumeSparkline(entries, exerciseName) {
+  if (!entries.length) return '<div class="empty"><p class="muted">Complete this exercise in at least one saved workout to start the trend.</p></div>';
+  const width = 620;
+  const height = 104;
+  const values = entries.map((entry) => entry.volume);
+  const max = Math.max(1, ...values);
+  const coordinates = values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : (index / (values.length - 1)) * width;
+    const y = height - (value / max) * (height - 20) - 10;
+    return { x, y };
+  });
+  const points = coordinates.map(({ x, y }) => `${x},${y}`).join(" ");
+  const summary = entries.map((entry) => `${formatShortDate(entry.date)}: ${Math.round(entry.volume).toLocaleString()} pounds`).join(", ");
+  return `
+    <svg class="sparkline exercise-history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(exerciseName)} session volume trend. ${escapeHtml(summary)}">
+      <line x1="0" y1="${height - 8}" x2="${width}" y2="${height - 8}" stroke="rgba(255,255,255,0.12)" />
+      <polyline points="${points}" fill="none" stroke="#1ED8A5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+      ${coordinates.map(({ x, y }) => `<circle cx="${x}" cy="${y}" r="5" fill="#1ED8A5" />`).join("")}
+    </svg>
+  `;
+}
+
+function historySetSummary(set) {
+  const weight = set.weight === null ? "--" : `${Number(set.weight.toFixed(1)).toLocaleString()} lb`;
+  const reps = set.reps === null ? "-- reps" : `${Number(set.reps.toFixed(1)).toLocaleString()} reps`;
+  return `${set.dropSet ? "Drop · " : ""}${weight} × ${reps}`;
+}
+
+function renderExerciseHistory() {
+  const selectedId = selectedExerciseHistoryId();
+  const history = exerciseHistoryData(selectedId);
+  if (!history) return '<div class="empty"><p class="muted">No exercises are available.</p></div>';
+  const trainedIds = new Set(state.workoutLogs.flatMap((log) => workoutLogSets(log).map(loggedExerciseId).filter(Boolean)));
+  const options = [...exerciseLibrary].sort((a, b) => {
+    const trainedDifference = Number(trainedIds.has(b.id)) - Number(trainedIds.has(a.id));
+    return trainedDifference || a.name.localeCompare(b.name);
+  });
+  return `
+    <div class="topbar exercise-history-header">
+      <div>
+        <p class="eyebrow">Exercise history</p>
+        <h1>See what is actually moving.</h1>
+        <p class="muted">Personal records, recent sets, estimated strength, and session volume.</p>
+      </div>
+    </div>
+    <section class="card pad">
+      <div class="field">
+        <label for="exerciseHistorySelect">Exercise</label>
+        <select id="exerciseHistorySelect" onchange="setExerciseHistory(this.value)">
+          ${options.map((exercise) => `<option value="${exercise.id}" ${exercise.id === selectedId ? "selected" : ""}>${escapeHtml(exercise.name)}${trainedIds.has(exercise.id) ? "" : " · No history"}</option>`).join("")}
+        </select>
+      </div>
+    </section>
+    <div class="grid today-stats history-stats">
+      <article class="card stat"><p class="value">${history.sessionCount}</p><p class="label">Sessions</p></article>
+      <article class="card stat"><p class="value">${history.setCount}</p><p class="label">Logged sets</p></article>
+      <article class="card stat"><p class="value">${historyMetric(history.bestWeight)}</p><p class="label">Heaviest lb</p></article>
+      <article class="card stat"><p class="value">${historyMetric(history.estimatedOneRepMax)}</p><p class="label">Estimated 1RM lb</p></article>
+    </div>
+    <section class="card pad history-panel history-trend-card">
+      <div class="card-head">
+        <div><p class="eyebrow">Volume trend</p><h2>${escapeHtml(history.exercise.name)}</h2></div>
+        <span class="badge blue">Last ${history.sessionVolumes.length || 0} sessions</span>
+      </div>
+      ${exerciseVolumeSparkline(history.sessionVolumes, history.exercise.name)}
+      <div class="history-trend-labels">
+        <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes[0].date) : "First session"}</span>
+        <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes.at(-1).date) : "Latest session"}</span>
+      </div>
+    </section>
+    <section class="card pad history-panel">
+      <div class="card-head"><div><p class="eyebrow">Personal records</p><h2>Best performances</h2></div></div>
+      <div class="grid two history-records">
+        <article class="log-card card"><strong>Estimated 1RM</strong><p class="history-record-value">${historyMetric(history.estimatedOneRepMax, " lb")}</p><p class="muted">${history.bestSet ? `${historyMetric(history.bestSet.weight, " lb")} × ${historyMetric(history.bestSet.reps, " reps")} · ${formatShortDate(history.bestSet.date)}` : "No weighted sets yet."}</p></article>
+        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${historyMetric(history.bestSessionVolume, " lb")}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
+        <article class="log-card card"><strong>Highest reps</strong><p class="history-record-value">${historyMetric(history.bestReps)}</p><p class="muted">Highest recorded reps in one set.</p></article>
+        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${historyMetric(history.totalVolume, " lb")}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
+      </div>
+    </section>
+    <section class="card pad history-panel">
+      <div class="card-head"><div><p class="eyebrow">Recent work</p><h2>Sets by session</h2></div></div>
+      <div class="history-session-list">
+        ${history.recentSessions.map((session) => `
+          <article class="log-card card history-session">
+            <div class="card-head"><strong>${escapeHtml(session.title)}</strong><span class="badge">${formatShortDate(session.date)}</span></div>
+            <p class="muted">${session.sets.length} ${session.sets.length === 1 ? "set" : "sets"} · ${Math.round(session.volume).toLocaleString()} lb volume</p>
+            <div class="history-set-list">${session.sets.map((set) => `<span class="history-set">${escapeHtml(historySetSummary(set))}</span>`).join("")}</div>
+          </article>
+        `).join("") || '<div class="empty"><p class="muted">No saved sets for this exercise yet. Complete a workout and they will appear here.</p></div>'}
+      </div>
+    </section>
+  `;
+}
+
 function isWithinDays(dateString, days) {
   const timestamp = new Date(dateString).getTime();
-  return Number.isFinite(timestamp) && Date.now() - timestamp < days * 86400000;
+  const age = Date.now() - timestamp;
+  return Number.isFinite(timestamp) && age >= 0 && age < days * 86400000;
 }
 
 function formatShortDate(dateString) {
-  const date = new Date(dateString);
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateString || ""));
+  const date = dateOnly
+    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+    : new Date(dateString);
   return Number.isFinite(date.getTime()) ? date.toLocaleDateString() : "No date";
 }
 
@@ -1222,8 +1464,8 @@ function coachReportData(days) {
     measurements,
     volume,
     weightDelta,
-    latestWeight: state.weightLogs[0],
-    latestMeasurement: state.measurements[0]
+    latestWeight: weights[0],
+    latestMeasurement: measurements[0]
   };
 }
 
@@ -1411,7 +1653,8 @@ async function shareNativePdf(blob, filename) {
 
 async function exportLogbookPdf() {
   const days = Number(state.logbookRange || 7);
-  const note = document.getElementById("coachNote")?.value || "";
+  const note = document.getElementById("coachNote")?.value ?? coachNoteDraft;
+  coachNoteDraft = note;
   const lines = buildCoachReportLines(days, note);
   const blob = createPdfBlob(lines);
   const filename = `mass-method-coach-log-${new Date().toISOString().slice(0, 10)}.pdf`;
@@ -2038,10 +2281,10 @@ let builderDraft = [];
 
 function addBuilderExercise() {
   const id = document.getElementById("customExercise").value;
-  const sets = Number(document.getElementById("customSets").value) || 3;
-  const reps = document.getElementById("customReps").value || "8-12";
-  const rest = Number(document.getElementById("customRest").value) || DEFAULT_REST_SECONDS;
-  const dropSets = Math.max(0, Math.min(4, Number(document.getElementById("customDropSets").value) || 0));
+  const sets = Math.max(1, Math.min(10, Math.trunc(Number(document.getElementById("customSets").value) || 3)));
+  const reps = document.getElementById("customReps").value.trim() || "8-12";
+  const rest = clampRestSeconds(document.getElementById("customRest").value);
+  const dropSets = Math.max(0, Math.min(4, Math.trunc(Number(document.getElementById("customDropSets").value) || 0)));
   builderDraft.push([id, sets, reps, rest, dropSets]);
   document.getElementById("builderDraft").innerHTML = renderBuilderDraft();
 }
@@ -2085,9 +2328,10 @@ function startCustomWorkout() {
     exercises: builderDraft
   };
 
-  builderDraft = [];
-  beginWorkoutFromPlan(plan);
-  toast("Workout started.");
+  if (beginWorkoutFromPlan(plan)) {
+    builderDraft = [];
+    toast("Workout started.");
+  }
 }
 
 function workoutSetRows(sets, dropSets = 0) {
@@ -2114,6 +2358,13 @@ function workoutSetRows(sets, dropSets = 0) {
 }
 
 function beginWorkoutFromPlan(plan) {
+  if (state.activeWorkout) {
+    state.view = "session";
+    saveState();
+    render();
+    toast("Finish or cancel your current workout before starting another.");
+    return false;
+  }
   state.activeWorkout = {
     id: crypto.randomUUID(),
     planId: plan.id,
@@ -2130,9 +2381,7 @@ function beginWorkoutFromPlan(plan) {
         targetSets: Number(sets),
         targetDropSets: drops,
         targetReps: String(reps),
-        rest: plan.id.startsWith("custom-") || plan.id.startsWith("quick-") || plan.id.startsWith("builder-")
-          ? Number(rest || plan.rest || DEFAULT_REST_SECONDS)
-          : DEFAULT_REST_SECONDS,
+        rest: clampRestSeconds(rest ?? plan.rest ?? DEFAULT_REST_SECONDS),
         sets: workoutSetRows(sets, drops)
       };
     })
@@ -2141,19 +2390,20 @@ function beginWorkoutFromPlan(plan) {
   state.timer = { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null };
   saveState();
   render();
+  return true;
 }
 
 function startWorkout(planId) {
   const plan = allPlans().find((item) => item.id === planId);
-  if (!plan) return;
-  beginWorkoutFromPlan(plan);
+  if (!plan) return false;
+  return beginWorkoutFromPlan(plan);
 }
 
 function quickStartExercise(id) {
   const ex = exerciseById(id);
   // Quick sessions are transient. Start them directly instead of saving a
   // throwaway template into customPlans, which cluttered Plans and Builder.
-  beginWorkoutFromPlan({
+  return beginWorkoutFromPlan({
     id: `quick-${Date.now()}`,
     title: `${ex.name} Quick Log`,
     muscle: ex.muscle,
@@ -2164,17 +2414,138 @@ function quickStartExercise(id) {
   });
 }
 
+function activeWorkoutExerciseOptions(currentExerciseId = null) {
+  const current = currentExerciseId ? exerciseLibrary.find((exercise) => exercise.id === currentExerciseId) : null;
+  const existingIds = new Set((state.activeWorkout?.exercises || []).map((exercise) => exercise.id));
+  return exerciseLibrary.filter((exercise) => {
+    if (exercise.id === currentExerciseId) return false;
+    if (existingIds.has(exercise.id)) return false;
+    if (state.activeWorkout?.phase === "travel" && !exercise.hotel) return false;
+    return !current || exercise.muscle === current.muscle;
+  });
+}
+
+function renderActiveExerciseOptions(currentExerciseId = null) {
+  return activeWorkoutExerciseOptions(currentExerciseId).map((exercise) => `
+    <option value="${exercise.id}">${escapeHtml(exercise.name)} — ${escapeHtml(exercise.muscle)} — ${escapeHtml(exercise.equipment)}</option>
+  `).join("");
+}
+
+function exerciseHasProgress(exercise) {
+  return exercise.sets.some((set) => set.done || set.weight !== "" || set.reps !== "");
+}
+
+function addExerciseToActiveWorkout() {
+  if (!state.activeWorkout) return false;
+  const id = document.getElementById("activeExerciseToAdd")?.value;
+  const exercise = exerciseLibrary.find((item) => item.id === id);
+  if (!exercise) return false;
+  if (state.activeWorkout.exercises.some((item) => item.id === exercise.id)) {
+    toast(`${exercise.name} is already in this workout.`);
+    return false;
+  }
+  if (state.activeWorkout.phase === "travel" && !exercise.hotel) {
+    toast(`${exercise.name} is not available for a Road Gym workout.`);
+    return false;
+  }
+  const sets = Math.max(1, Math.min(10, Math.trunc(Number(document.getElementById("activeExerciseSets")?.value) || 3)));
+  const reps = document.getElementById("activeExerciseReps")?.value.trim() || "8-12";
+  const rest = clampRestSeconds(document.getElementById("activeExerciseRest")?.value);
+  const dropSets = Math.max(0, Math.min(4, Math.trunc(Number(document.getElementById("activeExerciseDropSets")?.value) || 0)));
+  state.activeWorkout.exercises.push({
+    id: exercise.id,
+    name: exercise.name,
+    targetSets: sets,
+    targetDropSets: dropSets,
+    targetReps: reps,
+    rest,
+    sets: workoutSetRows(sets, dropSets)
+  });
+  saveState();
+  render();
+  toast(`${exercise.name} added to this workout.`);
+  return true;
+}
+
+function moveActiveWorkoutExercise(index, direction) {
+  const exercises = state.activeWorkout?.exercises;
+  const target = index + direction;
+  if (!exercises || target < 0 || target >= exercises.length) return false;
+  [exercises[index], exercises[target]] = [exercises[target], exercises[index]];
+  if (state.timer.exerciseIndex === index) state.timer.exerciseIndex = target;
+  else if (state.timer.exerciseIndex === target) state.timer.exerciseIndex = index;
+  saveState();
+  render();
+  return true;
+}
+
+function removeActiveWorkoutExercise(index) {
+  const exercises = state.activeWorkout?.exercises;
+  const exercise = exercises?.[index];
+  if (!exercise) return false;
+  if (exercises.length === 1) {
+    toast("A workout must keep at least one exercise.");
+    return false;
+  }
+  if (exerciseHasProgress(exercise)) {
+    toast("This exercise has entered sets. Clear them first so no workout data is lost.");
+    return false;
+  }
+  exercises.splice(index, 1);
+  if (state.timer.exerciseIndex === index) {
+    clearInterval(timerTick);
+    timerTick = null;
+    state.timer = { ...defaultState.timer };
+  } else if (state.timer.exerciseIndex > index) {
+    state.timer.exerciseIndex -= 1;
+  }
+  saveState();
+  render();
+  toast(`${exercise.name} removed.`);
+  return true;
+}
+
+function substituteActiveWorkoutExercise(index) {
+  const exercises = state.activeWorkout?.exercises;
+  const current = exercises?.[index];
+  if (!current) return false;
+  if (exerciseHasProgress(current)) {
+    toast("Completed or entered sets are protected. Add a replacement exercise instead.");
+    return false;
+  }
+  const replacementId = document.getElementById(`activeSubstitute-${index}`)?.value;
+  const replacement = activeWorkoutExerciseOptions(current.id).find((exercise) => exercise.id === replacementId);
+  if (!replacement) return false;
+  exercises[index] = {
+    ...current,
+    id: replacement.id,
+    name: replacement.name,
+    sets: workoutSetRows(current.targetSets, current.targetDropSets)
+  };
+  saveState();
+  render();
+  toast(`${current.name} substituted with ${replacement.name}.`);
+  return true;
+}
+
 function updateSet(exIndex, setIndex, field, value) {
-  state.activeWorkout.exercises[exIndex].sets[setIndex][field] = value;
+  const set = state.activeWorkout?.exercises?.[exIndex]?.sets?.[setIndex];
+  if (!set || !["weight", "reps"].includes(field)) return;
+  if (set.done && set[field] !== value) set.done = false;
+  set[field] = value;
   saveState();
 }
 
 function completeSet(exIndex, setIndex) {
-  const ex = state.activeWorkout.exercises[exIndex];
-  const set = ex.sets[setIndex];
+  const ex = state.activeWorkout?.exercises?.[exIndex];
+  const set = ex?.sets?.[setIndex];
+  if (!ex || !set) return;
   const repsOnly = isRepsOnlyExercise(ex);
-  if (!set.reps || (!repsOnly && !set.weight)) {
-    toast(repsOnly ? "Enter reps before completing the set." : "Enter weight and reps before completing the set.");
+  const weight = Number(set.weight);
+  const reps = Number(set.reps);
+  const weightValid = repsOnly || (set.weight !== "" && Number.isFinite(weight) && weight >= 0);
+  if (set.reps === "" || !Number.isInteger(reps) || reps <= 0 || !weightValid) {
+    toast(repsOnly ? "Enter reps before completing the set." : "Enter a non-negative weight and whole-number reps before completing the set.");
     return;
   }
   set.done = !set.done;
@@ -2198,7 +2569,7 @@ function adjustRest(seconds) {
 function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null) {
   primeTimerAudio();
   const now = Date.now();
-  const duration = Math.max(15, Math.min(300, Number(seconds) || DEFAULT_REST_SECONDS));
+  const duration = clampRestSeconds(seconds);
   if (state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
     state.activeWorkout.exercises[exerciseIndex].rest = duration;
   }
@@ -2297,7 +2668,7 @@ function setLogSummary(set) {
 function restPresetButtons(fullscreen = false) {
   const exerciseIndex = state.timer.exerciseIndex ?? null;
   return [60, 90, 120, 180, 240].map((seconds) => `
-    <button class="chip ${seconds === state.timer.seconds ? "active" : ""}" onclick="startTimer(${seconds}, ${fullscreen}, ${exerciseIndex === null ? "null" : exerciseIndex})">${seconds}s</button>
+    <button class="chip ${seconds === state.timer.seconds ? "active" : ""}" aria-pressed="${seconds === state.timer.seconds}" onclick="startTimer(${seconds}, ${fullscreen}, ${exerciseIndex === null ? "null" : exerciseIndex})">${seconds}s</button>
   `).join("");
 }
 
@@ -2306,10 +2677,10 @@ function renderRestOverlay(left, progress) {
   const workout = state.activeWorkout;
   const exercise = workout && state.timer.exerciseIndex !== null ? workout.exercises[state.timer.exerciseIndex] : null;
   return `
-    <div class="rest-overlay">
+    <div class="rest-overlay" role="dialog" aria-modal="true" aria-labelledby="restTimerTitle">
       <div class="rest-overlay-inner">
         <div class="rest-overlay-head">
-          <p class="eyebrow">Rest timer</p>
+          <p class="eyebrow" id="restTimerTitle">Rest timer</p>
           <button class="ghost-btn" onclick="closeRestOverlay()">Back to Workout</button>
         </div>
         <p class="muted" style="margin: 0;">${exercise ? escapeHtml(exercise.name) : "Next set"}</p>
@@ -2342,7 +2713,7 @@ function finishWorkout() {
   const sets = workout.exercises.flatMap((exercise) =>
     exercise.sets
       .filter((set) => set.done)
-      .map((set) => ({ exercise: exercise.name, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps, repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
+      .map((set) => ({ exerciseId: exercise.id, exercise: exercise.name, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps, repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
   );
   if (sets.length === 0) {
     toast("Complete at least one set before saving.");
@@ -2366,6 +2737,10 @@ function finishWorkout() {
 }
 
 function cancelWorkout() {
+  const hasProgress = state.activeWorkout?.exercises?.some((exercise) =>
+    exercise.sets.some((set) => set.done || set.weight !== "" || set.reps !== "")
+  );
+  if (hasProgress && !window.confirm("Cancel this workout and discard the entered sets?")) return;
   state.activeWorkout = null;
   state.view = "today";
   stopTimer();
@@ -2400,6 +2775,33 @@ function renderSession() {
         <button class="ghost-btn danger" onclick="cancelWorkout()">Cancel</button>
       </div>
     </div>
+    <details class="card pad live-workout-customizer" ${liveCustomizerOpen ? "open" : ""} ontoggle="liveCustomizerOpen = this.open">
+      <summary>Customize this workout</summary>
+      <p class="muted">Add an exercise without leaving your session. Road Gym workouts only suggest travel-ready movements.</p>
+      <div class="live-add-grid">
+        <div class="field live-add-exercise">
+          <label for="activeExerciseToAdd">Exercise</label>
+          <select id="activeExerciseToAdd">${renderActiveExerciseOptions()}</select>
+        </div>
+        <div class="field">
+          <label for="activeExerciseSets">Sets</label>
+          <input id="activeExerciseSets" type="number" value="3" min="1" max="10" />
+        </div>
+        <div class="field">
+          <label for="activeExerciseReps">Reps</label>
+          <input id="activeExerciseReps" value="8-12" />
+        </div>
+        <div class="field">
+          <label for="activeExerciseRest">Rest Seconds</label>
+          <input id="activeExerciseRest" type="number" value="90" min="15" max="300" step="15" />
+        </div>
+        <div class="field">
+          <label for="activeExerciseDropSets">Drop Sets</label>
+          <input id="activeExerciseDropSets" type="number" value="0" min="0" max="4" />
+        </div>
+      </div>
+      <button class="primary-btn" onclick="addExerciseToActiveWorkout()">Add to Workout</button>
+    </details>
     <div class="session-shell">
       <section class="session">
         ${workout.exercises.map((exercise, exIndex) => `
@@ -2411,12 +2813,24 @@ function renderSession() {
               </div>
               <span class="badge">${exercise.rest}s rest</span>
             </div>
+            <div class="live-exercise-controls" aria-label="Customize ${escapeHtml(exercise.name)}">
+              <div class="live-order-controls">
+                <button class="ghost-btn" onclick="moveActiveWorkoutExercise(${exIndex}, -1)" ${exIndex === 0 ? "disabled" : ""} aria-label="Move ${escapeHtml(exercise.name)} earlier">Move Up</button>
+                <button class="ghost-btn" onclick="moveActiveWorkoutExercise(${exIndex}, 1)" ${exIndex === workout.exercises.length - 1 ? "disabled" : ""} aria-label="Move ${escapeHtml(exercise.name)} later">Move Down</button>
+                <button class="ghost-btn danger" onclick="removeActiveWorkoutExercise(${exIndex})" aria-label="Remove ${escapeHtml(exercise.name)} from workout">Remove</button>
+              </div>
+              <div class="live-substitute-controls">
+                <label class="sr-only" for="activeSubstitute-${exIndex}">Suggested substitute for ${escapeHtml(exercise.name)}</label>
+                <select id="activeSubstitute-${exIndex}">${renderActiveExerciseOptions(exercise.id)}</select>
+                <button class="secondary-btn" onclick="substituteActiveWorkoutExercise(${exIndex})" aria-label="Substitute ${escapeHtml(exercise.name)}">Substitute</button>
+              </div>
+            </div>
             <div class="set-table">
               ${exercise.sets.map((set, setIndex) => `
                 <div class="set-row ${isRepsOnlyExercise(exercise) ? "reps-only" : ""}">
                   <div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>
-                  ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" placeholder="Weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
-                  <input type="number" inputmode="numeric" placeholder="Reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
+                  ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
+                  <input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
                   <button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
                 </div>
               `).join("")}
@@ -2534,7 +2948,7 @@ function renderLogbook() {
         </div>
         <div class="field">
           <label for="coachNote">Optional Coach Note</label>
-          <input id="coachNote" placeholder="Energy, appetite, joints, posing, cardio..." />
+          <input id="coachNote" placeholder="Energy, appetite, joints, posing, cardio..." value="${escapeHtml(coachNoteDraft)}" oninput="coachNoteDraft = this.value" />
         </div>
       </div>
       <div class="actions" style="margin-top: 14px;">
@@ -2663,15 +3077,34 @@ function renderContent() {
   if (state.view === "library") return renderLibrary();
   if (state.view === "builder") return renderBuilder();
   if (state.view === "progress") return renderProgress();
+  if (state.view === "history") return renderExerciseHistory();
   if (state.view === "logbook") return renderLogbook();
   if (state.view === "session") return renderSession();
   return renderToday();
 }
 
+function renderActiveWorkoutBanner() {
+  if (!state.activeWorkout || state.view === "session") return "";
+  const completed = state.activeWorkout.exercises
+    .flatMap((exercise) => exercise.sets)
+    .filter((set) => set.done).length;
+  return `
+    <section class="card pad resume-workout" aria-label="Workout in progress">
+      <div>
+        <p class="eyebrow">Workout in progress</p>
+        <strong>${escapeHtml(state.activeWorkout.title)}</strong>
+        <p class="muted">${completed} completed ${completed === 1 ? "set" : "sets"}. Your session is saved on this device.</p>
+      </div>
+      <button class="primary-btn" onclick="setView('session')">Resume Workout</button>
+    </section>
+  `;
+}
+
 function resetDemoData() {
   localStorage.removeItem(STORE_KEY);
-  state = structuredClone(defaultState);
+  state = freshDefaultState();
   builderDraft = [];
+  coachNoteDraft = "";
   render();
 }
 
@@ -2694,7 +3127,7 @@ function render() {
           <p class="muted">Hotel bench, dumbbells to 50, cable handles, rope, and ankle cuffs.</p>
         </div>
       </aside>
-      <main class="main">${renderContent()}</main>
+      <main class="main">${renderActiveWorkoutBanner()}${renderContent()}</main>
       <nav class="mobile-bar">${navHtml()}</nav>
     </div>
     ${renderOnboarding()}
