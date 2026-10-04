@@ -422,8 +422,10 @@ struct PeakSetWebView: UIViewRepresentable {
                     try? FileManager.default.removeItem(at: fileURL)
                     return
                 }
-                activityController.completionWithItemsHandler = { _, _, _, _ in
+                activityController.completionWithItemsHandler = { [weak self] _, completed, _, _ in
                     try? FileManager.default.removeItem(at: fileURL)
+                    // Lets the web app tell a sent check-in from a cancelled share.
+                    self?.callJavaScript("handleNativeShare", argument: ["filename": fileURL.lastPathComponent, "completed": completed])
                 }
                 if let popover = activityController.popoverPresentationController {
                     popover.sourceView = presenter.view

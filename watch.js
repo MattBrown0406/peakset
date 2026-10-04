@@ -123,15 +123,46 @@ saveState = function saveStateAndPublish() {
 // applied at most once; rest adjustments that arrive late are dropped.
 const appliedWatchCommandIds = [];
 
+// Watch commands arrive while the athlete may be on another tab (often typing
+// a weigh-in or measurements); only the live workout screen re-renders.
+let watchCommandInProgress = false;
+const baseRenderForWatchCommands = render;
+render = function renderUnlessBackgroundWatchCommand() {
+  if (watchCommandInProgress && state.view !== "session") {
+    updateTimerDom();
+    return;
+  }
+  baseRenderForWatchCommands();
+};
+
 function handleWatchCommand(command) {
+  watchCommandInProgress = true;
+  try {
+    return applyWatchCommand(command);
+  } finally {
+    watchCommandInProgress = false;
+  }
+}
+
+// A rest command names the rest it was aimed at (its end time), so it is
+// applied whenever it arrives (e.g. after the phone is unlocked) and ignored
+// if a newer rest has started since.
+function restCommandTargetsCurrentRest(command) {
+  const target = Number(command.restEndsAt);
+  if (!Number.isFinite(target) || target <= 0) {
+    const sentAt = Number(command.sentAt);
+    return !(Number.isFinite(sentAt) && Date.now() - sentAt > 30000);
+  }
+  return Number.isFinite(Number(state.timer.endsAt)) && Math.abs(Number(state.timer.endsAt) - target) <= 5000;
+}
+
+function applyWatchCommand(command) {
   if (!command || typeof command !== "object") return false;
   if (command.commandId) {
     if (appliedWatchCommandIds.includes(command.commandId)) return false;
     appliedWatchCommandIds.push(command.commandId);
     if (appliedWatchCommandIds.length > 300) appliedWatchCommandIds.shift();
   }
-  const sentAt = Number(command.sentAt);
-  if (["adjustRest", "skipRest"].includes(command.action) && Number.isFinite(sentAt) && Date.now() - sentAt > 30000) return false;
   const workout = state.activeWorkout;
   // Commands can arrive long after they were sent (queued while the phone was
   // locked), so they name the workout, exercise, and set rather than trusting
@@ -151,12 +182,22 @@ function handleWatchCommand(command) {
     if (!set || set.done) return false;
     if (!isRepsOnlyExercise(exercise)) updateSet(exIndex, setIndex, "weight", String(command.weight ?? ""));
     updateSet(exIndex, setIndex, "reps", String(command.reps ?? ""));
-    const timerBefore = state.timer.startedAt;
+    // startTimer replaces the timer object, so identity tells whether this
+    // completion started a new rest (start times can match to the millisecond).
+    const timerObjectBefore = state.timer;
+    const timerBefore = { ...state.timer };
     completeSet(exIndex, setIndex);
-    const startedNewRest = state.timer.running && state.timer.startedAt !== timerBefore && state.timer.exerciseIndex === exIndex;
+    const startedNewRest = state.timer !== timerObjectBefore && state.timer.running && state.timer.exerciseIndex === exIndex;
+    const completedAt = Number(command.completedAt);
+    // A set that arrives late must not replace a rest started by a newer set.
+    if (startedNewRest && timerBefore.running && Number.isFinite(completedAt) && Number(timerBefore.startedAt) >= completedAt) {
+      const remaining = Math.ceil((Number(timerBefore.endsAt) - Date.now()) / 1000);
+      if (remaining > 0) startTimer(remaining, Boolean(timerBefore.fullscreen), timerBefore.exerciseIndex, false);
+      else stopTimer();
+      return Boolean(set.done);
+    }
     // Rest started when the set was finished on the watch, not when the phone
     // caught up.
-    const completedAt = Number(command.completedAt);
     if (set.done && startedNewRest && Number.isFinite(completedAt) && Date.now() - completedAt > 3000) {
       const remaining = Math.ceil((completedAt + (Number(exercise.rest) || DEFAULT_REST_SECONDS) * 1000 - Date.now()) / 1000);
       if (remaining > 0) startTimer(remaining, true, exIndex, false);
@@ -165,12 +206,22 @@ function handleWatchCommand(command) {
     return Boolean(set.done);
   }
   if (command.action === "adjustRest") {
-    if (!state.timer.running) return false;
-    adjustRest(Math.max(-60, Math.min(60, Number(command.seconds) || 0)));
+    if (!state.timer.running || !restCommandTargetsCurrentRest(command)) return false;
+    const seconds = Math.max(-60, Math.min(60, Number(command.seconds) || 0));
+    const target = Number(command.restEndsAt);
+    if (Number.isFinite(target) && target > 0) {
+      // Absolute: the same end time iOS already set while the phone was locked.
+      const remaining = Math.ceil((target + seconds * 1000 - Date.now()) / 1000);
+      if (remaining > 0) startTimer(remaining, Boolean(state.timer.fullscreen), state.timer.exerciseIndex ?? null, false);
+      else stopTimer();
+    } else {
+      adjustRest(seconds);
+    }
     return true;
   }
   if (command.action === "skipRest") {
     if (!state.timer.running && !state.timer.fullscreen) return false;
+    if (state.timer.running && !restCommandTargetsCurrentRest(command)) return false;
     stopTimer();
     return true;
   }

@@ -1388,6 +1388,8 @@ function todaysSelectedPlan() {
 }
 
 function todayWorkoutSelect() {
+  // An earlier day's pick has expired; show the schedule-driven default.
+  const activePick = state.todayPlanDate === new Date().toDateString() ? state.todayWorkoutPick : "recommended";
   const options = [
     ["recommended", "Recommended"],
     ["any", "Random Any"],
@@ -1401,7 +1403,7 @@ function todayWorkoutSelect() {
   ];
   return `
     <select id="todayWorkoutPick" onchange="chooseTodayWorkout(this.value)">
-      ${options.map(([value, label]) => `<option value="${value}" ${state.todayWorkoutPick === value ? "selected" : ""}>${label}</option>`).join("")}
+      ${options.map(([value, label]) => `<option value="${value}" ${activePick === value ? "selected" : ""}>${label}</option>`).join("")}
     </select>
   `;
 }

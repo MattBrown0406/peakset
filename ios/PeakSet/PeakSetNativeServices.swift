@@ -18,50 +18,51 @@ final class PeakSetTimerService {
 
     private init() {}
 
+    /// When the pending rest notification fires. A time-interval trigger's
+    /// nextTriggerDate() always reports now + its interval, so it can't be used.
+    private var scheduledFireDate: Date?
+
+    private func schedule(fireDate: Date, token: UUID) {
+        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
+            // `generation` and `scheduledFireDate` are only touched on main.
+            DispatchQueue.main.async {
+                guard granted, let self, self.generation == token else { return }
+                let content = UNMutableNotificationContent()
+                content.title = "Rest complete"
+                content.body = "Your next set is ready."
+                content.sound = UNNotificationSound(named: UNNotificationSoundName("boxing-bell.wav"))
+                let remaining = max(1, fireDate.timeIntervalSinceNow)
+                let trigger = UNTimeIntervalNotificationTrigger(timeInterval: remaining, repeats: false)
+                self.center.add(UNNotificationRequest(identifier: self.notificationID, content: content, trigger: trigger))
+            }
+        }
+    }
+
     func start(seconds: TimeInterval) {
         guard seconds.isFinite, seconds >= 1 else { return }
         cancel()
         let token = UUID()
         generation = token
         let fireDate = Date().addingTimeInterval(max(1, seconds))
-        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
-            // `generation` is only touched on the main thread.
-            DispatchQueue.main.async {
-            guard granted, let self, self.generation == token else { return }
-
-            let content = UNMutableNotificationContent()
-            content.title = "Rest complete"
-            content.body = "Your next set is ready."
-            content.sound = UNNotificationSound(named: UNNotificationSoundName("boxing-bell.wav"))
-
-            let remaining = max(1, fireDate.timeIntervalSinceNow)
-            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: remaining, repeats: false)
-            let request = UNNotificationRequest(identifier: self.notificationID, content: content, trigger: trigger)
-            self.center.add(request)
-            }
-        }
+        scheduledFireDate = fireDate
+        schedule(fireDate: fireDate, token: token)
     }
 
     /// Moves the pending rest notification (watch +/-15s while the phone's web
     /// app is paused). A rest moved into the past is cancelled.
     func shift(by seconds: TimeInterval) {
-        let notificationID = self.notificationID
-        center.getPendingNotificationRequests { [weak self] requests in
-            guard let self,
-                  let request = requests.first(where: { $0.identifier == notificationID }),
-                  let trigger = request.trigger as? UNTimeIntervalNotificationTrigger,
-                  let fireDate = trigger.nextTriggerDate() else { return }
-            let remaining = fireDate.addingTimeInterval(seconds).timeIntervalSinceNow
-            DispatchQueue.main.async {
-                guard remaining >= 1 else { return self.cancel() }
-                let shifted = UNNotificationRequest(identifier: notificationID, content: request.content, trigger: UNTimeIntervalNotificationTrigger(timeInterval: remaining, repeats: false))
-                self.center.add(shifted)
-            }
-        }
+        guard let current = scheduledFireDate else { return }
+        let fireDate = current.addingTimeInterval(seconds)
+        guard fireDate.timeIntervalSinceNow >= 1 else { return cancel() }
+        let token = UUID()
+        generation = token
+        scheduledFireDate = fireDate
+        schedule(fireDate: fireDate, token: token)
     }
 
     func cancel() {
         generation = UUID()
+        scheduledFireDate = nil
         center.removePendingNotificationRequests(withIdentifiers: [notificationID])
         center.removeDeliveredNotifications(withIdentifiers: [notificationID])
     }

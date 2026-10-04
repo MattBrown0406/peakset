@@ -159,21 +159,24 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     func adjustRest(_ seconds: Int) {
+        // The rest this command is aimed at, captured before changing it.
+        let targetEndsAt = (restEndsAt?.timeIntervalSince1970 ?? 0) * 1000
         // Adjust whichever rest is showing, even one the phone started.
         let current = (localRest.flatMap { $0.end > Date() ? $0 : nil }) ?? snapshotRest
         if let rest = current {
             localRest = (rest.start, max(Date().addingTimeInterval(1), rest.end.addingTimeInterval(TimeInterval(seconds))))
             scheduleRestAlert()
         }
-        send(["commandId": UUID().uuidString, "sentAt": Date().timeIntervalSince1970 * 1000, "action": "adjustRest", "seconds": seconds, "workoutId": snapshot?.workoutId ?? ""])
+        send(["commandId": UUID().uuidString, "sentAt": Date().timeIntervalSince1970 * 1000, "action": "adjustRest", "seconds": seconds, "workoutId": snapshot?.workoutId ?? "", "restEndsAt": targetEndsAt])
     }
 
     func skipRest() {
+        let targetEndsAt = (restEndsAt?.timeIntervalSince1970 ?? 0) * 1000
         localRest = nil
         restSkippedAt = Date()
         restAlertTask?.cancel()
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [restNotificationID])
-        send(["commandId": UUID().uuidString, "sentAt": Date().timeIntervalSince1970 * 1000, "action": "skipRest", "workoutId": snapshot?.workoutId ?? ""])
+        send(["commandId": UUID().uuidString, "sentAt": Date().timeIntervalSince1970 * 1000, "action": "skipRest", "workoutId": snapshot?.workoutId ?? "", "restEndsAt": targetEndsAt])
         objectWillChange.send()
     }
 

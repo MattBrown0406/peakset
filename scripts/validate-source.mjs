@@ -886,3 +886,71 @@ assert.equal(sentPkg.weeklyCheckIns.length, 1, "a check-in sent 9 days after the
 const bfCtx = makeContext({ profile: { bodyweight: 200 }, weightLogs: [{ id: "w", date: new Date().toISOString(), bodyweight: 200, bodyFat: 20 }], measurements: [{ id: "t", date: new Date(Date.now() - 5 * 86400000).toISOString(), chest: 40 }] });
 assert.equal(vm.runInContext("mergedLatestMeasurement().bodyFat", bfCtx.context), 20, "coach check-ins include smart-scale body fat");
 console.log("Audit round 5 checks passed.");
+
+// Audit round 6: Health sentinels never reach any iCloud snapshot (athlete or coach).
+const sentinels = ["187.37", "13.71", "161.73", "31.41", "12345"];
+const hkAthlete = makeContext({ profile: { bodyweight: 190, createdAt: new Date(Date.now() - 400 * 86400000).toISOString() }, athleteName: "S",
+  weightLogs: [{ id: "manual-old", date: new Date(Date.now() - 250 * 86400000).toISOString(), bodyweight: 192 }, { id: "manual", date: new Date(Date.now() - 86400000).toISOString(), bodyweight: 190 }],
+  measurements: [{ id: "tape", date: new Date(Date.now() - 86400000).toISOString(), chest: 44 }] });
+const hk = (code) => vm.runInContext(code, hkAthlete.context);
+hk("state.healthBody.enabled = true");
+hk(`applyHealthBodySamples(${JSON.stringify([
+  { type: "weight", id: "a", date: new Date().toISOString(), value: 187.37, source: "Scale" },
+  { type: "bodyFat", id: "b", date: new Date(Date.now() - 86400000).toISOString(), value: 13.71, source: "Scale" },
+  { type: "leanMass", id: "c", date: new Date(Date.now() - 86400000).toISOString(), value: 161.73, source: "Scale" },
+  { type: "waist", id: "d", date: new Date().toISOString(), value: 31.41, source: "Tape" },
+  { type: "bodyFat", id: "e", date: new Date(Date.now() - 250 * 86400000).toISOString(), value: 15, source: "DEXA" }
+])})`);
+hk("handleNativeHealthKit({ status: 'stepsImported', steps: 12345 })");
+const athleteSnap = JSON.stringify(hk("nativeBackupPayload()"));
+for (const value of sentinels) assert.ok(!athleteSnap.includes(value), `athlete iCloud snapshot must not contain Health value ${value}`);
+assert.ok(Date.now() - Date.parse(JSON.parse(athleteSnap).state.healthBody.resyncFrom) > 249 * 86400000, "re-sync reaches Health values on old hand-entered entries");
+const hkPkg = JSON.parse(JSON.stringify(await hk("buildCoachPackage(400)")));
+const hkCoach = makeContext({ profile: { bodyweight: 200 } });
+vm.runInContext("window.confirm = () => true", hkCoach.context);
+await vm.runInContext(`importCoachPackage(${JSON.stringify(hkPkg)})`, hkCoach.context);
+const coachSnap = JSON.stringify(vm.runInContext("nativeBackupPayload()", hkCoach.context));
+for (const value of sentinels) assert.ok(!coachSnap.includes(value), `coach iCloud snapshot must not contain the athlete's Health value ${value}`);
+assert.ok(vm.runInContext("JSON.stringify(state.coach)", hkCoach.context).includes("13.71"), "the coach still sees the athlete's Health body fat on the device");
+hk("window.confirm = () => true; removeHealthImports()");
+assert.equal(hk("state.profile.bodyweight"), 190, "removing Health data also restores the hand-entered profile weight");
+assert.ok(!JSON.stringify(hk("nativeBackupPayload()")).includes("187.37"), "no Health weight survives removal in snapshots");
+console.log("Audit round 6 Health checks passed.");
+
+// Audit round 6 watch timing and background renders.
+const w6 = makeContext({ profile: { bodyweight: 200 } });
+const w6run = (code) => vm.runInContext(code, w6.context);
+w6run("startWorkout('chest-density'); state.view = 'session'");
+w6run("handleWatchCommand({ commandId: 'new', action: 'completeSet', workoutId: state.activeWorkout.id, exIndex: 1, setIndex: 0, weight: '60', reps: '10', completedAt: Date.now() })");
+const newerEnds = w6run("state.timer.endsAt");
+w6run("handleWatchCommand({ commandId: 'old', action: 'completeSet', workoutId: state.activeWorkout.id, exIndex: 0, setIndex: 0, weight: '70', reps: '10', completedAt: Date.now() - 180000 })");
+assert.ok(w6run("state.timer.running") && Math.abs(w6run("state.timer.endsAt") - newerEnds) < 1500, "a late watch set never replaces the rest started by a newer set");
+assert.equal(w6run("state.activeWorkout.exercises[0].sets[0].done"), true, "the late set itself is still logged");
+w6run(`handleWatchCommand({ commandId: 'skip', action: 'skipRest', workoutId: state.activeWorkout.id, sentAt: Date.now() - 70000, restEndsAt: ${newerEnds} })`);
+assert.equal(w6run("state.timer.running"), false, "a Skip sent while the phone was locked still applies to the rest it targeted");
+w6run("startTimer(120, true, 0)");
+w6run(`handleWatchCommand({ commandId: 'stale-skip', action: 'skipRest', workoutId: state.activeWorkout.id, sentAt: Date.now() - 70000, restEndsAt: ${newerEnds} })`);
+assert.equal(w6run("state.timer.running"), true, "a Skip aimed at an older rest does not stop a newer one");
+const target = w6run("state.timer.endsAt");
+w6run(`handleWatchCommand({ commandId: 'plus', action: 'adjustRest', seconds: 15, workoutId: state.activeWorkout.id, sentAt: Date.now() - 60000, restEndsAt: ${target} })`);
+assert.ok(Math.abs(w6run("state.timer.endsAt") - (target + 15000)) < 1500, "+15s from the watch lands on the same end time iOS set");
+w6run("stopTimer(); state.view = 'progress'; render(); document.getElementById('app').innerHTML += '<!--typing-->'");
+w6run("handleWatchCommand({ commandId: 'bg', action: 'completeSet', workoutId: state.activeWorkout.id, exIndex: 0, setIndex: 1, weight: '70', reps: '10', completedAt: Date.now() })");
+assert.ok(w6run("document.getElementById('app').innerHTML.includes('<!--typing-->')"), "a watch set does not re-render (and wipe) another tab");
+assert.equal(w6run("state.timer.fullscreen"), false, "rests started off the workout screen don't force the full-screen overlay");
+console.log("Audit round 6 watch checks passed.");
+
+// Coach check-ins count as sent only when the share completes; expired picks.
+const shareCtx = makeContext({ profile: { bodyweight: 200 }, athleteName: "A", lastCoachPackageAt: "2026-01-01T00:00:00.000Z" });
+shareCtx.context.Buffer = Buffer;
+vm.runInContext("window.webkit = { messageHandlers: { peaksetSharePdf: { postMessage(m) { window.__shared = m; } } } }; FileReader = class { readAsDataURL(blob) { blob.text().then((t) => { this.result = 'data:x;base64,' + Buffer.from(t).toString('base64'); this.onloadend(); }); } }", shareCtx.context);
+await vm.runInContext("sendCheckInToCoach()", shareCtx.context);
+vm.runInContext("window.handleNativeShare({ filename: window.__shared.filename, completed: false })", shareCtx.context);
+assert.equal(vm.runInContext("state.lastCoachPackageAt", shareCtx.context), "2026-01-01T00:00:00.000Z", "a cancelled share does not count as a sent check-in");
+await vm.runInContext("sendCheckInToCoach()", shareCtx.context);
+vm.runInContext("window.handleNativeShare({ filename: window.__shared.filename, completed: true })", shareCtx.context);
+assert.ok(Date.now() - Date.parse(vm.runInContext("state.lastCoachPackageAt", shareCtx.context)) < 60000, "a completed share records the send");
+vm.runInContext("state.todayWorkoutPick = 'chest'; state.todayPlanDate = 'Mon Jan 01 2001'", shareCtx.context);
+assert.match(vm.runInContext("todayWorkoutSelect()", shareCtx.context), /value="recommended" selected/, "an expired pick no longer shows as selected");
+assert.match(read("ios/PeakSet/PeakSetNativeServices.swift"), /scheduledFireDate/, "rest notifications shift from their real fire date");
+console.log("Share completion and pick checks passed.");

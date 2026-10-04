@@ -114,15 +114,23 @@ function nativeBackupPayload() {
     delete entry.healthFields;
     return entry;
   };
-  const healthDates = [...(copy.weightLogs || []), ...(copy.measurements || [])].filter(fromHealth).map((entry) => Date.parse(entry.date)).filter(Number.isFinite);
+  const carriesHealth = (entry) => fromHealth(entry) || (Array.isArray(entry?.healthFields) && entry.healthFields.length > 0);
+  const healthDates = [...(copy.weightLogs || []), ...(copy.measurements || [])].filter(carriesHealth).map((entry) => Date.parse(entry.date)).filter(Number.isFinite);
+  const pendingResync = Date.parse(state.healthBody?.resyncFrom || "");
+  if (Number.isFinite(pendingResync)) healthDates.push(pendingResync);
   copy.weightLogs = (copy.weightLogs || []).filter((entry) => !fromHealth(entry)).map(strip);
   copy.measurements = (copy.measurements || []).filter((entry) => !fromHealth(entry)).map(strip);
   copy.prepLogs = (copy.prepLogs || []).filter((entry) => entry?.cardioType !== "HealthKit");
-  // A coach's roster holds athletes' Health-derived readings too.
+  // A coach's roster holds athletes' Health-derived readings too. Check-ins
+  // mark them (hk- ids, healthFields); merged "latest" entries from before
+  // markers existed can't be told apart, so they are left out.
   Object.values(copy.coach?.athletes || {}).forEach((athlete) => {
     if (!athlete || typeof athlete !== "object") return;
-    athlete.weightLogs = (Array.isArray(athlete.weightLogs) ? athlete.weightLogs : []).filter((entry) => !fromHealth(entry));
-    athlete.measurements = (Array.isArray(athlete.measurements) ? athlete.measurements : []).filter((entry) => !fromHealth(entry));
+    athlete.weightLogs = (Array.isArray(athlete.weightLogs) ? athlete.weightLogs : []).filter((entry) => !fromHealth(entry)).map(strip);
+    athlete.measurements = (Array.isArray(athlete.measurements) ? athlete.measurements : [])
+      .filter((entry) => !fromHealth(entry) && !(String(entry?.id || "").startsWith("latest-") && !Array.isArray(entry.healthFields)))
+      .map(strip);
+    athlete.prepLogs = (Array.isArray(athlete.prepLogs) ? athlete.prepLogs : []).filter((entry) => entry?.cardioType !== "HealthKit");
   });
   // Unit-switch memory can hold a Health value; it only affects exact
   // lb<->kg round-trips, so leave it out of snapshots entirely.
@@ -134,8 +142,10 @@ function nativeBackupPayload() {
     }
   };
   dropOrigins(copy);
-  // The profile weight follows the newest weigh-in, which may be from Health.
-  if (copy.profile && healthDates.length) copy.profile.bodyweight = copy.weightLogs.find((entry) => Number(entry.bodyweight) > 0)?.bodyweight ?? null;
+  // The profile weight follows the newest weigh-in, which may have come from
+  // Health (even after its entries were removed): use the newest hand-entered one.
+  const healthEverUsed = Boolean(state.healthBody?.enabled || state.healthBody?.lastSyncAt || healthDates.length);
+  if (copy.profile && healthEverUsed) copy.profile.bodyweight = copy.weightLogs.find((entry) => Number(entry.bodyweight) > 0)?.bodyweight ?? null;
   if (copy.healthBody) {
     copy.healthBody.lastSyncAt = null;
     // After a restore, re-import from the oldest Health reading we had, not

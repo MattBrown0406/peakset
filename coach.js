@@ -61,16 +61,24 @@ function weeklyVolumeHistory(weeks = 4) {
 function mergedLatestMeasurement() {
   if (!state.measurements.length && !state.weightLogs.some((entry) => Number(entry.bodyFat) > 0)) return null;
   const newest = state.measurements[0]?.date || state.weightLogs.find((entry) => Number(entry.bodyFat) > 0)?.date;
-  const merged = { id: `latest-${newest}`, date: newest };
+  const merged = { id: `latest-${newest}`, date: newest, healthFields: [] };
+  const fromHealth = (entry, key) => String(entry.id || "").startsWith("hk-") || (Array.isArray(entry.healthFields) && entry.healthFields.includes(key));
   state.measurements.forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
       if (["id", "date", "note", "source", "healthFields", "_unitOrigin"].includes(key)) return;
-      if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") merged[key] = value;
+      if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") {
+        merged[key] = value;
+        if (fromHealth(entry, key)) merged.healthFields.push(key);
+      }
     });
   });
   // Smart-scale body fat lives on weigh-ins; show the newest reading.
   const scaleBodyFat = state.weightLogs.find((entry) => Number(entry.bodyFat) > 0);
-  if (scaleBodyFat && (!merged.bodyFat || Date.parse(scaleBodyFat.date) > Date.parse(merged.date))) merged.bodyFat = Number(scaleBodyFat.bodyFat);
+  if (scaleBodyFat && (!merged.bodyFat || Date.parse(scaleBodyFat.date) > Date.parse(merged.date))) {
+    merged.bodyFat = Number(scaleBodyFat.bodyFat);
+    merged.healthFields = merged.healthFields.filter((key) => key !== "bodyFat");
+    if (fromHealth(scaleBodyFat, "bodyFat")) merged.healthFields.push("bodyFat");
+  }
   return merged;
 }
 
@@ -116,6 +124,21 @@ async function buildCoachPackage(days = Number(state.logbookRange || 7)) {
   };
 }
 
+let pendingCoachShare = null;
+
+const baseHandleNativeShare = window.handleNativeShare;
+window.handleNativeShare = function handleNativeShareForCoach(payload) {
+  baseHandleNativeShare?.(payload);
+  if (pendingCoachShare && payload?.filename === pendingCoachShare.filename) {
+    if (payload.completed) {
+      state.lastCoachPackageAt = pendingCoachShare.at;
+      saveState();
+      render();
+    }
+    pendingCoachShare = null;
+  }
+};
+
 async function sendCheckInToCoach() {
   if (!state.athleteName) {
     toast("Add your name in More so your coach knows who this is from.");
@@ -130,8 +153,15 @@ async function sendCheckInToCoach() {
   const pkg = await buildCoachPackage(Math.min(60, Math.max(Number(state.logbookRange || 7), gapDays)));
   const name = `${fileSafe(state.athleteName)} check-in ${todayStamp()}.massmethod`;
   const result = await shareOrDownload(JSON.stringify(pkg), name, "application/x-massmethod");
-  state.lastCoachPackageAt = new Date().toISOString();
-  saveState();
+  const sentAt = new Date().toISOString();
+  if (result === "shared") {
+    // Only a completed share counts; a cancelled sheet must not shrink the
+    // next check-in's range.
+    pendingCoachShare = { filename: name.replace(/\//g, "-"), at: sentAt };
+  } else {
+    state.lastCoachPackageAt = sentAt;
+    saveState();
+  }
   toast(result === "shared" ? "Check-in ready. Send it to your coach by Messages, Mail, or AirDrop." : "Check-in file downloaded. Send it to your coach.");
   render();
 }
@@ -160,9 +190,16 @@ function cleanEntry(entry, fields) {
   return { id: cleanText(entry.id, 64) || date, date, ...fields(entry) };
 }
 
+// Which fields of an athlete's entry came from Apple Health (kept so the
+// coach's own iCloud backups can leave them out).
+function cleanHealthFields(entry, allowed) {
+  if (!Array.isArray(entry?.healthFields)) return {};
+  return { healthFields: entry.healthFields.filter((key) => allowed.includes(key)) };
+}
+
 const CLEAN = {
-  weight: (entry) => cleanEntry(entry, (e) => ({ bodyweight: cleanNumber(e.bodyweight, 0.1, 2000), bodyFat: cleanNumber(e.bodyFat, 1, 75), leanMass: cleanNumber(e.leanMass, 0.1, 2000) })),
-  measurement: (entry) => cleanEntry(entry, (e) => Object.fromEntries([...measurementDefinitions.map(([key]) => key), "arm", "thigh"].map((key) => [key, cleanNumber(e[key], 0.1, key === "bodyFat" ? 75 : 400)]))),
+  weight: (entry) => cleanEntry(entry, (e) => ({ bodyweight: cleanNumber(e.bodyweight, 0.1, 2000), bodyFat: cleanNumber(e.bodyFat, 1, 75), leanMass: cleanNumber(e.leanMass, 0.1, 2000), ...cleanHealthFields(e, ["bodyFat", "leanMass"]) })),
+  measurement: (entry) => cleanEntry(entry, (e) => ({ ...Object.fromEntries([...measurementDefinitions.map(([key]) => key), "arm", "thigh"].map((key) => [key, cleanNumber(e[key], 0.1, key === "bodyFat" ? 75 : 400)])), ...cleanHealthFields(e, [...measurementDefinitions.map(([key]) => key), "arm", "thigh"]) })),
   workout: (entry) => cleanEntry(entry, (e) => ({ title: cleanText(e.title, 80) || "Workout", setCount: Array.isArray(e.sets) ? Math.min(e.sets.length, 500) : Math.max(0, Math.min(500, Math.trunc(Number(e.setCount)) || 0)) })),
   checkIn: (entry) => cleanEntry(entry, (e) => ({ sleep: cleanNumber(e.sleep, 0, 24), energy: cleanNumber(e.energy, 1, 5), hunger: cleanNumber(e.hunger, 1, 5), digestion: cleanNumber(e.digestion, 1, 5), recovery: cleanNumber(e.recovery, 1, 5), notes: cleanText(e.notes, 500) })),
   prep: (entry) => cleanEntry(entry, (e) => ({ cardioType: cleanText(e.cardioType, 60), cardioMinutes: cleanNumber(e.cardioMinutes, 0, 1440), steps: cleanNumber(e.steps, 0, 200000), posingMinutes: cleanNumber(e.posingMinutes, 0, 1440) }))
