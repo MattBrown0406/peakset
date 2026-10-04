@@ -129,6 +129,17 @@ struct PeakSetWebView: UIViewRepresentable {
                 }
             case "delete":
                 if let id = payload["id"] as? String { PeakSetPhotoStore.delete(id) }
+            case "import":
+                guard let requestID = payload["requestId"] as? String,
+                      let dataURL = payload["dataUrl"] as? String,
+                      let comma = dataURL.firstIndex(of: ","),
+                      dataURL.hasPrefix("data:image/"),
+                      let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])),
+                      let image = UIImage(data: data) else { return }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let id = (try? PeakSetPhotoStore.save(image)) ?? ""
+                    report(["status": "imported", "requestId": requestID, "id": id])
+                }
             case "thumbnail":
                 guard let id = payload["id"] as? String, let requestID = payload["requestId"] as? String else { return }
                 let size = CGFloat((payload["size"] as? NSNumber)?.doubleValue ?? 640)

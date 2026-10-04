@@ -98,6 +98,10 @@ function handleNativePhoto(payload) {
   if (!payload || typeof payload !== "object") return;
   if (payload.status === "saved" && /^[A-Za-z0-9-]+$/.test(String(payload.id || ""))) {
     addPhotoRecord({ id: payload.id, pose: PHOTO_POSES.some(([key]) => key === payload.pose) ? payload.pose : state.photoPose, date: payload.date || new Date().toISOString(), storage: "native" });
+  } else if (payload.status === "imported") {
+    const resolve = pendingThumbnailRequests.get(payload.requestId);
+    pendingThumbnailRequests.delete(payload.requestId);
+    resolve?.(/^[A-Za-z0-9-]+$/.test(String(payload.id || "")) ? payload.id : "");
   } else if (payload.status === "thumbnail") {
     const resolve = pendingThumbnailRequests.get(payload.requestId);
     pendingThumbnailRequests.delete(payload.requestId);
@@ -232,6 +236,40 @@ async function photoThumbnail(photo, size = 640) {
   } catch {
     return "";
   }
+}
+
+// Stores a photo that arrived in a coach file (data URL) without adding it to
+// this athlete's own gallery. Resolves to { id, storage } or null.
+async function storeImportedPhoto(dataUrl) {
+  if (typeof dataUrl !== "string" || !/^data:image\/(jpeg|png);base64,/.test(dataUrl) || dataUrl.length > 4_000_000) return null;
+  const bridge = nativePhotoBridge();
+  if (bridge) {
+    const requestId = crypto.randomUUID();
+    const result = new Promise((resolve) => {
+      pendingThumbnailRequests.set(requestId, (id) => resolve(id ? { id, storage: "native" } : null));
+      setTimeout(() => {
+        if (pendingThumbnailRequests.delete(requestId)) resolve(null);
+      }, 8000);
+    });
+    bridge.postMessage({ action: "import", dataUrl, requestId });
+    return result;
+  }
+  try {
+    const blob = await (await fetch(dataUrl)).blob();
+    const id = crypto.randomUUID();
+    await photoDbRequest("readwrite", (store) => store.put(blob, id));
+    return { id, storage: "browser" };
+  } catch {
+    return null;
+  }
+}
+
+function deletePhotoFile(photo) {
+  if (!photo?.id) return;
+  if (photo.storage === "native") nativePhotoBridge()?.postMessage({ action: "delete", id: photo.id });
+  else photoDbRequest("readwrite", (store) => store.delete(photo.id)).catch(() => {});
+  if (browserPhotoUrls.has(photo.id)) URL.revokeObjectURL(browserPhotoUrls.get(photo.id));
+  browserPhotoUrls.delete(photo.id);
 }
 
 // ---------- Compare ----------

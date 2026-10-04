@@ -490,3 +490,48 @@ assert.match(xcodeProject, /com\.mattbrown\.peakset\.watchkitapp/, "the watch ap
 assert.match(xcodeProject, /Embed Watch Content/, "the watch app is embedded in the iPhone app");
 
 console.log("Apple Watch and Live Activity checks passed.");
+
+// Coach mode (coach.js): athlete check-in -> coach roster -> program back.
+const athleteCtx = makeContext({
+  profile: { bodyweight: 200, gender: "Female", age: 31, division: "Wellness", goalDate: "2027-03-01" },
+  athleteName: "Jordan Lee",
+  weightLogs: [{ id: "w1", date: new Date().toISOString(), bodyweight: 150 }, { id: "w0", date: new Date(Date.now() - 9 * 86400000).toISOString(), bodyweight: 151 }],
+  workoutLogs: [{ id: "log1", title: "Glutes <b>A</b>", date: new Date().toISOString(), sets: [{ exerciseId: "hip-thrust", exercise: "Hip Thrust", weight: "185", reps: "10" }] }],
+  weeklyCheckIns: [{ id: "c1", date: new Date().toISOString(), sleep: 7, energy: 4, recovery: 3, notes: "Knee fine" }]
+});
+const pkg = JSON.parse(JSON.stringify(await vm.runInContext("buildCoachPackage(14)", athleteCtx.context)));
+assert.equal(pkg.format, "mass-method-coach-package", "check-ins carry their format");
+assert.equal(pkg.athlete.name, "Jordan Lee", "check-ins carry the athlete name");
+assert.equal(pkg.workoutLogs.length, 1, "check-ins include workouts in range");
+assert.equal(pkg.volumeWeeks[0].totals.glutes, 1, "check-ins include weekly volume");
+
+const coachCtx = makeContext({ profile: { bodyweight: 210 } });
+await vm.runInContext(`importCoachPackage(${JSON.stringify(pkg)})`, coachCtx.context);
+assert.equal(vm.runInContext("state.coach.enabled", coachCtx.context), true, "importing a check-in turns on coach mode");
+assert.equal(vm.runInContext("coachAthletes().length", coachCtx.context), 1, "the athlete joins the roster");
+await vm.runInContext(`importCoachPackage(${JSON.stringify(pkg)})`, coachCtx.context);
+assert.equal(vm.runInContext("coachAthletes()[0].workoutLogs.length", coachCtx.context), 1, "re-importing the same check-in must not duplicate logs");
+const detail = vm.runInContext("state.view = 'coach'; renderCoach()", coachCtx.context);
+assert.match(detail, /Jordan Lee/, "the coach sees the athlete dashboard");
+assert.ok(!detail.includes("<b>A</b>"), "athlete-provided text must be escaped in the coach view");
+assert.match(vm.runInContext("state.coach.selectedAthleteId = ''; renderCoach()", coachCtx.context), /workouts\/7d/, "the roster shows compliance");
+assert.equal(await vm.runInContext(`importCoachPackage(${JSON.stringify({ ...pkg, athlete: { ...pkg.athlete, id: "../bad" } })})`, coachCtx.context), false, "malformed athlete ids are rejected");
+
+const program = {
+  format: "mass-method-program", version: 1, from: "Coach Sam", message: "Glutes first.",
+  plans: [
+    { title: "Lower A", muscle: "legs", scheduleDay: "Monday", exercises: [["hip-thrust", 4, "8-10", 120, 0, { group: "", setType: "standard" }], ["not-a-real-exercise", 3, "10", 60]] },
+    { title: "Empty", exercises: [["nope", 3, "10", 60]] }
+  ],
+  block: { accumulationWeeks: 5, focus: ["glutes", "hamstrings", "not-real"], start: "next" }
+};
+assert.equal(vm.runInContext(`handleIncomingFileText(${JSON.stringify(JSON.stringify(program))})`, athleteCtx.context), true, "athletes can import a program");
+const imported = JSON.parse(vm.runInContext("JSON.stringify(state.customPlans.filter((plan) => plan.fromCoach))", athleteCtx.context));
+assert.equal(imported.length, 1, "plans with no valid exercises are dropped");
+assert.deepEqual(imported[0].exercises.map(([id]) => id), ["hip-thrust"], "unknown exercises are dropped from coach plans");
+assert.equal(imported[0].scheduleDay, "Monday", "coach schedules carry over");
+assert.deepEqual(Array.from(vm.runInContext("state.trainingBlock.focus", athleteCtx.context)), ["glutes", "hamstrings"], "coach blocks keep only valid weak points");
+assert.equal(vm.runInContext("state.trainingBlock.accumulationWeeks", athleteCtx.context), 5, "coach blocks set the build length");
+assert.match(vm.runInContext("state.view = 'today'; renderToday()", athleteCtx.context), /From Coach Sam[\s\S]*Glutes first\./, "the coach message shows on Today");
+
+console.log("Coach mode checks passed.");

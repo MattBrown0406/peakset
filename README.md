@@ -21,7 +21,26 @@ The validator checks exercise IDs and required library entries, confirms Incline
 
 The Logbook PDF export uses a native iOS share sheet in the Xcode build, so users can text or email the PDF from the device.
 
+### Targets and capabilities
+
+The `PeakSet` scheme builds three targets: the iPhone app, `MassMethodWidgets` (rest-timer Live Activity, `com.mattbrown.peakset.widgets`), and `MassMethodWatch` (watchOS app, `com.mattbrown.peakset.watchkitapp`). Keep `CURRENT_PROJECT_VERSION` and `MARKETING_VERSION` identical across all three; the validator enforces it.
+
+The app uses HealthKit and iCloud Documents (container `iCloud.com.mattbrown.peakset`). With automatic signing, open Signing & Capabilities once on the PeakSet target and confirm the iCloud container is checked so Xcode registers it. Without it, backups fall back to the device's Files app.
+
+The web app is split into modules loaded in order by `index.html`: `app.js` (core), `toolkit.js`, `settings.js` (units, backup, More tab), `photos.js`, `volume.js` (weekly sets, training blocks), `watch.js` (Watch and Live Activity bridge), and `coach.js`. Later modules wrap earlier functions; `scripts/validate-source.mjs` runs all of them together.
+
+Debug builds accept `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='<script>'` on `xcrun simctl launch` for simulator smoke tests.
+
 ## Built In
+
+- kg/lb and cm/inch units with one-time conversion of saved history
+- Automatic iCloud Drive backups after every workout and daily, with restore on any device, plus manual backup export and import
+- Progress photos for ten standard poses, with the last photo shown as a faded guide in the camera, a self-timer, and side-by-side or fade comparisons
+- Weekly hard sets per muscle (13 groups) against productive ranges and recovery limits, with an 8-week trend
+- Training blocks: 3-6 build weeks with a falling RIR target and rising set targets, weak-point focus, and an automatic deload week
+- Rest timer on the Lock Screen and in the Dynamic Island (Live Activity)
+- Apple Watch app for logging sets with the Digital Crown and running rest from the wrist
+- Coach mode without accounts: athletes send a check-in file; coaches keep a roster with trends, volume, photos, and notes, and send programs back
 
 - Onboarding for gender, age, starting body weight, training phase, and starting measurements
 - Off-season, bulking, and contest prep training context
