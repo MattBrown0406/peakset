@@ -1058,3 +1058,19 @@ console.log("Audit round 8 checks passed.");
   assert.ok(run("window.__posts.some((message) => message.action === 'cancel' && message.workoutActive === true)"), "a cancel mid-workout tells native code to keep the activity");
   console.log("Audit round 9 checks passed.");
 }
+
+// Audit round 10: the watch stays on the exercise being worked after a rest,
+// even out of order; Health-derived profile weight never reaches a backup.
+{
+  const r10 = makeContext({ profile: { bodyweight: 200 } });
+  const run = (code) => vm.runInContext(code, r10.context);
+  run("startWorkout('chest-density'); const ex = state.activeWorkout.exercises[1]; ex.sets[0].weight = '60'; ex.sets[0].reps = '10'; completeSet(1, 0)");
+  assert.equal(run("currentWatchExerciseIndex(state.activeWorkout)"), 1, "during the rest the worked exercise is current");
+  run("stopTimer()");
+  assert.equal(run("currentWatchExerciseIndex(state.activeWorkout)"), 1, "after the rest the watch stays on the exercise done out of order");
+  run("moveActiveWorkoutExercise(1, -1)");
+  assert.equal(run("state.activeWorkout.lastExerciseIndex"), 0, "moving exercises keeps the anchor on the same exercise");
+  run("state.healthBody = { ...state.healthBody, enabled: false, lastSyncAt: null, everUsed: true }; state.weightLogs = []; state.profile.bodyweight = 201.4");
+  assert.equal(run("nativeBackupPayload().state.profile.bodyweight ?? null"), null, "a profile weight that came from Health stays out of iCloud after its entries are removed");
+  console.log("Audit round 10 checks passed.");
+}

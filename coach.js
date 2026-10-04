@@ -358,7 +358,7 @@ function sanitizePlan(plan, from) {
       /^[0-9]{1,3}( ?(-|to) ?[0-9]{1,3})?( ?(sec|s|each))?( each)?$/i.test(spec.reps.trim()) ? spec.reps.trim() : "8-12",
       spec.rest,
       spec.dropSets,
-      { group: /^[A-Z]{0,2}$/.test(String(spec.group || "").toUpperCase()) ? String(spec.group || "").toUpperCase() : "", setType: setTypeOptions.some(([value]) => value === spec.setType) ? spec.setType : "standard" }
+      { group: /^[A-Z0-9]{0,2}$/.test(String(spec.group || "").toUpperCase()) ? String(spec.group || "").toUpperCase() : "", setType: setTypeOptions.some(([value]) => value === spec.setType) ? spec.setType : "standard" }
     ]);
   if (!exercises.length) return null;
   const day = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].includes(plan.scheduleDay) ? plan.scheduleDay : "";

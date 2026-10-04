@@ -38,9 +38,12 @@ function suggestedSetValues(exercise, setIndex) {
 function currentWatchExerciseIndex(workout) {
   const timerIndex = state.timer.running ? state.timer.exerciseIndex : null;
   const open = (exercise) => exercise?.sets.some((set) => !set.done);
+  const anchor = workout.lastExerciseIndex;
   let index = Number.isInteger(timerIndex) && open(workout.exercises[timerIndex])
     ? timerIndex
-    : workout.exercises.findIndex(open);
+    : Number.isInteger(anchor) && open(workout.exercises[anchor])
+      ? anchor
+      : workout.exercises.findIndex(open);
   if (index === -1) return Math.max(0, workout.exercises.length - 1);
   // Supersets alternate A1, B1, A2, B2: the group exercise with the fewest
   // completed sets goes next (ties go to the first), as on the watch.

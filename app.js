@@ -2744,6 +2744,9 @@ function moveActiveWorkoutExercise(index, direction) {
   [exercises[index], exercises[target]] = [exercises[target], exercises[index]];
   if (state.timer.exerciseIndex === index) state.timer.exerciseIndex = target;
   else if (state.timer.exerciseIndex === target) state.timer.exerciseIndex = index;
+  const anchor = state.activeWorkout.lastExerciseIndex;
+  if (anchor === index) state.activeWorkout.lastExerciseIndex = target;
+  else if (anchor === target) state.activeWorkout.lastExerciseIndex = index;
   saveState();
   render();
   return true;
@@ -2769,6 +2772,9 @@ function removeActiveWorkoutExercise(index) {
   } else if (state.timer.exerciseIndex > index) {
     state.timer.exerciseIndex -= 1;
   }
+  const anchor = state.activeWorkout.lastExerciseIndex;
+  if (anchor === index) state.activeWorkout.lastExerciseIndex = null;
+  else if (Number.isInteger(anchor) && anchor > index) state.activeWorkout.lastExerciseIndex = anchor - 1;
   saveState();
   render();
   toast(`${exercise.name} removed.`);

@@ -200,7 +200,8 @@ function removeHealthImports() {
   state.weightLogs = state.weightLogs.filter((entry) => !isHealthEntry(entry)).map(strip);
   state.measurements = state.measurements.filter((entry) => !isHealthEntry(entry)).map(strip);
   if (state.profile) state.profile.bodyweight = state.weightLogs.find((entry) => Number(entry.bodyweight) > 0)?.bodyweight ?? state.profile.bodyweight;
-  state.healthBody = { ...state.healthBody, enabled: false, lastSyncAt: null, lastResult: "Imported Apple Health data removed." };
+  // everUsed keeps a Health-derived profile weight out of iCloud backups.
+  state.healthBody = { ...state.healthBody, enabled: false, lastSyncAt: null, everUsed: true, lastResult: "Imported Apple Health data removed." };
   saveState();
   render();
 }

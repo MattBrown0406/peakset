@@ -144,7 +144,7 @@ function nativeBackupPayload() {
   dropOrigins(copy);
   // The profile weight follows the newest weigh-in, which may have come from
   // Health (even after its entries were removed): use the newest hand-entered one.
-  const healthEverUsed = Boolean(state.healthBody?.enabled || state.healthBody?.lastSyncAt || healthDates.length);
+  const healthEverUsed = Boolean(state.healthBody?.enabled || state.healthBody?.lastSyncAt || state.healthBody?.everUsed || healthDates.length);
   if (copy.profile && healthEverUsed) copy.profile.bodyweight = copy.weightLogs.find((entry) => Number(entry.bodyweight) > 0)?.bodyweight ?? null;
   if (copy.healthBody) {
     copy.healthBody.lastSyncAt = null;

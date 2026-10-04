@@ -800,6 +800,9 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
     return toast(repsOnly ? "Enter whole-number reps before completing the set." : "Enter a non-negative weight and whole-number reps before completing the set.");
   }
   set.done = !set.done;
+  // Where the athlete is working: the watch returns here after a rest even
+  // when exercises are done out of order.
+  if (set.done) state.activeWorkout.lastExerciseIndex = exIndex;
   saveState();
   if (set.done) {
     const group = exercise.group;
