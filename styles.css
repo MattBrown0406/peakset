@@ -1701,3 +1701,20 @@ textarea {
   background: rgba(var(--amber-rgb), 0.12);
   font-size: 13px;
 }
+
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.toggle-row input {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}

@@ -45,6 +45,7 @@ struct PeakSetApp: App {
     var body: some Scene {
         WindowGroup {
             PeakSetWebView()
+                .background(Color(red: 0.039, green: 0.055, blue: 0.102))
                 .ignoresSafeArea()
                 .onOpenURL { url in
                     PeakSetIncomingFiles.shared.open(url)

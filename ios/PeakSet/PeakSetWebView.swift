@@ -4,7 +4,7 @@ import WebKit
 import AVFoundation
 
 struct PeakSetWebView: UIViewRepresentable {
-    static let messageHandlers = ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit", "peaksetBackup", "peaksetPhoto"]
+    static let messageHandlers = ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit", "peaksetBackup", "peaksetPhoto", "peaksetWatch"]
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -23,6 +23,11 @@ struct PeakSetWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        // Match the app's navy background so launch never flashes white.
+        let background = UIColor(red: 0.039, green: 0.055, blue: 0.102, alpha: 1)
+        webView.isOpaque = false
+        webView.backgroundColor = background
+        webView.scrollView.backgroundColor = background
         context.coordinator.webView = webView
 
         if let indexURL = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "Web") {
@@ -73,6 +78,10 @@ struct PeakSetWebView: UIViewRepresentable {
                 handleBackup(message.body)
             case "peaksetPhoto":
                 handlePhoto(message.body)
+            case "peaksetWatch":
+                if let payload = message.body as? [String: Any], let snapshot = payload["snapshot"] as? String {
+                    PeakSetWatchBridge.shared.publish(snapshotJSON: snapshot)
+                }
             default:
                 break
             }
@@ -82,6 +91,16 @@ struct PeakSetWebView: UIViewRepresentable {
             PeakSetIncomingFiles.shared.attach { [weak self] text in
                 self?.callJavaScript("handleIncomingFileText", argument: text)
             }
+            PeakSetWatchBridge.shared.onCommand = { [weak self] command in
+                self?.callJavaScript("handleWatchCommand", argument: command)
+            }
+            PeakSetWatchBridge.shared.activate()
+            #if DEBUG
+            // Simulator smoke tests: `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='...' xcrun simctl launch ...`
+            if let script = ProcessInfo.processInfo.environment["MASSMETHOD_DEBUG_JS"], !script.isEmpty {
+                webView.evaluateJavaScript(script)
+            }
+            #endif
         }
 
         /// Calls `window.<function>(argument)` with the argument JSON-encoded so any
@@ -165,6 +184,7 @@ struct PeakSetWebView: UIViewRepresentable {
             guard let payload = body as? [String: Any], let action = payload["action"] as? String else { return }
             if action == "cancel" {
                 PeakSetTimerService.shared.cancel()
+                PeakSetLiveActivityManager.shared.end()
                 return
             }
             if action == "reconcile" {
@@ -175,10 +195,22 @@ struct PeakSetWebView: UIViewRepresentable {
                 }
                 return
             }
-            if action == "start", let seconds = payload["seconds"] as? Double {
-                PeakSetTimerService.shared.start(seconds: seconds)
-            } else if action == "start", let seconds = payload["seconds"] as? Int {
-                PeakSetTimerService.shared.start(seconds: Double(seconds))
+            guard action == "start", let seconds = (payload["seconds"] as? NSNumber)?.doubleValue else { return }
+            PeakSetTimerService.shared.start(seconds: seconds)
+            if payload["liveActivity"] as? Bool == true,
+               let endsAtMs = (payload["endsAt"] as? NSNumber)?.doubleValue {
+                let endsAt = Date(timeIntervalSince1970: endsAtMs / 1000)
+                PeakSetLiveActivityManager.shared.show(.init(
+                    startedAt: Date(),
+                    endsAt: endsAt,
+                    workoutTitle: payload["workoutTitle"] as? String ?? "Mass Method",
+                    exerciseName: payload["exerciseName"] as? String ?? "Next set",
+                    nextSetLabel: payload["nextSetLabel"] as? String ?? "",
+                    completedSets: (payload["completedSets"] as? NSNumber)?.intValue ?? 0,
+                    totalSets: (payload["totalSets"] as? NSNumber)?.intValue ?? 0
+                ))
+            } else {
+                PeakSetLiveActivityManager.shared.end()
             }
         }
 

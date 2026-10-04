@@ -109,9 +109,11 @@ assert(app.includes('const APP_NAME = "Mass Method"'), "Visible app branding is 
 assert(infoPlist.includes("<string>Mass Method</string>"), "iOS display name is not Mass Method");
 assert(xcodeProject.includes('INFOPLIST_KEY_CFBundleDisplayName = "Mass Method"'), "Xcode display name is not Mass Method");
 const buildNumbers = [...xcodeProject.matchAll(/CURRENT_PROJECT_VERSION = (\d+);/g)].map((match) => Number(match[1]));
-assert.equal(buildNumbers.length, 2, "Expected a CURRENT_PROJECT_VERSION in both the Debug and Release configurations");
+assert.equal(buildNumbers.length, 6, "Expected a CURRENT_PROJECT_VERSION in Debug and Release for the app, widget extension, and watch app");
 assert(buildNumbers.every((value) => Number.isInteger(value) && value > 0), "Build numbers must be positive integers");
-assert.equal(new Set(buildNumbers).size, 1, `Debug and Release build numbers differ: ${buildNumbers.join(", ")}`);
+assert.equal(new Set(buildNumbers).size, 1, `App, extension, and watch build numbers must match: ${buildNumbers.join(", ")}`);
+const marketingVersions = [...xcodeProject.matchAll(/MARKETING_VERSION = ([\d.]+);/g)].map((match) => match[1]);
+assert.equal(new Set(marketingVersions).size, 1, `App, extension, and watch versions must match: ${marketingVersions.join(", ")}`);
 assert.equal(appIcon.readUInt32BE(16), 1024, "Mass Method app icon must be 1024 px wide");
 assert.equal(appIcon.readUInt32BE(20), 1024, "Mass Method app icon must be 1024 px tall");
 assert.equal(appIcon[25], 2, "Mass Method app icon must be opaque RGB without alpha");
@@ -461,3 +463,30 @@ assert.equal(vm.runInContext("state.activeWorkout.exercises.every((exercise) => 
 assert.match(vm.runInContext("renderPlans()", volume.context), /Training block[\s\S]*Weekly volume/, "Plans must show the block and volume cards");
 
 console.log("Weekly volume and training block checks passed.");
+
+// Apple Watch link and Live Activity details (watch.js).
+const watchCtx = makeContext({ profile: { bodyweight: 200 } });
+assert.equal(vm.runInContext("buildWatchSnapshot().active", watchCtx.context), false, "no workout means an idle watch");
+vm.runInContext("startWorkout('chest-density')", watchCtx.context);
+const firstSnapshot = JSON.parse(vm.runInContext("JSON.stringify(buildWatchSnapshot())", watchCtx.context));
+assert.equal(firstSnapshot.active, true, "a live workout must reach the watch");
+assert.equal(firstSnapshot.currentExercise, 0, "the watch starts on the first unfinished exercise");
+assert.equal(firstSnapshot.unit, "lb", "the watch uses the athlete's unit");
+assert.equal(vm.runInContext("handleWatchCommand({ action: 'completeSet', exIndex: 0, setIndex: 0, weight: '80', reps: '9' })", watchCtx.context), true, "the watch can complete a set");
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].sets[0].weight + 'x' + state.activeWorkout.exercises[0].sets[0].reps", watchCtx.context), "80x9", "watch entries must be saved on the set");
+assert.equal(vm.runInContext("state.timer.running", watchCtx.context), true, "completing on the watch starts the rest timer");
+assert.equal(vm.runInContext("handleWatchCommand({ action: 'completeSet', exIndex: 0, setIndex: 0, weight: '90', reps: '9' })", watchCtx.context), false, "a repeated command must not toggle a completed set back off");
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].sets[0].done", watchCtx.context), true, "a duplicate watch command must leave the set completed");
+assert.equal(vm.runInContext("handleWatchCommand({ action: 'completeSet', exIndex: 0, setIndex: 1, weight: '-5', reps: '9' })", watchCtx.context), false, "watch entries go through the same validation");
+const restContext = JSON.parse(vm.runInContext("JSON.stringify(restTimerContext())", watchCtx.context));
+assert.equal(restContext.liveActivity, true, "Live Activities are on by default");
+assert.match(restContext.nextSetLabel, /^Set 2 of \d+$/, "the Lock Screen names the next set");
+assert.equal(vm.runInContext("buildWatchSnapshot().rest.running", watchCtx.context), true, "the watch sees the running rest timer");
+vm.runInContext("handleWatchCommand({ action: 'skipRest' })", watchCtx.context);
+assert.equal(vm.runInContext("state.timer.running", watchCtx.context), false, "the watch can skip rest");
+assert.match(read("ios/MassMethodWidgets/Info.plist"), /com\.apple\.widgetkit-extension/, "the Live Activity widget extension is configured");
+assert.match(read("ios/PeakSet/Info.plist"), /NSSupportsLiveActivities/, "the app declares Live Activity support");
+assert.match(xcodeProject, /com\.mattbrown\.peakset\.watchkitapp/, "the watch app target is in the project");
+assert.match(xcodeProject, /Embed Watch Content/, "the watch app is embedded in the iPhone app");
+
+console.log("Apple Watch and Live Activity checks passed.");

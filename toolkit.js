@@ -748,7 +748,8 @@ renderSession = function renderToolkitSession() {
 const baseStartTimer = startTimer;
 startTimer = function startNativeBackedTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null) {
   baseStartTimer(seconds, fullscreen, exerciseIndex);
-  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: state.timer.seconds, endsAt: state.timer.endsAt });
+  // restTimerContext (watch.js) adds the Live Activity details when loaded.
+  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: state.timer.seconds, endsAt: state.timer.endsAt, ...(typeof restTimerContext === "function" ? restTimerContext() : {}) });
 };
 
 const baseStopTimer = stopTimer;

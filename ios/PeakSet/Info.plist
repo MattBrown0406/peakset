@@ -31,6 +31,8 @@
 	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Mass Method uses the camera to take progress photos, with your previous photo shown as a guide so poses line up.</string>
 	<key>NSHealthShareUsageDescription</key>

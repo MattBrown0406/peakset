@@ -27,10 +27,12 @@ jobs:
 
       - name: Build iOS Simulator app
         run: |
+          # The scheme builds the iPhone app plus its embedded Live Activity
+          # widget and watchOS app, each against its own simulator SDK.
           xcodebuild \
             -project ios/PeakSet.xcodeproj \
-            -target PeakSet \
+            -scheme PeakSet \
             -configuration Debug \
-            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
             build

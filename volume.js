@@ -160,8 +160,8 @@ function blockWeekInfo(block = state.trainingBlock, date = new Date()) {
   };
 }
 
-function groupWeeklyTarget(group, info = blockWeekInfo(), block = state.trainingBlock) {
-  const prep = state.phase === "prep";
+function groupWeeklyTarget(group, info = blockWeekInfo(), block = state.trainingBlock, phase = state.phase) {
+  const prep = phase === "prep";
   const scale = prep ? PREP_VOLUME_FACTOR : 1;
   let low = group.low * scale;
   let high = group.high * scale;
@@ -262,14 +262,15 @@ function renderBlockStatusLine(info = blockWeekInfo()) {
   return `Week ${info.weekNumber} of ${info.length} · Aim for ${info.targetRir} RIR`;
 }
 
-function renderVolumeBars(totals, info = blockWeekInfo()) {
+// block/phase default to this athlete; the coach view passes the athlete's own.
+function renderVolumeBars(totals, info = blockWeekInfo(), block = state.trainingBlock, phase = state.phase) {
   return MUSCLE_GROUPS.map((group) => {
     const value = totals[group.key] || 0;
-    const target = groupWeeklyTarget(group, info);
+    const target = groupWeeklyTarget(group, info, block, phase);
     const scaleMax = Math.max(group.max + 4, value + 2);
     const pct = (number) => `${Math.min(100, (number / scaleMax) * 100).toFixed(1)}%`;
     const status = volumeStatus(value, group, target);
-    const focus = state.trainingBlock?.focus?.includes(group.key);
+    const focus = block?.focus?.includes(group.key);
     return `
       <div class="volume-row">
         <div class="volume-label"><strong>${escapeHtml(group.label)}${focus ? ' <span class="badge amber">Focus</span>' : ""}</strong><span class="volume-status ${status.key}">${escapeHtml(status.label)}</span></div>
