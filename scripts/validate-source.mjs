@@ -431,3 +431,33 @@ assert.match(fs.readFileSync(path.join(root, "ios/PeakSet/Info.plist"), "utf8"),
 assert.match(swiftWebView, /setURLSchemeHandler/, "the photo URL scheme must be registered");
 
 console.log("Progress photo checks passed.");
+
+// Weekly volume and training blocks (volume.js).
+const volume = makeContext({ profile: { bodyweight: 200 } });
+const unmapped = vm.runInContext("exerciseLibrary.filter((exercise) => !exerciseMuscleGroup(exercise)).map((exercise) => exercise.id)", volume.context);
+assert.deepEqual(Array.from(unmapped), [], "every exercise must count toward a muscle group");
+for (const [id, group] of [["hammer-curl", "biceps"], ["close-grip-bench", "triceps"], ["db-rdl", "hamstrings"], ["nordic-curl", "hamstrings"], ["hip-thrust", "glutes"], ["seated-calf-raise", "calves"], ["face-pull", "rearDelts"], ["db-lateral-raise", "sideDelts"], ["arnold-press", "frontDelts"], ["shrug", "traps"], ["hack-squat", "quads"]]) {
+  assert.equal(vm.runInContext(`exerciseMuscleGroup(exerciseById('${id}'))`, volume.context), group, `${id} must count as ${group}`);
+}
+vm.runInContext(`state.workoutLogs = [{ id: "v", date: new Date().toISOString(), sets: [
+  { exerciseId: "barbell-bench", exercise: "Barbell Bench Press", weight: "100", reps: "8" },
+  { exerciseId: "barbell-bench", exercise: "Barbell Bench Press", weight: "80", reps: "8", dropSet: true },
+  { exercise: "Hammer Curl", weight: "30", reps: "10" }
+] }, { id: "old", date: "2020-01-01T12:00:00Z", sets: [{ exerciseId: "barbell-bench", weight: "100", reps: "8" }] }]`, volume.context);
+const weekTotals = JSON.parse(vm.runInContext("JSON.stringify(weeklyHardSets())", volume.context));
+assert.equal(weekTotals.chest, 1.5, "working sets count 1 and drop sets count half, this week only");
+assert.equal(weekTotals.biceps, 1, "legacy name-only sets must count by name");
+vm.runInContext("state.blockDraft = { weeks: 4, start: 'this', focus: ['sideDelts'] }; startTrainingBlock()", volume.context);
+const blockInfo = JSON.parse(vm.runInContext("JSON.stringify(blockWeekInfo())", volume.context));
+assert.equal(blockInfo.status, "active", "a block starting this week must be active");
+assert.equal(blockInfo.targetRir, 3, "week 1 must target 3 RIR");
+assert.equal(vm.runInContext("blockTargetRir(state.trainingBlock, 3)", volume.context), 0, "the last build week must target 0 RIR");
+assert.ok(vm.runInContext("groupWeeklyTarget(MUSCLE_GROUPS.find((g) => g.key === 'sideDelts')).low > groupWeeklyTarget(MUSCLE_GROUPS.find((g) => g.key === 'sideDelts'), null, null).low - 1", volume.context), "weak-point focus must add sets");
+vm.runInContext("state.trainingBlock.startDate = dateKey(addDays(startOfWeek(), -28))", volume.context);
+assert.equal(vm.runInContext("blockWeekInfo().deload", volume.context), true, "week 5 of a 4+1 block must be the deload");
+vm.runInContext("startWorkout('chest-density')", volume.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].targetSets", volume.context), 2, "deload week must halve working sets");
+assert.equal(vm.runInContext("state.activeWorkout.exercises.every((exercise) => exercise.targetDropSets === 0)", volume.context), true, "deload week must drop the drop sets");
+assert.match(vm.runInContext("renderPlans()", volume.context), /Training block[\s\S]*Weekly volume/, "Plans must show the block and volume cards");
+
+console.log("Weekly volume and training block checks passed.");

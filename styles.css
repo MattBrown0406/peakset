@@ -1475,3 +1475,229 @@ textarea {
 .photo-compare h3 {
   margin: 0;
 }
+
+/* Weekly volume and training blocks */
+.volume-stack {
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.volume-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.volume-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.volume-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.volume-label strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.volume-label .badge {
+  min-height: 20px;
+  font-size: 10px;
+}
+
+.volume-status {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.volume-status.on { color: var(--teal); }
+.volume-status.high,
+.volume-status.building { color: var(--amber); }
+.volume-status.over { color: var(--rose); }
+
+.volume-value {
+  grid-row: 1;
+  grid-column: 2;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.volume-value small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.volume-track {
+  position: relative;
+  grid-column: 1 / -1;
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.volume-target {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(var(--teal-rgb), 0.22);
+  border-left: 2px solid rgba(var(--teal-rgb), 0.7);
+  border-right: 2px solid rgba(var(--teal-rgb), 0.7);
+}
+
+.volume-fill {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.volume-fill.on { background: var(--teal); }
+.volume-fill.building,
+.volume-fill.high { background: var(--amber); }
+.volume-fill.over { background: var(--rose); }
+
+.volume-max {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(var(--rose-rgb), 0.8);
+}
+
+.volume-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.volume-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.volume-legend i {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.legend-target {
+  background: rgba(var(--teal-rgb), 0.35);
+  border: 1px solid rgba(var(--teal-rgb), 0.8);
+}
+
+.legend-max {
+  width: 3px !important;
+  background: rgba(var(--rose-rgb), 0.8);
+}
+
+.week-bars {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 6px;
+  height: 110px;
+  margin-top: 8px;
+}
+
+.week-bar {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+}
+
+.week-bar span {
+  width: 100%;
+  border-radius: 6px 6px 3px 3px;
+  background: rgba(var(--indigo-rgb), 0.55);
+}
+
+.week-bar.current span {
+  background: var(--action-gradient);
+}
+
+.week-bar small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.block-weeks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.block-week {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+}
+
+.block-week small {
+  font-size: 10px;
+}
+
+.block-week.done {
+  color: var(--teal);
+  border-color: rgba(var(--teal-rgb), 0.35);
+  background: rgba(var(--teal-rgb), 0.08);
+}
+
+.block-week.current {
+  color: var(--ink);
+  border-color: transparent;
+  background: var(--action-gradient);
+}
+
+.block-week.deload:not(.current) {
+  border-style: dashed;
+}
+
+.block-banner {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  border-radius: 14px;
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--text);
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.block-banner.deload {
+  border-color: rgba(var(--amber-rgb), 0.45);
+  background: rgba(var(--amber-rgb), 0.1);
+}
+
+.warning-note {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  color: #ffeab0;
+  background: rgba(var(--amber-rgb), 0.12);
+  font-size: 13px;
+}
