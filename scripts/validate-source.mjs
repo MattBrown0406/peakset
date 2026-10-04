@@ -737,3 +737,76 @@ assert.match(read("ios/PeakSet/PeakSetWebView.swift"), /webViewWebContentProcess
 assert.match(read("ios/PeakSet/PeakSetWebView.swift"), /decidePolicyFor navigationAction/, "the web view is restricted to the app's own pages");
 
 console.log("Audit round 2 checks passed.");
+
+// Audit round 3 regressions.
+const r3 = makeContext({ profile: { bodyweight: 200, createdAt: new Date().toISOString() } });
+const r3run = (code) => vm.runInContext(code, r3.context);
+r3run("window.confirm = () => true");
+r3run("state.libraryFilter = 'chest'; state.librarySearch = 'curl'");
+assert.ok(r3run("libraryRows().some((exercise) => exercise.muscle === 'arms')"), "library search covers every exercise, not just the selected chip");
+r3run("state.librarySearch = ''; state.customPlans = [{ id: 'push', title: 'Push A', muscle: 'chest', phase: 'offseason', scheduleDay: new Date().toLocaleDateString('en-US', { weekday: 'long' }), exercises: [['barbell-bench', 3, '8-10', 120]] }]; duplicateScheduledWeek(); duplicateCustomPlan('push')");
+assert.equal(r3run("todaysRecommendedPlan().id"), "push", "copies never replace this week's scheduled plan on Today");
+assert.equal(r3run("state.customPlans.filter((plan) => plan.scheduleDay).length"), 1, "duplicated templates come out unscheduled");
+r3run("window.confirm = () => false; deleteCustomPlan('push'); window.confirm = () => true");
+assert.ok(r3run("state.customPlans.some((plan) => plan.id === 'push')"), "deleting a template asks first");
+r3run("state.equipmentProfiles.push({ id: 'roadonly', name: 'Road', equipment: ['Dumbbells', 'Cable', 'Bench', 'Bodyweight', 'Bands'] }); state.activeEquipmentProfileId = 'roadonly'; state.substitutionPreferences = { 'machine-row': 'neutral-pulldown' }");
+r3run("startWorkout('back-prep-detail')");
+assert.equal(r3run("new Set(state.activeWorkout.exercises.map((exercise) => exercise.id)).size === state.activeWorkout.exercises.length"), true, "a saved substitution never puts an exercise in a workout twice");
+r3run("state.activeWorkout = null; quickStartExercise('machine-row')");
+assert.equal(r3run("state.activeWorkout.exercises[0].id"), "machine-row", "Quick Start uses the exercise the athlete picked");
+r3run("state.activeWorkout = null; clearSubstitutionPreference('machine-row')");
+assert.equal(r3run("state.substitutionPreferences['machine-row']"), undefined, "substitutions can be cleared");
+// Measurements: Health waist-only entries and legacy arm keys.
+const meas = makeContext({ profile: { bodyweight: 200 }, measurements: [
+  { id: "hk-m-today", date: new Date().toISOString(), waist: 31 },
+  { id: "t2", date: new Date(Date.now() - 20 * 86400000).toISOString(), chest: 47, shoulders: 52, leftArm: 17.5, rightArm: 17.4, calf: 16 },
+  { id: "t1", date: new Date(Date.now() - 60 * 86400000).toISOString(), chest: 46, shoulders: 51, leftArm: 17, rightArm: 17, calf: 15.8 }
+] });
+assert.equal(vm.runInContext("weakPointMeasurementStatus().done", meas.context), true, "a Health waist reading does not hide the tape check-ins");
+assert.equal(vm.runInContext("stageChecklist({ phase: 'offseason' }).find((item) => item.label.startsWith('Tape')).done", meas.context), false, "only hand-entered tape check-ins count as current");
+const armsOnly = makeContext({ profile: { bodyweight: 200 }, measurements: [
+  { id: "a2", date: new Date().toISOString(), arm: 17.5 },
+  { id: "a1", date: new Date(Date.now() - 30 * 86400000).toISOString(), arm: 17 }
+] });
+assert.equal(vm.runInContext("weakPointMeasurementStatus().done", armsOnly.context), false, "legacy arm readings count as one body part, not three");
+// PDF keeps accents, breaks long words, and stays byte-consistent.
+const pdfCtx = makeContext({ profile: { bodyweight: 200, division: "José Séance" } });
+const pdfLines = vm.runInContext("buildCoachReportLines(7, 'https://example.com/' + 'x'.repeat(300))", pdfCtx.context);
+assert.ok(pdfLines.some((line) => line.text.includes("José Séance")), "accented names survive in the PDF");
+assert.ok(vm.runInContext(`wrapPdfText('${"y".repeat(300)}', 82).every((row) => row.length <= 82)`, pdfCtx.context), "long words are broken to fit the page");
+const pdfBytes = new Uint8Array(await vm.runInContext("createPdfBlob(buildCoachReportLines(7, 'Café'))", pdfCtx.context).arrayBuffer());
+const pdfText = Buffer.from(pdfBytes).toString("latin1");
+const xrefAt = Number(pdfText.match(/startxref\n(\d+)/)[1]);
+assert.equal(pdfText.slice(xrefAt, xrefAt + 4), "xref", "PDF xref offset points at the xref table");
+assert.ok(pdfText.includes("/WinAnsiEncoding") && pdfText.includes("Café"), "PDF text is WinAnsi encoded, one byte per character");
+// Builder draft survives a restart; bodyweight progression.
+const bd = makeContext({ profile: { bodyweight: 200 } });
+vm.runInContext("builderDraft.push({ id: 'barbell-bench', sets: 3, reps: '8-12', rest: 90, dropSets: 0, group: '', setType: 'standard' }); saveState()", bd.context);
+const bd2 = makeContext(JSON.parse(bd.storage.get("stageforge-v1")));
+assert.equal(vm.runInContext("builderDraft.length", bd2.context), 1, "the builder draft survives closing the app");
+vm.runInContext("state.workoutLogs = [{ id: 'pu', date: new Date().toISOString(), sets: [1,2,3].map(() => ({ exerciseId: 'push-up', exercise: 'Deficit Push-Up', weight: '0', reps: '20' })) }]", bd2.context);
+assert.match(vm.runInContext("progressionSuggestion({ id: 'push-up', targetReps: '12-20' })", bd2.context), /Beat 20 reps/, "bodyweight sets get rep-based progression");
+assert.ok(fs.existsSync(path.join(root, "ios/PeakSet/PrivacyInfo.xcprivacy")) && xcodeProject.includes("PrivacyInfo.xcprivacy in Resources"), "the privacy manifest ships in the app bundle");
+
+console.log("Audit round 3 checks passed.");
+
+// Audit round 3 follow-ups: exact unit round-trips, abs history cards, late watch sets.
+const rt = makeContext({ profile: { bodyweight: 83.8 }, weightLogs: [{ id: "w", date: new Date().toISOString(), bodyweight: 83.8 }], measurements: [{ id: "m", date: new Date().toISOString(), waist: 22.75 }],
+  workoutLogs: [{ id: "l", date: new Date().toISOString(), volume: 1600, sets: [{ exerciseId: "barbell-bench", exercise: "Barbell Bench Press", weight: "200", reps: "8" }, { exerciseId: "barbell-bench", exercise: "Barbell Bench Press", weight: "182.5", reps: "8" }] }] });
+vm.runInContext("setUnits('metric'); setUnits('imperial')", rt.context);
+assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify([state.weightLogs[0].bodyweight, state.measurements[0].waist, state.workoutLogs[0].sets.map((set) => set.weight), state.workoutLogs[0].volume])", rt.context)), [83.8, 22.75, ["200", "182.5"], 1600], "unedited values round-trip lb -> kg -> lb exactly");
+vm.runInContext("setUnits('metric'); state.workoutLogs[0].sets[0].weight = '100'; setUnits('imperial')", rt.context);
+assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].weight", rt.context), "220.46", "a value edited in kg converts normally");
+const kgFirst = makeContext({ profile: { bodyweight: 90 }, units: "metric", workoutLogs: [{ id: "k", date: new Date().toISOString(), sets: [{ exerciseId: "db-curl", exercise: "Alternating Dumbbell Curl", weight: "16.8", reps: "10" }] }] });
+vm.runInContext("setUnits('imperial'); setUnits('metric')", kgFirst.context);
+assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].weight", kgFirst.context), "16.8", "kg loads round-trip kg -> lb -> kg exactly");
+const absCards = makeContext({ profile: { bodyweight: 200 }, workoutLogs: [{ id: "a", title: "Abs", date: new Date().toISOString(), sets: [{ exerciseId: "cable-crunch", exercise: "Cable Crunch", weight: "", reps: "20", repsOnly: true }, { exerciseId: "cable-crunch", exercise: "Cable Crunch", weight: "", reps: "25", repsOnly: true }] }] });
+const absHtml = vm.runInContext("exerciseHistorySelection = 'cable-crunch'; renderExerciseHistory()", absCards.context);
+assert.ok(/45 reps/.test(absHtml) && !/45 lb/.test(absHtml), "reps-only history cards count reps, not pounds");
+const late = makeContext({ profile: { bodyweight: 200 } });
+vm.runInContext("startWorkout('chest-density'); state.activeWorkout.exercises[0].group = 'A'; state.activeWorkout.exercises[1].group = 'A'; startTimer(90, true, 3)", late.context);
+const beforeEnds = vm.runInContext("state.timer.endsAt", late.context);
+vm.runInContext("handleWatchCommand({ commandId: 'late1', action: 'completeSet', workoutId: state.activeWorkout.id, exIndex: 1, setIndex: 0, weight: '50', reps: '10', completedAt: Date.now() - 20000 })", late.context);
+assert.equal(vm.runInContext("state.timer.endsAt", late.context), beforeEnds, "a late watch set held for its superset partner does not restart another rest");
+
+console.log("Audit round 3 follow-up checks passed.");

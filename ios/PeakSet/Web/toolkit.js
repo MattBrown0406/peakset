@@ -173,10 +173,37 @@ function toggleFavoriteExercise(id) {
   render();
 }
 
+let librarySearchTimer = null;
+
+// Updates only the results grid so the search box keeps focus and the next
+// chip tap is not swallowed by a full re-render on blur.
 function setLibrarySearch(value) {
-  state.librarySearch = value;
-  saveState();
-  render();
+  state.librarySearch = String(value || "");
+  clearTimeout(librarySearchTimer);
+  librarySearchTimer = setTimeout(() => {
+    saveState();
+    const results = document.getElementById("libraryResults");
+    if (results) results.innerHTML = renderLibraryResults();
+  }, 150);
+}
+
+function libraryRows() {
+  const search = state.librarySearch.trim().toLowerCase();
+  const selectedProfile = activeEquipmentProfile();
+  return exerciseLibrary.filter((exercise) => {
+    // A search looks through every exercise; the chips filter browsing.
+    const muscleMatch = search ? true : exercise.muscle === state.libraryFilter || (state.libraryFilter === "travel" && exercise.hotel) || (state.libraryFilter === "favorites" && isFavoriteExercise(exercise.id));
+    const searchMatch = !search || `${exercise.name} ${exercise.equipment} ${exercise.cue} ${exercise.muscle}`.toLowerCase().includes(search);
+    const equipmentMatch = state.libraryEquipmentFilter === "all" || exerciseMatchesEquipmentProfile(exercise, selectedProfile);
+    return muscleMatch && searchMatch && equipmentMatch;
+  });
+}
+
+function renderLibraryResults() {
+  return libraryRows().map((exercise) => {
+    const setting = exerciseSetting(exercise.id);
+    return `<article class="card exercise-card"><div class="card-head"><h3>${escapeHtml(exercise.name)}</h3><button class="favorite-btn ${isFavoriteExercise(exercise.id) ? "active" : ""}" onclick="toggleFavoriteExercise('${exercise.id}')" aria-label="Favorite ${escapeHtml(exercise.name)}">★</button></div><p class="muted">${escapeHtml(exercise.cue)}</p><span class="badge blue">${escapeHtml(exercise.equipment)}</span>${setting.pain !== "none" ? `<span class="badge amber">Pain: ${escapeHtml(setting.pain)}</span>` : ""}${setting.note ? `<p class="compact-note">${escapeHtml(setting.note)}</p>` : ""}${renderLastPerformance(exercise.id)}<div class="actions"><button class="secondary-btn" onclick="selectExerciseHistory('${exercise.id}')">History</button><button class="primary-btn" onclick="quickStartExercise('${exercise.id}')">Quick Start</button></div></article>`;
+  }).join("") || '<div class="empty"><p class="muted">No exercises match these filters.</p></div>';
 }
 
 function setLibraryEquipmentFilter(value) {
@@ -249,6 +276,11 @@ function progressionSuggestion(exercise) {
     return bestReps ? `Reps-only movement. Beat ${bestReps} reps on your best set, or slow the tempo.` : "Reps-only movement. Log reps to track progression.";
   }
   const ceiling = targetRepCeiling(exercise.targetReps || previous.targetReps || "8-12") || 12;
+  const workingAny = previous.sets.filter((set) => !set.dropSet && Number(set.reps) > 0);
+  if (workingAny.length && workingAny.every((set) => !(Number(set.weight) > 0))) {
+    const bestReps = Math.max(...workingAny.map((set) => Number(set.reps)));
+    return `Bodyweight sets. Beat ${bestReps} reps on your best set, then add load or slow the tempo.`;
+  }
   const working = previous.sets.filter((set) => !set.dropSet && Number(set.weight) > 0 && Number(set.reps) > 0);
   if (!working.length) return "Repeat the movement and establish working-set performance.";
   const rirOnTarget = (rir) => rir === "" || rir == null || rir === "failure" || Number(rir) <= 2;
@@ -275,6 +307,10 @@ function renderExerciseHistoryPanel(id) {
   const sessions = exerciseHistorySessions(id);
   const sets = sessions.flatMap((session) => session.sets);
   const setting = exerciseSetting(id);
+  const preferred = state.substitutionPreferences?.[id];
+  const swapNote = preferred && exerciseLibrary.some((item) => item.id === preferred)
+    ? `<p class="compact-note">When ${escapeHtml(exercise.name)} isn't available, workouts use ${escapeHtml(exerciseById(preferred).name)}. <button class="ghost-btn" onclick="clearSubstitutionPreference('${id}')">Stop substituting</button></p>`
+    : "";
   const bestWeight = sets.reduce((best, set) => Math.max(best, Number(set.weight) || 0), 0);
   const bestE1rm = sets.reduce((best, set) => Math.max(best, estimatedOneRepMax(set.weight, set.reps)), 0);
   const e1rmValues = [...sessions].reverse().map((session) => session.bestE1rm).filter(Boolean);
@@ -292,9 +328,17 @@ function renderExerciseHistoryPanel(id) {
         <div class="field"><label for="exerciseNote">Setup / coaching note</label><textarea id="exerciseNote" rows="3" placeholder="Seat 4, neutral handles...">${escapeHtml(setting.note || "")}</textarea></div>
         <div class="field"><label for="exercisePain">Discomfort</label><select id="exercisePain">${["none","mild","moderate","stop"].map((value) => `<option value="${value}" ${setting.pain === value ? "selected" : ""}>${value[0].toUpperCase() + value.slice(1)}</option>`).join("")}</select><button class="secondary-btn" style="margin-top:10px" onclick="saveExerciseSetting('${id}')">Save Note</button></div>
       </div>
+      ${swapNote}
       <h3 style="margin-top:16px">Recent sessions</h3>
       <div class="exercise-list">${history.map((session) => `<div class="exercise-row"><span>${formatShortDate(session.date)} · ${escapeHtml(session.title)}</span><strong>${escapeHtml(session.sets.map((set) => setLogSummary(set) + (set.rir !== "" && set.rir != null ? ` @ ${set.rir} RIR` : "")).join(" / "))}</strong></div>`).join("") || '<p class="muted">No sessions logged yet.</p>'}</div>
     </section>`;
+}
+
+function clearSubstitutionPreference(id) {
+  if (state.substitutionPreferences) delete state.substitutionPreferences[id];
+  saveState();
+  toast("Substitution cleared.");
+  render();
 }
 
 function saveExerciseSetting(id) {
@@ -309,23 +353,14 @@ function saveExerciseSetting(id) {
 }
 
 renderLibrary = function renderToolkitLibrary() {
-  const search = state.librarySearch.toLowerCase();
   const selectedProfile = activeEquipmentProfile();
-  const rows = exerciseLibrary.filter((exercise) => {
-    const muscleMatch = exercise.muscle === state.libraryFilter || (state.libraryFilter === "travel" && exercise.hotel) || state.libraryFilter === "favorites" && isFavoriteExercise(exercise.id);
-    const searchMatch = !search || `${exercise.name} ${exercise.equipment} ${exercise.cue}`.toLowerCase().includes(search);
-    const equipmentMatch = state.libraryEquipmentFilter === "all" || exerciseMatchesEquipmentProfile(exercise, selectedProfile);
-    return muscleMatch && searchMatch && equipmentMatch;
-  });
+  const searching = Boolean(state.librarySearch.trim());
   return `
     <div class="compact-page-header"><p class="eyebrow">Exercise library</p><h1>Find, favorite, and track every movement.</h1></div>
     ${renderExerciseHistoryPanel(state.selectedExerciseId)}
-    <section class="card pad" style="margin-bottom:16px"><div class="grid two"><div class="field"><label>Search</label><input value="${escapeHtml(state.librarySearch)}" placeholder="Exercise, equipment, cue..." onchange="setLibrarySearch(this.value)" /></div><div class="field"><label>Equipment profile</label><select onchange="setLibraryEquipmentFilter(this.value)"><option value="all">All equipment</option><option value="profile" ${state.libraryEquipmentFilter === "profile" ? "selected" : ""}>${escapeHtml(selectedProfile.name)}</option></select></div></div></section>
-    <div class="filters" style="margin-bottom:16px">${[...muscles,"abs","travel","favorites"].map((filter) => `<button class="chip ${state.libraryFilter === filter ? "active" : ""}" onclick="setLibraryFilter('${filter}')">${filter === "travel" ? "Road Gym" : filter[0].toUpperCase() + filter.slice(1)}</button>`).join("")}</div>
-    <div class="grid three">${rows.map((exercise) => {
-      const setting = exerciseSetting(exercise.id);
-      return `<article class="card exercise-card"><div class="card-head"><h3>${escapeHtml(exercise.name)}</h3><button class="favorite-btn ${isFavoriteExercise(exercise.id) ? "active" : ""}" onclick="toggleFavoriteExercise('${exercise.id}')" aria-label="Favorite">★</button></div><p class="muted">${escapeHtml(exercise.cue)}</p><span class="badge blue">${escapeHtml(exercise.equipment)}</span>${setting.pain !== "none" ? `<span class="badge amber">Pain: ${escapeHtml(setting.pain)}</span>` : ""}${setting.note ? `<p class="compact-note">${escapeHtml(setting.note)}</p>` : ""}${renderLastPerformance(exercise.id)}<div class="actions"><button class="secondary-btn" onclick="selectExerciseHistory('${exercise.id}')">History</button><button class="primary-btn" onclick="quickStartExercise('${exercise.id}')">Quick Start</button></div></article>`;
-    }).join("") || '<div class="empty"><p class="muted">No exercises match these filters.</p></div>'}</div>`;
+    <section class="card pad" style="margin-bottom:16px"><div class="grid two"><div class="field"><label for="librarySearch">Search all exercises</label><input id="librarySearch" type="search" value="${escapeHtml(state.librarySearch)}" placeholder="Exercise, muscle, equipment, cue..." oninput="setLibrarySearch(this.value)" /></div><div class="field"><label for="libraryEquipment">Equipment profile</label><select id="libraryEquipment" onchange="setLibraryEquipmentFilter(this.value)"><option value="all">All equipment</option><option value="profile" ${state.libraryEquipmentFilter === "profile" ? "selected" : ""}>${escapeHtml(selectedProfile.name)}</option></select></div></div></section>
+    <div class="filters" style="margin-bottom:16px">${[...muscles,"abs","travel","favorites"].map((filter) => `<button class="chip ${!searching && state.libraryFilter === filter ? "active" : ""}" onclick="state.librarySearch = ''; setLibraryFilter('${filter}')">${filter === "travel" ? "Road Gym" : filter[0].toUpperCase() + filter.slice(1)}</button>`).join("")}</div>
+    <div class="grid three" id="libraryResults">${renderLibraryResults()}</div>`;
 };
 
 function saveEquipmentProfile() {
@@ -471,13 +506,15 @@ startCustomWorkout = function startToolkitCustomWorkout() {
 function duplicateCustomPlan(id) {
   const source = state.customPlans.find((plan) => plan.id === id);
   if (!source) return;
-  state.customPlans.unshift({ ...structuredClone(source), id: `custom-${Date.now()}`, title: `${source.title} Copy` });
+  state.customPlans.unshift({ ...structuredClone(source), id: `custom-${crypto.randomUUID()}`, title: `${source.title} Copy`, scheduleDay: "" });
   saveState();
   render();
 }
 
 function deleteCustomPlan(id) {
-  state.customPlans = state.customPlans.filter((plan) => plan.id !== id);
+  const plan = state.customPlans.find((item) => item.id === id);
+  if (!plan || !window.confirm(`Delete the template "${plan.title}"?`)) return;
+  state.customPlans = state.customPlans.filter((item) => item.id !== id);
   saveState();
   render();
 }
@@ -488,12 +525,14 @@ function duplicateScheduledWeek() {
   const copies = scheduled.map((plan, index) => ({
     ...structuredClone(plan),
     id: `custom-${Date.now()}-${index}`,
-    title: `${plan.title} · Next Week`,
-    scheduleDay: plan.scheduleDay
+    title: `${plan.title} (copy)`,
+    // Copies stay unscheduled: Today follows the newest template for a day,
+    // so scheduled copies would silently replace this week's plan.
+    scheduleDay: ""
   }));
   state.customPlans.unshift(...copies);
   saveState();
-  toast(`${copies.length} scheduled template${copies.length === 1 ? "" : "s"} duplicated.`);
+  toast(`${plural(copies.length, "template")} copied. Edit and schedule the copies when you're ready.`);
   render();
 }
 
@@ -555,6 +594,10 @@ beginWorkoutFromPlan = function beginToolkitWorkout(plan) {
     return false;
   }
   const specs = (Array.isArray(plan?.exercises) ? plan.exercises : []).map(normalizePlanExercise).filter((spec) => exerciseLibrary.some((item) => item.id === spec.id));
+  const planIds = new Set(specs.map((spec) => spec.id));
+  const usedIds = new Set();
+  const quickLog = String(plan?.id || "").startsWith("quick-");
+  const travel = plan?.phase === "travel" || plan?.muscle === "travel";
   if (!specs.length) {
     toast("This workout has no exercises available in the library.");
     return false;
@@ -565,8 +608,15 @@ beginWorkoutFromPlan = function beginToolkitWorkout(plan) {
     exercises: specs.map((spec) => {
       const preferred = state.substitutionPreferences[spec.id];
       const source = exerciseById(spec.id);
-      const usePreferred = preferred && exerciseLibrary.some((item) => item.id === preferred) && !exerciseMatchesEquipmentProfile(source) && exerciseMatchesEquipmentProfile(exerciseById(preferred));
+      // A saved swap applies only when the planned movement isn't available,
+      // never duplicates another exercise, respects Road Gym, and never
+      // overrides an exercise the athlete picked directly (Quick Start).
+      const usePreferred = !quickLog && preferred && exerciseLibrary.some((item) => item.id === preferred)
+        && !planIds.has(preferred) && !usedIds.has(preferred)
+        && (!travel || exerciseById(preferred).hotel)
+        && !exerciseMatchesEquipmentProfile(source) && exerciseMatchesEquipmentProfile(exerciseById(preferred));
       const id = usePreferred ? preferred : spec.id;
+      usedIds.add(id);
       const exercise = exerciseById(id);
       return { id, originalId: spec.id, name: exercise.name, repsOnly: exercise.muscle === "abs", targetSets: spec.sets, targetDropSets: spec.dropSets, targetReps: spec.reps, rest: spec.rest, group: spec.group, defaultSetType: spec.setType, sets: toolkitSetRows(spec) };
     })

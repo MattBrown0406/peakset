@@ -27,6 +27,7 @@
 		2B3C4D5E6F7A800000000015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000008 /* Assets.xcassets */; };
 		2B3C4D5E6F7A800000000016 /* MassMethodWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2B3C4D5E6F7A800000000017 /* MassMethodWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		2B3C4D5E6F7A80000000F002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -95,6 +96,7 @@
 		2B3C4D5E6F7A800000000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MassMethodWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MassMethodWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -144,6 +146,7 @@
 				1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */,
 				1A2B3C4D5E6F700000000107 /* PeakSet.entitlements */,
 				1A2B3C4D5E6F700000000108 /* boxing-bell.wav */,
+				2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */,
 				1A2B3C4D5E6F700000001004 /* PeakSetWatchBridge.swift */,
 				1A2B3C4D5E6F700000001003 /* PeakSetLiveActivity.swift */,
 				1A2B3C4D5E6F700000001002 /* PeakSetPhotos.swift */,
@@ -306,6 +309,7 @@
 				1A2B3C4D5E6F700000000003 /* Assets.xcassets in Resources */,
 				1A2B3C4D5E6F700000000004 /* Web in Resources */,
 				1A2B3C4D5E6F700000000006 /* boxing-bell.wav in Resources */,
+				2B3C4D5E6F7A80000000F002 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

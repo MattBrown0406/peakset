@@ -151,11 +151,13 @@ function handleWatchCommand(command) {
     if (!set || set.done) return false;
     if (!isRepsOnlyExercise(exercise)) updateSet(exIndex, setIndex, "weight", String(command.weight ?? ""));
     updateSet(exIndex, setIndex, "reps", String(command.reps ?? ""));
+    const timerBefore = state.timer.startedAt;
     completeSet(exIndex, setIndex);
+    const startedNewRest = state.timer.running && state.timer.startedAt !== timerBefore && state.timer.exerciseIndex === exIndex;
     // Rest started when the set was finished on the watch, not when the phone
     // caught up.
     const completedAt = Number(command.completedAt);
-    if (set.done && state.timer.running && Number.isFinite(completedAt) && Date.now() - completedAt > 3000) {
+    if (set.done && startedNewRest && Number.isFinite(completedAt) && Date.now() - completedAt > 3000) {
       const remaining = Math.ceil((completedAt + (Number(exercise.rest) || DEFAULT_REST_SECONDS) * 1000 - Date.now()) / 1000);
       if (remaining > 0) startTimer(remaining, true, exIndex, false);
       else stopTimer();

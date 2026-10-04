@@ -89,28 +89,42 @@ struct PeakSetWebView: UIViewRepresentable {
             }
         }
 
+        /// Presents a JavaScript panel once any screen transition (e.g. the file
+        /// picker closing) has finished, rather than answering Cancel.
+        private func presentPanel(_ alert: UIAlertController, attempt: Int = 0, onFailure: @escaping () -> Void) {
+            guard let presenter = Self.topViewController() else { return onFailure() }
+            if presenter.isBeingDismissed || presenter.isBeingPresented, let coordinator = presenter.transitionCoordinator, attempt < 3 {
+                coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+                    self?.presentPanel(alert, attempt: attempt + 1, onFailure: onFailure) ?? onFailure()
+                }
+                return
+            }
+            guard !presenter.isBeingDismissed, !presenter.isBeingPresented else { return onFailure() }
+            presenter.present(alert, animated: true)
+        }
+
         func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
-            guard let presenter = Self.topViewController(), !presenter.isBeingDismissed, !presenter.isBeingPresented else { return completionHandler() }
+
             let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
-            presenter.present(alert, animated: true)
+            presentPanel(alert) { completionHandler() }
         }
 
         func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-            guard let presenter = Self.topViewController(), !presenter.isBeingDismissed, !presenter.isBeingPresented else { return completionHandler(false) }
+
             let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
             alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
-            presenter.present(alert, animated: true)
+            presentPanel(alert) { completionHandler(false) }
         }
 
         func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
-            guard let presenter = Self.topViewController(), !presenter.isBeingDismissed, !presenter.isBeingPresented else { return completionHandler(nil) }
+
             let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
             alert.addTextField { $0.text = defaultText }
             alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
             alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak alert] _ in completionHandler(alert?.textFields?.first?.text) })
-            presenter.present(alert, animated: true)
+            presentPanel(alert) { completionHandler(nil) }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

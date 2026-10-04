@@ -841,7 +841,9 @@ function sanitizeStoredState(next) {
   }));
   next.measurements = next.measurements.map((entry) => Object.fromEntries(Object.entries(entry).map(([key, value]) => [
     key,
-    key === "healthFields" ? (Array.isArray(value) ? value.map(String) : []) : textFields.includes(key) ? String(value ?? "") : finiteOrNull(value)
+    key === "healthFields" ? (Array.isArray(value) ? value.map(String) : [])
+      : key === "_unitOrigin" ? (value && typeof value === "object" ? value : undefined)
+      : textFields.includes(key) ? String(value ?? "") : finiteOrNull(value)
   ])));
   next.weeklyCheckIns = objects(next.weeklyCheckIns).map((entry) => ({
     ...entry,
@@ -896,6 +898,7 @@ function sanitizeStoredState(next) {
 function saveState() {
   if (restoringState) return;
   try {
+    if (typeof builderDraft !== "undefined") state.builderDraft = builderDraft;
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
     storageWarningShown = false;
   } catch {
@@ -1521,7 +1524,7 @@ function historyMetric(value, suffix = "") {
   return `${Number(value.toFixed(1)).toLocaleString()}${suffix}`;
 }
 
-function exerciseVolumeSparkline(entries, exerciseName) {
+function exerciseVolumeSparkline(entries, exerciseName, unitLabel = weightUnit()) {
   if (!entries.length) return '<div class="empty"><p class="muted">Complete this exercise in at least one saved workout to start the trend.</p></div>';
   const width = 620;
   const height = 104;
@@ -1533,7 +1536,7 @@ function exerciseVolumeSparkline(entries, exerciseName) {
     return { x, y };
   });
   const points = coordinates.map(({ x, y }) => `${x},${y}`).join(" ");
-  const summary = entries.map((entry) => `${formatShortDate(entry.date)}: ${Math.round(entry.volume).toLocaleString()} ${weightUnit()}`).join(", ");
+  const summary = entries.map((entry) => `${formatShortDate(entry.date)}: ${Math.round(entry.volume).toLocaleString()} ${unitLabel}`).join(", ");
   return `
     <svg class="sparkline exercise-history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(exerciseName)} session volume trend. ${escapeHtml(summary)}">
       <line x1="0" y1="${height - 8}" x2="${width}" y2="${height - 8}" stroke="rgba(255,255,255,0.12)" />
@@ -1586,7 +1589,7 @@ function renderExerciseHistory() {
         <div><p class="eyebrow">Volume trend</p><h2>${escapeHtml(history.exercise.name)}</h2></div>
         <span class="badge blue">Last ${plural(history.sessionVolumes.length || 0, "session")}</span>
       </div>
-      ${exerciseVolumeSparkline(history.sessionVolumes, history.exercise.name)}
+      ${exerciseVolumeSparkline(history.sessionVolumes, history.exercise.name, history.exercise.muscle === "abs" ? "reps" : weightUnit())}
       <div class="history-trend-labels">
         <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes[0].date) : "First session"}</span>
         <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes.at(-1).date) : "Latest session"}</span>
@@ -1596,9 +1599,9 @@ function renderExerciseHistory() {
       <div class="card-head"><div><p class="eyebrow">Personal records</p><h2>Best performances</h2></div></div>
       <div class="grid two history-records">
         <article class="log-card card"><strong>Estimated 1RM</strong><p class="history-record-value">${historyMetric(history.estimatedOneRepMax, ` ${weightUnit()}`)}</p><p class="muted">${history.bestSet ? `${historyMetric(history.bestSet.weight, ` ${weightUnit()}`)} × ${historyMetric(history.bestSet.reps, " reps")} · ${formatShortDate(history.bestSet.date)}` : "No weighted sets yet."}</p></article>
-        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${historyMetric(history.bestSessionVolume, ` ${weightUnit()}`)}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
+        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${history.exercise.muscle === "abs" ? plural(Math.round(history.bestSessionVolume), "rep") : historyMetric(history.bestSessionVolume, ` ${weightUnit()}`)}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
         <article class="log-card card"><strong>Highest reps</strong><p class="history-record-value">${historyMetric(history.bestReps)}</p><p class="muted">Highest recorded reps in one set.</p></article>
-        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${historyMetric(history.totalVolume, ` ${weightUnit()}`)}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
+        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${history.exercise.muscle === "abs" ? plural(Math.round(history.totalVolume), "rep") : historyMetric(history.totalVolume, ` ${weightUnit()}`)}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
       </div>
     </section>
     <section class="card pad history-panel">
@@ -1664,8 +1667,19 @@ function coachReportData(days) {
   };
 }
 
+// The PDF uses WinAnsiEncoding (Latin-1 for these code points): keep accented
+// Latin letters, map typographic punctuation to ASCII, drop anything else.
 function plainReportText(value) {
-  return String(value ?? "").replace(/[^\x20-\x7E]/g, " ").replace(/\s+/g, " ").trim();
+  return String(value ?? "")
+    .normalize("NFC")
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/\u00B7/g, "-")
+    .replace(/[^\x20-\x7E\xA0-\xFF]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function addReportSection(lines, title) {
@@ -1693,7 +1707,7 @@ function buildCoachReportLines(days, coachNote = "") {
   lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString()} ${weightUnit()}`, size: 10 });
   lines.push({ text: `Body weight logs: ${report.weights.length}`, size: 10 });
   lines.push({ text: `Weight change in range: ${report.weightDelta === null ? "Needs 2 weigh-ins" : `${report.weightDelta} ${weightUnit()}`}`, size: 10 });
-  lines.push({ text: `Measurement check-ins: ${report.measurements.length}`, size: 10 });
+  lines.push({ text: `Measurement check-ins: ${report.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).length}`, size: 10 });
 
   addReportSection(lines, "Body Weight");
   if (report.weights.length) {
@@ -1739,7 +1753,10 @@ function wrapPdfText(text, maxChars) {
   const words = plainReportText(text).split(" ");
   const rows = [];
   let row = "";
-  words.forEach((word) => {
+  // Hard-break words longer than a line (URLs, hashtags) so nothing runs off
+  // the page.
+  const pieces = words.flatMap((word) => word.length > maxChars ? word.match(new RegExp(`.{1,${maxChars}}`, "g")) : [word]);
+  pieces.forEach((word) => {
     const next = row ? `${row} ${word}` : word;
     if (next.length > maxChars && row) {
       rows.push(row);
@@ -1779,8 +1796,8 @@ function createPdfBlob(lines) {
   const pages = paginateReport(lines);
   const objects = [];
   objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
-  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
-  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>";
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
   const pageIds = [];
 
   pages.forEach((page, index) => {
@@ -1812,7 +1829,11 @@ function createPdfBlob(lines) {
     pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
   }
   pdf += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
-  return new Blob([pdf], { type: "application/pdf" });
+  // One byte per character (all text is within Latin-1), so string offsets in
+  // the xref equal byte offsets. A plain string Blob would be UTF-8 encoded.
+  const bytes = new Uint8Array(pdf.length);
+  for (let index = 0; index < pdf.length; index += 1) bytes[index] = pdf.charCodeAt(index) & 0xff;
+  return new Blob([bytes], { type: "application/pdf" });
 }
 
 function downloadBlob(blob, filename) {
@@ -2033,6 +2054,37 @@ function comparableMeasurementChanges(current, baseline, keys) {
   });
 }
 
+// Per-metric series: entries without a value (e.g. a waist-only Apple Health
+// reading) never hide the other measurements.
+function measurementSeries(key) {
+  return sortedMeasurementLogs().map((entry) => ({ date: entry.date, value: numericMeasurement(entry, key) })).filter((point) => point.value !== null);
+}
+
+// Left/right/legacy arm and thigh keys describe one body part each.
+const MEASUREMENT_PART_FAMILIES = { arm: ["leftArm", "rightArm", "arm"], thigh: ["leftThigh", "rightThigh", "thigh"] };
+
+function measurementPartKey(key) {
+  const family = MEASUREMENT_PART_FAMILIES[key];
+  return family ? family.find((member) => measurementSeries(member).length >= 2) || null : key;
+}
+
+function measurementPartChanges(keys, compareTo) {
+  const seen = new Set();
+  return keys.flatMap((key) => {
+    const familyName = Object.keys(MEASUREMENT_PART_FAMILIES).find((name) => MEASUREMENT_PART_FAMILIES[name].includes(key));
+    const part = familyName || key;
+    if (seen.has(part)) return [];
+    const seriesKey = familyName ? measurementPartKey(familyName) : key;
+    const series = seriesKey ? measurementSeries(seriesKey) : [];
+    if (series.length < 2) return [];
+    seen.add(part);
+    const metric = measurementMetrics.find((item) => item.key === seriesKey);
+    const label = familyName ? (familyName === "arm" ? "Arms" : "Thighs") : metric?.label || seriesKey;
+    const baseline = compareTo === "first" ? series[0] : series[series.length - 2];
+    return [{ key: seriesKey, label, change: series[series.length - 1].value - baseline.value, direction: metric?.direction || "up" }];
+  });
+}
+
 function weakPointMeasurementStatus() {
   const logs = sortedMeasurementLogs();
   if (logs.length < 2) {
@@ -2043,9 +2095,7 @@ function weakPointMeasurementStatus() {
     };
   }
 
-  const latest = logs[logs.length - 1];
-  const baseline = logs[0];
-  const changes = comparableMeasurementChanges(latest, baseline, growthMeasurementKeys);
+  const changes = measurementPartChanges(growthMeasurementKeys, "first");
 
   if (changes.length < 3) {
     return {
@@ -2059,7 +2109,7 @@ function weakPointMeasurementStatus() {
   return {
     done: true,
     label: "Weak-point measurements reviewed",
-    detail: `Lowest change since baseline: ${weakest.label} ${weakest.change >= 0 ? "+" : ""}${weakest.change.toFixed(1)} ${lengthUnit()}.`
+    detail: `Lowest change since baseline: ${weakest.label} ${formatSignedChange(weakest.change)} ${lengthUnit()}.`
   };
 }
 
@@ -2073,9 +2123,7 @@ function physiqueMeasurementProgressStatus() {
     };
   }
 
-  const latest = logs[logs.length - 1];
-  const previous = logs[logs.length - 2];
-  const changes = comparableMeasurementChanges(latest, previous, measurementMetrics.map((metric) => metric.key));
+  const changes = measurementPartChanges(measurementMetrics.map((metric) => metric.key), "previous");
 
   if (!changes.length) {
     return {
@@ -2085,11 +2133,7 @@ function physiqueMeasurementProgressStatus() {
     };
   }
 
-  const ranked = changes.map((change) => {
-    const metric = measurementMetrics.find((item) => item.key === change.key);
-    const progress = metric?.direction === "down" ? -change.change : change.change;
-    return { ...change, progress, direction: metric?.direction || "up" };
-  }).sort((a, b) => b.progress - a.progress);
+  const ranked = changes.map((change) => ({ ...change, progress: change.direction === "down" ? -change.change : change.change })).sort((a, b) => b.progress - a.progress);
 
   const best = ranked[0];
   if (best.progress >= 0.1) {
@@ -2097,7 +2141,7 @@ function physiqueMeasurementProgressStatus() {
     return {
       done: true,
       label: "Body measurements progressing",
-      detail: `${best.label} ${best.change >= 0 ? "+" : ""}${best.change.toFixed(1)} ${unit} since last check-in.`
+      detail: `${best.label} ${formatSignedChange(best.change)} ${unit} since last check-in.`
     };
   }
 
@@ -2109,7 +2153,9 @@ function physiqueMeasurementProgressStatus() {
 }
 
 function stageChecklist(timeline) {
-  const lastMeasurementDays = daysSince(state.measurements[0]?.date);
+  // Only hand-entered tape check-ins count as "current"; Health adds daily
+  // single-metric readings.
+  const lastMeasurementDays = daysSince(state.measurements.find((entry) => !String(entry.id || "").startsWith("hk-"))?.date);
   const lastWeightDays = daysSince(state.weightLogs[0]?.date);
   const lastWorkoutDays = daysSince(state.workoutLogs[0]?.date);
   const measurementDue = lastMeasurementDays === null || lastMeasurementDays >= 7;
@@ -2474,7 +2520,13 @@ function renderBuilder() {
   `;
 }
 
-let builderDraft = [];
+// The draft survives the app being closed; entries are re-validated on load.
+var builderDraft = Array.isArray(state.builderDraft)
+  ? state.builderDraft.filter((spec) => {
+      const id = Array.isArray(spec) ? spec[0] : spec?.id;
+      return exerciseLibrary.some((exercise) => exercise.id === id);
+    })
+  : [];
 
 function addBuilderExercise() {
   const id = document.getElementById("customExercise").value;
@@ -3199,7 +3251,7 @@ function renderLogbook() {
         <p class="label">Weight logs</p>
       </article>
       <article class="card stat">
-        <p class="value">${report.measurements.length}</p>
+        <p class="value">${report.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).length}</p>
         <p class="label">Check-ins</p>
       </article>
     </div>

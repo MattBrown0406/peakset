@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 import WatchConnectivity
 import WatchKit
 
@@ -55,6 +56,10 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     @Published var reps: Double = 8 { didSet { if !loadingDraft { draftEdited = true } } }
     @Published private(set) var reachable = false
     @Published private(set) var localRest: (start: Date, end: Date)?
+    /// Skip pressed on the watch while the phone (possibly locked) still
+    /// reports an older rest as running.
+    private var restSkippedAt: Date?
+    private let restNotificationID = "mass-method-watch-rest"
 
     private var followCurrent = true
     private var restAlertTask: Task<Void, Never>?
@@ -75,9 +80,18 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
 
     override init() {
         super.init()
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
+    }
+
+    private var snapshotRest: (start: Date, end: Date)? {
+        guard let rest = snapshot?.rest, rest.running, let endsAt = rest.endsAt else { return nil }
+        let start = Date(timeIntervalSince1970: (rest.startedAt ?? endsAt) / 1000)
+        if let skipped = restSkippedAt, start <= skipped { return nil }
+        let end = Date(timeIntervalSince1970: endsAt / 1000)
+        return end > Date() ? (start, end) : nil
     }
 
     var exercise: WatchSnapshot.Exercise? {
@@ -91,15 +105,12 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
 
     var restEndsAt: Date? {
         if let localRest, localRest.end > Date() { return localRest.end }
-        guard let rest = snapshot?.rest, rest.running, let endsAt = rest.endsAt else { return nil }
-        let date = Date(timeIntervalSince1970: endsAt / 1000)
-        return date > Date() ? date : nil
+        return snapshotRest?.end
     }
 
     var restStartedAt: Date {
         if let localRest, localRest.end > Date() { return localRest.start }
-        guard let started = snapshot?.rest.startedAt else { return Date() }
-        return Date(timeIntervalSince1970: started / 1000)
+        return snapshotRest?.start ?? Date()
     }
 
     var weightStep: Double {
@@ -148,7 +159,9 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     func adjustRest(_ seconds: Int) {
-        if let rest = localRest, rest.end > Date() {
+        // Adjust whichever rest is showing, even one the phone started.
+        let current = (localRest.flatMap { $0.end > Date() ? $0 : nil }) ?? snapshotRest
+        if let rest = current {
             localRest = (rest.start, max(Date().addingTimeInterval(1), rest.end.addingTimeInterval(TimeInterval(seconds))))
             scheduleRestAlert()
         }
@@ -157,7 +170,9 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
 
     func skipRest() {
         localRest = nil
+        restSkippedAt = Date()
         restAlertTask?.cancel()
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [restNotificationID])
         send(["commandId": UUID().uuidString, "sentAt": Date().timeIntervalSince1970 * 1000, "action": "skipRest", "workoutId": snapshot?.workoutId ?? ""])
         objectWillChange.send()
     }
@@ -225,6 +240,10 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             return pending
         }
         if pendingCompletions.isEmpty { localRest = nil }
+        // A rest the phone started after the watch's Skip replaces the skip.
+        if let skipped = restSkippedAt, let started = next.rest.startedAt, Date(timeIntervalSince1970: started / 1000) > skipped {
+            restSkippedAt = nil
+        }
         guard next != snapshot else { return }
         let previousSet = nextSet?.index
         let previousExercise = selectedExercise
@@ -254,7 +273,20 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
 
     private func scheduleRestAlert() {
         restAlertTask?.cancel()
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [restNotificationID])
         guard let endsAt = restEndsAt else { return }
+        // A rest started on the watch has no phone notification behind it
+        // (the phone may be locked), so the watch schedules its own; it fires
+        // even with the wrist down when the app is suspended.
+        if let localRest, localRest.end == endsAt {
+            let content = UNMutableNotificationContent()
+            content.title = "Rest complete"
+            content.body = "Your next set is ready."
+            content.sound = .default
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, endsAt.timeIntervalSinceNow), repeats: false)
+            center.add(UNNotificationRequest(identifier: restNotificationID, content: content, trigger: trigger))
+        }
         restAlertTask = Task { [weak self] in
             let delay = endsAt.timeIntervalSinceNow
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
