@@ -239,6 +239,11 @@ struct PeakSetWebView: UIViewRepresentable {
                         "workoutWrite": summary.workoutWrite
                     ] })
                 }
+            case "readBody":
+                let since = (payload["since"] as? String).flatMap(parseISODate) ?? Date().addingTimeInterval(-180 * 86400)
+                service.readBodySamples(since: since, kilograms: (payload["unit"] as? String) == "kg", centimeters: (payload["lengthUnit"] as? String) == "cm") { [weak self] result in
+                    self?.sendHealthKitResult(result.map { samples -> [String: Any] in ["status": "bodySamples", "samples": samples] })
+                }
             case "readSteps":
                 service.readTodaySteps { [weak self] result in
                     self?.sendHealthKitResult(result.map { value -> [String: Any] in ["status": "stepsImported", "message": "Today's steps imported", "steps": value] })

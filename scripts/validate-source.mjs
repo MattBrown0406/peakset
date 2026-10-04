@@ -535,3 +535,47 @@ assert.equal(vm.runInContext("state.trainingBlock.accumulationWeeks", athleteCtx
 assert.match(vm.runInContext("state.view = 'today'; renderToday()", athleteCtx.context), /From Coach Sam[\s\S]*Glutes first\./, "the coach message shows on Today");
 
 console.log("Coach mode checks passed.");
+
+// Apple Health body data import (health.js).
+const healthCtx = makeContext({
+  profile: { bodyweight: 200, gender: "Male", age: 40 },
+  weightLogs: [{ id: "manual-1", date: "2026-09-02T13:00:00Z", bodyweight: 199, note: "Manual" }],
+  measurements: [{ id: "tape-1", date: "2026-08-20T13:00:00Z", chest: 46, waist: 33, leftArm: 17 }]
+});
+const healthSamples = [
+  { type: "weight", id: "a", date: "2026-09-01T15:00:00Z", value: 201.2, source: "Withings" },
+  { type: "weight", id: "b", date: "2026-09-01T12:00:00Z", value: 200.4, source: "Withings" },
+  { type: "bodyFat", id: "c", date: "2026-09-01T12:00:00Z", value: 14.2, source: "Withings" },
+  { type: "leanMass", id: "d", date: "2026-09-01T12:00:00Z", value: 172, source: "Withings" },
+  { type: "weight", id: "e", date: "2026-09-02T12:30:00Z", value: 198.8, source: "Withings" },
+  { type: "bodyFat", id: "f", date: "2026-09-02T12:30:00Z", value: 14.0, source: "Withings" },
+  { type: "bodyFat", id: "g", date: "2026-09-05T12:00:00Z", value: 13.6, source: "DEXA" },
+  { type: "waist", id: "h", date: "2026-09-06T12:00:00Z", value: 32.5, source: "Tape" },
+  { type: "weight", id: "x", date: "2026-09-07T12:00:00Z", value: -5, source: "Bad" }
+];
+vm.runInContext("state.healthBody.enabled = true", healthCtx.context);
+vm.runInContext(`applyHealthBodySamples(${JSON.stringify(healthSamples)})`, healthCtx.context);
+const day1 = JSON.parse(vm.runInContext("JSON.stringify(state.weightLogs.find((entry) => entry.id === 'hk-day-' + dateKey(new Date('2026-09-01T12:00:00Z'))))", healthCtx.context));
+assert.equal(day1.bodyweight, 200.4, "the first (morning) weigh-in of the day is imported");
+assert.equal(day1.bodyFat, 14.2, "body fat rides along with the weigh-in");
+assert.equal(day1.leanMass, 172, "lean mass rides along with the weigh-in");
+const manual = JSON.parse(vm.runInContext("JSON.stringify(state.weightLogs.find((entry) => entry.id === 'manual-1'))", healthCtx.context));
+assert.equal(manual.bodyweight, 199, "a hand-logged weight always wins over Health");
+assert.equal(manual.bodyFat, 14, "Health fills body fat on a hand-logged day");
+assert.equal(vm.runInContext("state.weightLogs.filter((entry) => entry.id.startsWith('hk-day-')).length", healthCtx.context), 1, "no Health weight duplicates a hand-logged day; invalid values are ignored");
+assert.equal(vm.runInContext("state.measurements.filter((entry) => entry.id.startsWith('hk-m-')).length", healthCtx.context), 2, "body fat without a weigh-in and waist go to measurements");
+assert.equal(vm.runInContext("latestMeasurementValue('chest')", healthCtx.context), 46, "a waist-only Health entry must not blank out other measurements");
+assert.equal(vm.runInContext("latestMeasurementValue('waist')", healthCtx.context), 32.5, "the newest waist comes from Health");
+const before = vm.runInContext("JSON.stringify([state.weightLogs, state.measurements])", healthCtx.context);
+assert.equal(vm.runInContext(`applyHealthBodySamples(${JSON.stringify(healthSamples)})`, healthCtx.context), 0, "re-syncing the same samples changes nothing");
+assert.equal(vm.runInContext("JSON.stringify([state.weightLogs, state.measurements])", healthCtx.context), before, "re-syncing is idempotent");
+assert.ok(vm.runInContext("state.weightLogs.every((entry, index, list) => index === 0 || new Date(list[index - 1].date) >= new Date(entry.date))", healthCtx.context), "weight logs stay newest-first");
+assert.equal(vm.runInContext("bodyFatSeries().length", healthCtx.context), 3, "body fat trend combines weigh-ins and measurements");
+assert.match(vm.runInContext("buildCoachReportLines(3650).map((line) => line.text).join('\\n')", healthCtx.context), /14% body fat/, "the coach PDF shows body fat next to weight");
+vm.runInContext("window.confirm = () => true; removeHealthImports()", healthCtx.context);
+assert.equal(vm.runInContext("state.weightLogs.length + ':' + state.measurements.length", healthCtx.context), "1:1", "removing Health data keeps only hand-logged entries");
+assert.equal(vm.runInContext("state.weightLogs[0].bodyFat", healthCtx.context), null, "removing Health data clears fields Health filled in");
+assert.match(read("ios/PeakSet/PeakSetNativeServices.swift"), /bodyFatPercentage[\s\S]*leanBodyMass[\s\S]*waistCircumference/, "HealthKit reads the body metrics");
+assert.match(read("ios/PeakSet/PeakSetNativeServices.swift"), /bundleIdentifier == ownBundle/, "weights this app wrote are not re-imported");
+
+console.log("Apple Health body data checks passed.");

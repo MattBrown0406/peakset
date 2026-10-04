@@ -1582,7 +1582,7 @@ function buildCoachReportLines(days, coachNote = "") {
   addReportSection(lines, "Body Weight");
   if (report.weights.length) {
     report.weights.forEach((entry) => {
-      lines.push({ text: `${formatShortDate(entry.date)} - ${formatWeight(entry.bodyweight)} ${weightUnit()}${entry.note ? ` - ${entry.note}` : ""}`, size: 10 });
+      lines.push({ text: `${formatShortDate(entry.date)} - ${formatWeight(entry.bodyweight)} ${weightUnit()}${Number(entry.bodyFat) > 0 ? ` - ${formatWeight(entry.bodyFat)}% body fat` : ""}${entry.note ? ` - ${entry.note}` : ""}`, size: 10 });
     });
   } else {
     lines.push({ text: "No body weight logs in this range.", size: 10 });
@@ -3068,7 +3068,7 @@ function renderLogbook() {
         <article class="log-card card">
           <strong>Body weight</strong>
           ${report.weights.slice(0, 6).map((entry) => `
-            <p class="muted">${formatShortDate(entry.date)} - ${formatWeight(entry.bodyweight)} ${weightUnit()}${entry.note ? ` - ${escapeHtml(entry.note)}` : ""}</p>
+            <p class="muted">${formatShortDate(entry.date)} - ${formatWeight(entry.bodyweight)} ${weightUnit()}${Number(entry.bodyFat) > 0 ? ` · ${formatWeight(entry.bodyFat)}% BF` : ""}${entry.note ? ` - ${escapeHtml(entry.note)}` : ""}</p>
           `).join("") || '<p class="muted">No body weight logs in this range.</p>'}
         </article>
         <article class="log-card card">

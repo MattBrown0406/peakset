@@ -36,7 +36,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Mass Method uses the camera to take progress photos, with your previous photo shown as a guide so poses line up.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>Mass Method reads your step count when you choose to import it into a check-in.</string>
+	<string>Mass Method reads your body weight, body fat percentage, lean body mass, waist circumference, and steps so your logbook, trends, and coach check-ins stay current.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Mass Method writes body weight and completed strength workouts to Apple Health when you choose to sync them.</string>
 	<key>UIFileSharingEnabled</key>

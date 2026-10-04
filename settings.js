@@ -47,7 +47,10 @@ function convertStoredUnits(target) {
   });
 
   if (state.profile) state.profile.bodyweight = convertNumber(state.profile.bodyweight, weightFactor);
-  state.weightLogs.forEach((entry) => { entry.bodyweight = convertNumber(entry.bodyweight, weightFactor); });
+  state.weightLogs.forEach((entry) => {
+    entry.bodyweight = convertNumber(entry.bodyweight, weightFactor);
+    entry.leanMass = convertNumber(entry.leanMass, weightFactor);
+  });
   state.measurements.forEach((entry) => {
     LENGTH_MEASUREMENT_KEYS.forEach((key) => { entry[key] = convertNumber(entry[key], lengthFactor); });
   });
