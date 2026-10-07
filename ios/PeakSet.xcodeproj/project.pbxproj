@@ -28,6 +28,7 @@
 		2B3C4D5E6F7A800000000016 /* MassMethodWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2B3C4D5E6F7A800000000017 /* MassMethodWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2B3C4D5E6F7A80000000F002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */; };
+		2B3C4D5E6F7A80000000F004 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -97,6 +98,7 @@
 		2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MassMethodWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MassMethodWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -190,6 +192,7 @@
 				2B3C4D5E6F7A800000000006 /* WatchWorkoutModel.swift */,
 				2B3C4D5E6F7A800000000007 /* WatchWorkoutView.swift */,
 				2B3C4D5E6F7A800000000008 /* Assets.xcassets */,
+				2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */,
 			);
 			path = MassMethodWatch;
 			sourceTree = "<group>";
@@ -325,6 +328,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2B3C4D5E6F7A800000000015 /* Assets.xcassets in Resources */,
+				2B3C4D5E6F7A80000000F004 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

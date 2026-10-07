@@ -155,8 +155,11 @@ function nativeBackupPayload() {
   return { format: BACKUP_FORMAT, version: BACKUP_VERSION, app: APP_NAME, exportedAt: new Date().toISOString(), state: copy };
 }
 
+// Local calendar day, matching how the rest of the app keys days; the UTC
+// date would name an evening US snapshot after tomorrow.
 function todayStamp() {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
 async function shareOrDownload(text, filename, mime = "application/json") {

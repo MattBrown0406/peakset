@@ -721,6 +721,9 @@ function fromPounds(pounds) {
 }
 
 function formatWeight(value, digits = 1) {
+  // null is Number(null) === 0; a cleared weight (e.g. after an iCloud
+  // restore stripped a Health-derived value) must read "--", not "0".
+  if (value === null || value === undefined || value === "") return "--";
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   // `+ 0` turns -0 into 0 so tiny negative changes never read "-0".
@@ -760,7 +763,10 @@ function loadState() {
       // an empty state, and the next save would overwrite the user's history.
       next[key] = Array.isArray(next[key]) ? next[key].filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry)) : [];
     });
-    if (next.weightLogs.length === 0) {
+    // Only the pre-weightLogs schema needs this migration. Re-running it on
+    // an emptied list would re-seed a (possibly Health-derived) profile weight
+    // as a hand-entered log that then leaks into iCloud snapshots.
+    if (!Array.isArray(stored.weightLogs)) {
       const migratedWeights = next.measurements
         .filter((entry) => entry.bodyweight)
         .map((entry) => ({
@@ -786,6 +792,7 @@ function loadState() {
     if (savedTimer.running && Number.isFinite(endsAt) && endsAt > Date.now()) {
       next.timer = {
         seconds,
+        total: Math.max(1, Math.round(Number(savedTimer.total)) || seconds),
         left: Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)),
         running: true,
         startedAt: Number(savedTimer.startedAt) || null,
@@ -919,6 +926,13 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+// Plan rows whose exercise id is unknown (restored from a build that renamed
+// it) are skipped when the workout starts, so previews skip them too instead
+// of showing the library's first exercise.
+function knownPlanExercises(plan) {
+  return (plan?.exercises || []).filter((row) => Array.isArray(row) && exerciseLibrary.some((item) => item.id === row[0]));
 }
 
 function exerciseById(id) {
@@ -2012,7 +2026,8 @@ function weightTrendSummary() {
   const early = average(recent.slice(0, midpoint).map((entry) => Number(entry.bodyweight)));
   const late = average(recent.slice(midpoint).map((entry) => Number(entry.bodyweight)));
   const delta = late - early;
-  const label = Math.abs(delta) < 0.2 ? "Flat" : delta > 0 ? "Trending up" : "Trending down";
+  // 0.2 lb is the "flat" band; in kg the same physical change is smaller.
+  const label = Math.abs(delta) < fromPounds(0.2) ? "Flat" : delta > 0 ? "Trending up" : "Trending down";
   return {
     label,
     delta,
@@ -2142,7 +2157,9 @@ function physiqueMeasurementProgressStatus() {
   const ranked = changes.map((change) => ({ ...change, progress: change.direction === "down" ? -change.change : change.change })).sort((a, b) => b.progress - a.progress);
 
   const best = ranked[0];
-  if (best.progress >= 0.1) {
+  // 0.1 in (or 0.1 % body fat) counts as progress; convert for cm.
+  const threshold = best.key === "bodyFat" || !isMetric() ? 0.1 : 0.1 * CM_PER_IN;
+  if (best.progress >= threshold) {
     const unit = best.key === "bodyFat" ? "%" : lengthUnit();
     return {
       done: true,
@@ -2345,7 +2362,7 @@ function renderToday() {
           ${todayWorkoutSelect()}
         </div>
         <div class="exercise-list">
-          ${plan.exercises.map(([id, sets, reps]) => `
+          ${knownPlanExercises(plan).map(([id, sets, reps]) => `
             <div class="exercise-row">
               <strong>${escapeHtml(exerciseById(id).name)}</strong>
               <span class="badge">${escapeHtml(sets)} x ${escapeHtml(reps)}</span>
@@ -2396,7 +2413,7 @@ function renderPlanCard(plan) {
       </div>
       <p class="muted">${escapeHtml(plan.note)}</p>
       <div class="exercise-list">
-        ${plan.exercises.slice(0, 5).map(([id, sets, reps]) => `
+        ${knownPlanExercises(plan).slice(0, 5).map(([id, sets, reps]) => `
           <div class="exercise-row">
             <span class="truncate">${escapeHtml(exerciseById(id).name)}</span>
             <span class="badge">${escapeHtml(sets)} x ${escapeHtml(reps)}</span>
@@ -2880,8 +2897,11 @@ function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseI
   if (persistRest && state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
     state.activeWorkout.exercises[exerciseIndex].rest = duration;
   }
+  // A one-off adjustment (+15s, watch catch-up) changes only this rest: the
+  // remembered preset `seconds` stays, and `total` drives the progress ring.
   state.timer = {
-    seconds: duration,
+    seconds: persistRest ? duration : clampRestSeconds(state.timer.seconds),
+    total: duration,
     left: duration,
     running: true,
     startedAt: now,
@@ -2893,7 +2913,13 @@ function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseI
   ensureTimerTick();
 }
 
+function clearTimerTick() {
+  if (timerTick) clearInterval(timerTick);
+  timerTick = null;
+}
+
 function stopTimer() {
+  clearTimerTick();
   state.timer.running = false;
   state.timer.left = 0;
   state.timer.startedAt = null;
@@ -2913,12 +2939,20 @@ function closeRestOverlay() {
 
 function ensureTimerTick() {
   if (timerTick) clearInterval(timerTick);
+  // Hidden page (locked phone): the native notification rings on time and the
+  // visible branch of visibilitychange re-arms the tick via reconcile. A tick
+  // armed here by a late watch command would ring a second bell on return.
+  if (typeof document !== "undefined" && document.hidden) {
+    timerTick = null;
+    return;
+  }
   timerTick = setInterval(() => {
     if (!state.timer.running) return;
     const left = Math.max(0, Math.ceil((state.timer.endsAt - Date.now()) / 1000));
     if (left === state.timer.left && left > 0) return;
     state.timer.left = left;
     if (left <= 0) {
+      clearTimerTick();
       state.timer.running = false;
       state.timer.left = 0;
       if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel", workoutActive: Boolean(state.activeWorkout) });
@@ -2935,10 +2969,15 @@ function ensureTimerTick() {
   }, 250);
 }
 
+function timerTotalSeconds() {
+  return Math.max(1, Number(state.timer.total) || Number(state.timer.seconds) || 1);
+}
+
 function updateTimerDom() {
-  const total = Math.max(1, state.timer.seconds);
+  const total = timerTotalSeconds();
   const left = timerDisplaySeconds();
-  const elapsed = total - left;
+  // Idle: the face shows the preset, which may exceed the last rest's total.
+  const elapsed = state.timer.running || state.timer.fullscreen ? total - left : 0;
   document.querySelectorAll(".timer-face").forEach((face) => {
     face.style.setProperty("--progress", `${Math.min(360, (elapsed / total) * 360)}deg`);
   });
@@ -3065,10 +3104,10 @@ function renderSession() {
   const completed = workout.exercises.reduce((sum, ex) => sum + ex.sets.filter((set) => set.done).length, 0);
   const total = workout.exercises.reduce((sum, ex) => sum + ex.sets.length, 0);
   const left = timerDisplaySeconds();
-  const totalTimer = Math.max(1, state.timer.seconds);
+  const totalTimer = timerTotalSeconds();
   const progress = state.timer.running || state.timer.fullscreen ? ((totalTimer - left) / totalTimer) * 360 : 0;
 
-  setTimeout(ensureTimerTick, 0);
+  if (state.timer.running) setTimeout(ensureTimerTick, 0);
 
   return `
     ${renderRestOverlay(left, progress)}

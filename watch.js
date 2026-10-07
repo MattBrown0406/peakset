@@ -151,6 +151,10 @@ const appliedWatchCommandIds = [];
 // Watch commands arrive while the athlete may be on another tab (often typing
 // a weigh-in or measurements); only the live workout screen re-renders.
 let watchCommandInProgress = false;
+// The watch schedules its own "Rest complete" alert for every rest it starts
+// (see WatchWorkoutModel.scheduleRestAlert), so the phone must not schedule a
+// second one when it applies that set while foregrounded.
+let watchCommandAction = "";
 const baseRenderForWatchCommands = render;
 render = function renderUnlessBackgroundWatchCommand() {
   if (watchCommandInProgress && state.view !== "session") {
@@ -162,10 +166,12 @@ render = function renderUnlessBackgroundWatchCommand() {
 
 function handleWatchCommand(command) {
   watchCommandInProgress = true;
+  watchCommandAction = String(command?.action || "");
   try {
     return applyWatchCommand(command);
   } finally {
     watchCommandInProgress = false;
+    watchCommandAction = "";
   }
 }
 
@@ -268,6 +274,7 @@ function restTimerContext() {
   const allSets = workout.exercises.flatMap((item) => item.sets);
   return {
     liveActivity: state.liveActivityEnabled !== false,
+    restStartedOnWatch: watchCommandInProgress && watchCommandAction === "completeSet",
     workoutTitle: workout.title,
     exerciseName: exercise?.name || "Next set",
     nextSetLabel: nextSet ? `Set ${nextSet.label || nextSet.set} of ${exercise.sets.length}` : "Next exercise",

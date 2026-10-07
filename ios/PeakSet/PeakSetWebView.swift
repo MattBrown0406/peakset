@@ -156,9 +156,11 @@ struct PeakSetWebView: UIViewRepresentable {
                     completion?(false)
                     return
                 }
-                // `void` keeps the result serializable; success means the call ran.
-                webView.evaluateJavaScript("void window.\(function)?.(...\(array));") { _, error in
-                    completion?(error == nil)
+                // Success means the handler exists and ran; a missing handler
+                // (module failed to load) must not acknowledge the command, or
+                // queued watch sets would be discarded.
+                webView.evaluateJavaScript("typeof window.\(function) === 'function' ? (window.\(function)(...\(array)), true) : false;") { result, error in
+                    completion?(error == nil && (result as? Bool) == true)
                 }
             }
         }
@@ -295,7 +297,13 @@ struct PeakSetWebView: UIViewRepresentable {
                 return
             }
             guard action == "start", let seconds = (payload["seconds"] as? NSNumber)?.doubleValue else { return }
-            PeakSetTimerService.shared.start(seconds: seconds)
+            if payload["restStartedOnWatch"] as? Bool == true {
+                // The watch already scheduled its own alert for this rest; a
+                // phone notification too would ring twice once the phone locks.
+                PeakSetTimerService.shared.cancel()
+            } else {
+                PeakSetTimerService.shared.start(seconds: seconds)
+            }
             if payload["liveActivity"] as? Bool == true,
                let endsAtMs = (payload["endsAt"] as? NSNumber)?.doubleValue {
                 let endsAt = Date(timeIntervalSince1970: endsAtMs / 1000)

@@ -14,6 +14,9 @@ const toolkit = read("toolkit.js");
 // The page's scripts, in the order index.html loads them.
 const webScripts = [...read("index.html").matchAll(/<script src="\.\/([\w-]+\.js)"><\/script>/g)].map((match) => match[1]);
 assert.deepEqual(webScripts.slice(0, 2), ["app.js", "toolkit.js"], "index.html must load app.js then toolkit.js first");
+// Every <script> tag must match the exact shape above; otherwise a module would
+// silently drop out of both this suite and the iOS bundle sync.
+assert.equal(webScripts.length, (read("index.html").match(/<script\b/g) || []).length, "Every index.html <script> must be a plain ./module.js tag");
 const styles = read("styles.css");
 const swiftApp = read("ios/PeakSet/PeakSetApp.swift");
 const swiftWebView = read("ios/PeakSet/PeakSetWebView.swift");
@@ -118,11 +121,19 @@ assert.equal(appIcon.readUInt32BE(16), 1024, "Mass Method app icon must be 1024 
 assert.equal(appIcon.readUInt32BE(20), 1024, "Mass Method app icon must be 1024 px tall");
 assert.equal(appIcon[25], 2, "Mass Method app icon must be opaque RGB without alpha");
 
-for (const filename of [...webScripts, "styles.css", "index.html", "assets/physique-lines.svg"]) {
+const expectedBundleFiles = [...webScripts, "styles.css", "index.html", "assets/physique-lines.svg", "assets/boxing-bell.wav"].sort();
+for (const filename of expectedBundleFiles.filter((name) => !name.endsWith(".wav"))) {
   assert.equal(read(filename), read(`ios/PeakSet/Web/${filename}`), `${filename} is not synced into the iOS bundle`);
 }
 assert.deepEqual(readBuffer("assets/boxing-bell.wav"), readBuffer("ios/PeakSet/Web/assets/boxing-bell.wav"), "Boxing bell audio is not synced into the iOS bundle");
 assert.deepEqual(readBuffer("assets/boxing-bell.wav"), readBuffer("ios/PeakSet/boxing-bell.wav"), "Native notification bell is not synced");
+// The Web folder is an Xcode folder reference, so every file in it ships.
+// Parity must hold in both directions: nothing missing, nothing stale.
+const bundledFiles = fs.readdirSync(path.join(root, "ios/PeakSet/Web"), { recursive: true, withFileTypes: true })
+  .filter((entry) => entry.isFile() && entry.name !== ".DS_Store")
+  .map((entry) => path.relative(path.join(root, "ios/PeakSet/Web"), path.join(entry.parentPath ?? entry.path, entry.name)))
+  .sort();
+assert.deepEqual(bundledFiles, expectedBundleFiles, "ios/PeakSet/Web contains files the web app no longer uses (or is missing some)");
 
 console.log(`Validated ${exercises.length} exercises and ${plans.length} workout templates.`);
 console.log(`Incline Y-Raise is present in ${shoulderPlans.length} shoulder workout templates.`);
@@ -1080,4 +1091,41 @@ console.log("Audit round 8 checks passed.");
   run("startWorkout('chest-density'); const ex = state.activeWorkout.exercises[2]; ex.sets[0].weight = '60'; ex.sets[0].reps = '10'; completeSet(2, 0); completeSet(2, 0); stopTimer()");
   assert.equal(run("currentWatchExerciseIndex(state.activeWorkout)"), 0, "undoing a mis-tapped set sends the watch back to the first open exercise");
   console.log("Audit round 11 checks passed.");
+
+// ---- Audit round 12 (2026-10-07 fresh pass) ----
+{
+  const watchJs = read("watch.js");
+  const backupService = read("ios/PeakSet/PeakSetBackupService.swift");
+  const watchPrivacy = read("ios/MassMethodWatch/PrivacyInfo.xcprivacy");
+  // App Store upload rejects a watch binary that uses UserDefaults without a privacy manifest.
+  assert(watchPrivacy.includes("NSPrivacyAccessedAPICategoryUserDefaults"), "Watch privacy manifest must declare UserDefaults");
+  assert(/2B3C4D5E6F7A80000000F004 \/\* PrivacyInfo.xcprivacy in Resources \*\/,/.test(xcodeProject), "Watch PrivacyInfo.xcprivacy is not in the watch Resources phase");
+  // A rest started on the watch must not also schedule a phone notification (double alert).
+  assert(watchJs.includes('restStartedOnWatch: watchCommandInProgress && watchCommandAction === "completeSet"'), "Watch-started rests must be flagged to the native timer");
+  assert(swiftWebView.includes('payload["restStartedOnWatch"] as? Bool == true'), "Native timer must skip its notification for watch-started rests");
+  // iCloud restores must not block the snapshot queue or hang offline.
+  assert(backupService.includes("let worker = location == .iCloud ? restoreQueue : queue"), "iCloud restores must run on their own queue");
+  assert(backupService.includes("case downloadPending"), "iCloud restore needs a bounded download wait");
+  assert(backupService.includes("self.photoQueue.async { self.mirrorPhotosToICloud() }"), "Photo mirroring must not delay the backup completion");
+  // Incoming files are read off the main thread.
+  assert(backupService.includes("DispatchQueue.global(qos: .userInitiated).async {\n            let scoped = url.startAccessingSecurityScopedResource()"), "Incoming backup files must be read off the main thread");
+  // Watch commands are acknowledged only when the JS handler actually exists.
+  assert(swiftWebView.includes("typeof window.\\(function) === 'function' ? (window.\\(function)(...\\(array)), true) : false;"), "Watch commands must not be acknowledged when the JS handler is missing");
+  // Core JS: adjusting a running rest keeps the preset; the ring uses `total`.
+  assert(app.includes("seconds: persistRest ? duration : clampRestSeconds(state.timer.seconds),"), "Running-rest adjustments must not rewrite the rest preset");
+  assert(app.includes("function timerTotalSeconds()") && toolkit.includes("const totalTimer = timerTotalSeconds();"), "Timer ring must use the rest total, not the preset");
+  assert(app.includes("if (state.timer.running) setTimeout(ensureTimerTick, 0);") && toolkit.includes("if (state.timer.running) setTimeout(ensureTimerTick, 0);"), "Session render must not arm the timer tick while idle");
+  assert(app.includes("function clearTimerTick()"), "Timer tick must be cleared when the rest completes");
+  assert(app.includes('if (value === null || value === undefined || value === "") return "--";'), "formatWeight(null) must read --");
+  assert(app.includes("if (!Array.isArray(stored.weightLogs)) {"), "Weight-log migration must only run for the pre-weightLogs schema");
+  assert(app.includes("function knownPlanExercises(plan)") && !app.includes("${plan.exercises.map(([id, sets, reps]) => `"), "Plan previews must skip unknown exercise ids");
+  assert(app.includes("Math.abs(delta) < fromPounds(0.2)"), "Scale-trend threshold must be unit-aware");
+  assert(read("settings.js").includes("return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, \"0\")}-${String(now.getDate()).padStart(2, \"0\")}`;"), "Snapshot day stamp must use the local date");
+  assert(read("volume.js").includes("function renderTrainingBlockCard() {\n  // A queued coach block whose start week has arrived becomes the active\n  // block here too, so this card and the volume bars below agree.\n  promotePendingBlock();"), "Training block card must promote a due pending block before rendering");
+  // Bridge timing: no second bell after a hidden-page watch command, no stale reconcile kill, no double watch haptic.
+  assert(app.includes('if (typeof document !== "undefined" && document.hidden) {\n    timerTick = null;\n    return;\n  }'), "Timer tick must not arm while the page is hidden");
+  assert(toolkit.includes("if (state.timer.running && Number(state.timer.endsAt) - Date.now() > 1500) {\n      ensureTimerTick();\n      return;\n    }"), "Reconcile must not kill a rest started after the reconcile request");
+  assert(read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes("guard endsAt.timeIntervalSinceNow > -2 else {"), "Watch must not replay the rest haptic after waking late");
+  console.log("Audit round 12 checks passed.");
+}
 }

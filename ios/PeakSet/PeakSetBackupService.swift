@@ -22,11 +22,13 @@ final class PeakSetBackupService {
     enum BackupError: LocalizedError {
         case invalidPayload
         case notFound
+        case downloadPending
 
         var errorDescription: String? {
             switch self {
             case .invalidPayload: return "The backup could not be written."
             case .notFound: return "That backup is no longer available."
+            case .downloadPending: return "That backup is still downloading from iCloud. Check your connection and try again."
             }
         }
     }
@@ -34,6 +36,9 @@ final class PeakSetBackupService {
     private let queue = DispatchQueue(label: "com.mattbrown.peakset.backup", qos: .utility)
     /// Photo downloads can take minutes on a new phone; they never block backups.
     private let photoQueue = DispatchQueue(label: "com.mattbrown.peakset.backup.photos", qos: .utility)
+    /// Restores wait on iCloud downloads, so they never share the snapshot queue.
+    private let restoreQueue = DispatchQueue(label: "com.mattbrown.peakset.backup.restore", qos: .userInitiated)
+    private let downloadTimeout: TimeInterval = 30
     private let fileManager = FileManager.default
     private let keepCount = 30
 
@@ -70,7 +75,9 @@ final class PeakSetBackupService {
                 try self.fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
                 try data.write(to: directory.appendingPathComponent(safeName), options: .atomic)
                 self.prune(directory)
-                if location == .iCloud { self.mirrorPhotosToICloud() }
+                // Mirroring can copy every photo on a fresh iCloud account; it
+                // must not delay the "Backed up" status or later snapshots.
+                if location == .iCloud { self.photoQueue.async { self.mirrorPhotosToICloud() } }
                 completion(.success(location))
             } catch {
                 completion(.failure(error))
@@ -96,16 +103,21 @@ final class PeakSetBackupService {
     }
 
     func read(name: String, location: Location, completion: @escaping (Result<(String, Date), Error>) -> Void) {
-        queue.async {
+        // A coordinated read of an undownloaded iCloud item blocks until the
+        // download finishes (forever when offline), so restores run on their
+        // own queue and give up after a bounded wait instead of stalling
+        // every later snapshot and list call.
+        let worker = location == .iCloud ? restoreQueue : queue
+        worker.async {
             guard let directory = self.backupsDirectory(for: location) else {
                 completion(.failure(BackupError.notFound))
                 return
             }
             let url = directory.appendingPathComponent(Self.safeFilename(name))
-            if location == .iCloud {
-                try? self.fileManager.startDownloadingUbiquitousItem(at: url)
-            }
             do {
+                if location == .iCloud {
+                    try self.waitForDownload(of: url)
+                }
                 let data = try self.readCoordinated(url)
                 let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
                 guard let text = String(data: data, encoding: .utf8) else { throw BackupError.invalidPayload }
@@ -116,6 +128,27 @@ final class PeakSetBackupService {
             } catch {
                 completion(.failure(error))
             }
+        }
+    }
+
+    /// Starts the iCloud download for `url` and waits (bounded) until the item
+    /// is local. Throws `.notFound` when neither the file nor its placeholder
+    /// exists and `.downloadPending` when the download does not finish in time.
+    private func waitForDownload(of url: URL) throws {
+        let placeholder = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).icloud")
+        guard fileManager.fileExists(atPath: url.path) || fileManager.fileExists(atPath: placeholder.path) else {
+            throw BackupError.notFound
+        }
+        try? fileManager.startDownloadingUbiquitousItem(at: url)
+        let deadline = Date().addingTimeInterval(downloadTimeout)
+        while true {
+            let status = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]).ubiquitousItemDownloadingStatus
+            if status == .current || status == .downloaded { return }
+            // A file that is not ubiquitous at all reports no status; if it is
+            // present on disk it can be read directly.
+            if status == nil, fileManager.fileExists(atPath: url.path), !fileManager.fileExists(atPath: placeholder.path) { return }
+            if Date() >= deadline { throw BackupError.downloadPending }
+            Thread.sleep(forTimeInterval: 0.5)
         }
     }
 
@@ -219,18 +252,25 @@ final class PeakSetIncomingFiles {
         deliver = nil
     }
 
+    /// Reads off the main thread: a large file handed over at launch would
+    /// otherwise block the UI and risk the launch watchdog. `pending` and
+    /// `deliver` are only touched on the main queue.
     func open(_ url: URL) {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        // Check the size before reading: the app opens any .json file.
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        guard size > 0, size < 50_000_000,
-              let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8) else {
-            // An empty string reaches the web app's "could not be read" message.
-            if let deliver { deliver("") } else { pending.append("") }
-            return
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            // Check the size before reading: the app opens any .json file.
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            var text = ""
+            if size > 0, size < 50_000_000, let data = try? Data(contentsOf: url) {
+                // An empty string reaches the web app's "could not be read" message.
+                text = String(data: data, encoding: .utf8) ?? ""
+            }
+            DispatchQueue.main.async { self.enqueue(text) }
         }
+    }
+
+    private func enqueue(_ text: String) {
         if let deliver {
             deliver(text)
         } else {

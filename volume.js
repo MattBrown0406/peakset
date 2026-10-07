@@ -352,6 +352,9 @@ function renderWeeklyTotalsChart() {
 }
 
 function renderTrainingBlockCard() {
+  // A queued coach block whose start week has arrived becomes the active
+  // block here too, so this card and the volume bars below agree.
+  promotePendingBlock();
   const block = state.trainingBlock;
   const info = blockWeekInfo(block);
   if (block) {

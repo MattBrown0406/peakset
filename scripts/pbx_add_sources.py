@@ -35,13 +35,14 @@ for name in sys.argv[1:]:
         "/* End PBXFileReference section */",
         f"\t\t{file_ref} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {name}; sourceTree = \"<group>\"; }};\n/* End PBXFileReference section */",
     )
-    text = text.replace(
-        "\t\t\t\t1A2B3C4D5E6F700000000108 /* boxing-bell.wav */,\n",
-        f"\t\t\t\t1A2B3C4D5E6F700000000108 /* boxing-bell.wav */,\n\t\t\t\t{file_ref} /* {name} */,\n",
-    )
-    text = text.replace(
-        "\t\t\t\t1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */,\n",
-        f"\t\t\t\t1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */,\n\t\t\t\t{build_file} /* {name} in Sources */,\n",
-    )
+    group_anchor = "\t\t\t\t1A2B3C4D5E6F700000000108 /* boxing-bell.wav */,\n"
+    phase_anchor = "\t\t\t\t1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */,\n"
+    # A silent miss here would leave the file outside every group and build
+    # phase: Xcode shows nothing and the source never compiles.
+    for anchor, label in ((group_anchor, "PeakSet group"), (phase_anchor, "PeakSet Sources phase")):
+        if text.count(anchor) != 1:
+            raise SystemExit(f"{label} anchor not found exactly once in project.pbxproj; update pbx_add_sources.py")
+    text = text.replace(group_anchor, f"{group_anchor}\t\t\t\t{file_ref} /* {name} */,\n")
+    text = text.replace(phase_anchor, f"{phase_anchor}\t\t\t\t{build_file} /* {name} in Sources */,\n")
 
 project.write_text(text)

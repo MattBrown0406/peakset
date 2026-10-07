@@ -864,9 +864,9 @@ renderSession = function renderToolkitSession() {
   const completed = workout.exercises.reduce((sum, exercise) => sum + exercise.sets.filter((set) => set.done).length, 0);
   const total = workout.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0);
   const left = timerDisplaySeconds();
-  const totalTimer = Math.max(1, state.timer.seconds);
+  const totalTimer = timerTotalSeconds();
   const progress = state.timer.running || state.timer.fullscreen ? (totalTimer - left) / totalTimer * 360 : 0;
-  setTimeout(ensureTimerTick, 0);
+  if (state.timer.running) setTimeout(ensureTimerTick, 0);
   return `${renderRestOverlay(left,progress)}<div class="topbar"><div><p class="eyebrow">Live workout</p><h1>${escapeHtml(workout.title)}</h1><p class="muted" data-sets-completed>${completed} of ${total} sets completed</p></div><div class="actions"><select id="liveExerciseAdd" aria-label="Add exercise"><option value="">Add exercise...</option>${liveExerciseCandidates().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button class="secondary-btn" onclick="addLiveExercise()">Add</button><button class="secondary-btn" onclick="saveActiveWorkoutAsTemplate()">Save Template</button><button class="secondary-btn" onclick="finishWorkout()">Save Session</button><button class="ghost-btn danger" onclick="cancelWorkout()">Cancel</button></div></div><div class="session-shell"><section class="session">${workout.exercises.map((exercise,exIndex) => `<article class="card pad"><div class="card-head"><div>${exercise.group ? `<span class="badge green">Superset ${escapeHtml(exercise.group)}</span>` : ""}<span class="badge blue">${plural(exercise.targetSets, "set")}${exercise.targetDropSets ? ` + ${exercise.targetDropSets} drop` : ""} × ${escapeHtml(exercise.targetReps)}</span><h2 style="margin-top:10px">${escapeHtml(exercise.name)}</h2></div><span class="badge">${exercise.rest}s rest</span></div>${renderToolkitExerciseControls(exercise,exIndex)}<div class="set-table">${exercise.sets.map((set,setIndex) => renderToolkitSetFields(exercise,exIndex,set,setIndex)).join("")}</div></article>`).join("")}</section><aside class="card pad"><p class="eyebrow">Rest timer</p><div class="timer-face" style="--progress:${progress}deg"><div style="text-align:center"><strong data-timer-time>${formatTime(left)}</strong><p class="muted" data-timer-status>${timerStatusText()}</p></div></div><div class="timer-controls"><div class="actions"><button class="secondary-btn" onclick="adjustRest(-15)">-15s</button><button class="secondary-btn" onclick="adjustRest(15)">+15s</button></div><div class="actions">${restPresetButtons(false)}</div><button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button><button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button></div></aside></div>`;
 };
 
@@ -885,6 +885,15 @@ stopTimer = function stopNativeBackedTimer() {
 
 function handleNativeTimerReconcile(payload) {
   if (payload?.delivered) {
+    // The delivered notification can belong to a rest that has since been
+    // replaced (a new rest started during the async reconcile). Swift already
+    // removed the stale notification; keep the live rest ticking.
+    if (state.timer.running && Number(state.timer.endsAt) - Date.now() > 1500) {
+      ensureTimerTick();
+      return;
+    }
+    // Already settled by the JS tick: nothing to announce again.
+    if (!state.timer.running && state.timer.left === 0 && !state.timer.fullscreen) return;
     window.webkit?.messageHandlers?.peaksetTimer?.postMessage({ action: "cancel", workoutActive: Boolean(state.activeWorkout) });
     state.timer.running = false;
     state.timer.left = 0;

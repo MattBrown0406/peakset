@@ -379,6 +379,12 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             let delay = endsAt.timeIntervalSinceNow
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             guard !Task.isCancelled else { return }
+            // Woken long after the rest ended (the app was suspended and the
+            // local notification already alerted): don't buzz a second time.
+            guard endsAt.timeIntervalSinceNow > -2 else {
+                self?.objectWillChange.send()
+                return
+            }
             WKInterfaceDevice.current().play(.notification)
             self?.objectWillChange.send()
         }
