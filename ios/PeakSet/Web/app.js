@@ -1684,7 +1684,7 @@ function measurementRows(entry) {
 }
 
 function coachReportData(days) {
-  days = LOGBOOK_RANGES.includes(Number(days)) ? Number(days) : logbookDays();
+  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.round(Number(days)) : logbookDays();
   const workouts = state.workoutLogs.filter((log) => isWithinDays(log.date, days));
   const weights = state.weightLogs.filter((log) => isWithinDays(log.date, days));
   const measurements = state.measurements.filter((log) => isWithinDays(log.date, days));
@@ -1726,7 +1726,7 @@ function addReportSection(lines, title) {
 }
 
 function buildCoachReportLines(days, coachNote = "") {
-  days = LOGBOOK_RANGES.includes(Number(days)) ? Number(days) : logbookDays();
+  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.round(Number(days)) : logbookDays();
   const report = coachReportData(days);
   const profile = state.profile || {};
   const lines = [
