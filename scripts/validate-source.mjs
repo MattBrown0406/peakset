@@ -7,7 +7,127 @@ import { webcrypto } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
+const readBuffer = (relativePath) => fs.readFileSync(path.join(root, relativePath));
+const app = read("app.js");
+const toolkit = read("toolkit.js");
+const styles = read("styles.css");
+const swiftApp = read("ios/PeakSet/PeakSetApp.swift");
+const swiftWebView = read("ios/PeakSet/PeakSetWebView.swift");
+const nativeServices = read("ios/PeakSet/PeakSetNativeServices.swift");
+const xcodeProject = read("ios/PeakSet.xcodeproj/project.pbxproj");
+const infoPlist = read("ios/PeakSet/Info.plist");
+const entitlements = read("ios/PeakSet/PeakSet.entitlements");
+const appIcon = readBuffer("ios/PeakSet/Assets.xcassets/AppIcon.appiconset/MassMethodIcon.png");
+
+function literalBetween(source, start, end) {
+  const startIndex = source.indexOf(start);
+  const endIndex = source.indexOf(end, startIndex + start.length);
+  assert.notEqual(startIndex, -1, `Missing ${start}`);
+  assert.notEqual(endIndex, -1, `Missing ${end}`);
+  return source.slice(startIndex + start.length, endIndex).trim();
+}
+
+const exercises = Function(`"use strict"; return ${literalBetween(app, "const exerciseLibrary = ", ";\n\nconst planTemplates")};`)();
+const plans = Function(`"use strict"; return ${literalBetween(app, "const planTemplates = ", ";\n\nconst abFinishersByPlan")};`)();
+
+const ids = exercises.map((exercise) => exercise.id);
+assert.equal(new Set(ids).size, ids.length, "Exercise IDs must be unique");
+
+const requestedNames = [
+  "Seated Calf Raises",
+  "Standing Machine Calf Raises",
+  "Machine Hip Thrust",
+  "Machine Decline Chest Press",
+  "Machine Incline Chest Press",
+  "Decline Skull Crusher",
+  "Machine Preacher Curl",
+  "Stability Ball Crunches"
+];
+for (const name of requestedNames) {
+  assert(exercises.some((exercise) => exercise.name === name), `Missing requested exercise: ${name}`);
+}
+
+const shoulderPlans = plans.filter((plan) => plan.muscle === "shoulders" || plan.id === "shoulders-road-gym");
+assert(shoulderPlans.length > 0, "No shoulder plans found");
+for (const plan of shoulderPlans) {
+  assert(plan.exercises.some(([id]) => id === "y-raise"), `Incline Y-Raise missing from ${plan.id}`);
+}
+
+assert(app.includes('libraryExercise.muscle === "abs"'), "Abs exercises must be initialized as reps-only");
+assert(app.includes('isRepsOnlyExercise(exercise) ? ""'), "Abs weight input must be omitted");
+assert(app.includes('toast(repsOnly ? "Enter reps before completing the set."'), "Abs completion must require reps only");
+assert(styles.includes(".set-row.reps-only"), "Missing reps-only set layout");
+assert(swiftApp.includes("UIApplication.shared.applicationSupportsShakeToEdit = false"), "Shake-to-undo is not disabled");
+assert(app.includes('new Audio("assets/boxing-bell.wav")'), "Boxing bell audio asset is not preloaded");
+assert(app.includes('await awaitWithTimeout(audio.play(), 800, "Bell audio playback")'), "Boxing bell media playback is not timeout-protected");
+assert(app.includes("primeTimerAudio();"), "Timer start does not unlock audio playback");
+assert(app.includes('onclick="playBoxingBell()">Test Bell</button>'), "Timer does not provide a user-gesture bell test");
+assert(app.includes("messageHandlers?.peaksetPlayBell"), "Timer bell does not prefer native iOS playback");
+assert(app.includes('document.addEventListener("visibilitychange"'), "Timer audio is not restored after foregrounding");
+assert(swiftApp.includes("AVAudioSession.sharedInstance()"), "Native audio session is not configured");
+assert(swiftApp.includes("UIApplication.didBecomeActiveNotification"), "Native audio session is not restored after foregrounding");
+assert(swiftWebView.includes("mediaTypesRequiringUserActionForPlayback = []"), "WKWebView media playback is still gesture-restricted");
+assert(swiftWebView.includes('"peaksetPlayBell"'), "Native bell message handler is not registered");
+assert(swiftWebView.includes("AVAudioPlayer(contentsOf: bellURL)"), "Native bell player is not configured");
+for (const feature of [
+  "lastExercisePerformance", "progressionSuggestion", "renderExerciseHistoryPanel",
+  "substituteActiveExercise", "equipmentProfiles", "Superset", "setTypeOptions",
+  "saveWeeklyCheckIn", "savePrepLog", "measurementDefinitions", "requestHealthKit",
+  "favoriteExercises", "saveExerciseSetting"
+]) {
+  assert(toolkit.includes(feature), `Bodybuilder toolkit feature is missing: ${feature}`);
+}
+assert(toolkit.includes("peaksetTimer"), "Web timer is not connected to the native background timer");
+assert(nativeServices.includes("UNTimeIntervalNotificationTrigger"), "Native background timer notification is missing");
+assert(nativeServices.includes("HKStatisticsQuery"), "HealthKit step import is missing");
+assert(nativeServices.includes("traditionalStrengthTraining"), "HealthKit workout export is missing");
+assert(nativeServices.includes("HKWorkoutBuilder"), "HealthKit workout export is not using the iOS 17 workout builder");
+assert(swiftWebView.includes("withFractionalSeconds"), "HealthKit bridge cannot parse JavaScript ISO timestamps");
+assert(toolkit.includes("builderFormDraft"), "Builder form state is not preserved across draft edits");
+assert(toolkit.includes("buildToolkitCoachReportLines"), "Check-ins and prep activity are missing from coach PDFs");
+{
+  // app.js destructures [label, value, unit] from measurementRows(); the toolkit override must return tuples.
+  const source = literalBetween(toolkit, "measurementRows = function toolkitMeasurementRows(entry) {", "\n};");
+  const measurementRows = Function("measurementDefinitions", "entry", source)
+    .bind(null, [["chest", "Chest"], ["bodyFat", "Body Fat %"]]);
+  const rows = measurementRows({ chest: 44, bodyFat: null });
+  assert.deepEqual(rows, [["Chest", 44, "in"]], "Toolkit measurementRows must return [label, value, unit] tuples");
+}
+assert(!app.includes("state.customPlans.unshift({\n    id: `quick-"), "Quick Start must not persist throwaway templates");
+assert(toolkit.includes('startsWith("quick-")'), "Legacy quick-start templates are not pruned on migration");
+assert(toolkit.includes("handleNativeTimerReconcile"), "Background timer reconciliation is missing");
+assert(app.includes('postMessage({ action: "reconcile" })'), "Foreground timer reconciliation is missing");
+assert(xcodeProject.includes("PeakSetNativeServices.swift in Sources"), "Native services are not in the Xcode source phase");
+assert(xcodeProject.includes("CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements"), "HealthKit entitlements are not configured for signing");
+assert(infoPlist.includes("NSHealthShareUsageDescription") && infoPlist.includes("NSHealthUpdateUsageDescription"), "HealthKit privacy descriptions are missing");
+assert(entitlements.includes("com.apple.developer.healthkit"), "HealthKit entitlement is missing");
+assert(app.includes('const APP_NAME = "Mass Method"'), "Visible app branding is not Mass Method");
+assert(infoPlist.includes("<string>Mass Method</string>"), "iOS display name is not Mass Method");
+assert(xcodeProject.includes('INFOPLIST_KEY_CFBundleDisplayName = "Mass Method"'), "Xcode display name is not Mass Method");
+const buildNumbers = [...xcodeProject.matchAll(/CURRENT_PROJECT_VERSION = (\d+);/g)].map((match) => Number(match[1]));
+assert.equal(buildNumbers.length, 2, "Expected a CURRENT_PROJECT_VERSION in both the Debug and Release configurations");
+assert(buildNumbers.every((value) => Number.isInteger(value) && value > 0), "Build numbers must be positive integers");
+assert.equal(new Set(buildNumbers).size, 1, `Debug and Release build numbers differ: ${buildNumbers.join(", ")}`);
+assert.equal(appIcon.readUInt32BE(16), 1024, "Mass Method app icon must be 1024 px wide");
+assert.equal(appIcon.readUInt32BE(20), 1024, "Mass Method app icon must be 1024 px tall");
+assert.equal(appIcon[25], 2, "Mass Method app icon must be opaque RGB without alpha");
+
+for (const filename of ["app.js", "toolkit.js", "styles.css", "index.html", "assets/physique-lines.svg"]) {
+  assert.equal(read(filename), read(`ios/PeakSet/Web/${filename}`), `${filename} is not synced into the iOS bundle`);
+}
+assert.deepEqual(readBuffer("assets/boxing-bell.wav"), readBuffer("ios/PeakSet/Web/assets/boxing-bell.wav"), "Boxing bell audio is not synced into the iOS bundle");
+assert.deepEqual(readBuffer("assets/boxing-bell.wav"), readBuffer("ios/PeakSet/boxing-bell.wav"), "Native notification bell is not synced");
+
+console.log(`Validated ${exercises.length} exercises and ${plans.length} workout templates.`);
+console.log(`Incline Y-Raise is present in ${shoulderPlans.length} shoulder workout templates.`);
+console.log("Abs session rows are reps-only and shake-to-undo is disabled.");
+console.log("Timer bell asset, audio unlock, and iOS audio-session recovery are configured.");
+console.log("Bodybuilder toolkit, native background timer, and HealthKit bridges are configured.");
+
+// Runtime regression checks. The shipped page loads app.js and then toolkit.js,
+// which overrides several app.js functions, so both scripts run here.
+const runtimeSource = `${app}\n;\n${toolkit}`;
 
 function makeContext(storedState = null) {
   const storage = new Map();
@@ -15,6 +135,8 @@ function makeContext(storedState = null) {
   const elements = new Map();
   const rootElement = { innerHTML: "" };
   const document = {
+    hidden: false,
+    addEventListener() {},
     body: { appendChild() {} },
     createElement() { return { className: "", textContent: "", setAttribute() {}, remove() {} }; },
     getElementById(id) {
@@ -47,20 +169,12 @@ function makeContext(storedState = null) {
     Array,
     JSON,
     Blob,
-    URL
+    URL,
+    structuredClone
   });
-  vm.runInContext(source, context, { filename: "app.js" });
+  vm.runInContext(runtimeSource, context, { filename: "app.js+toolkit.js" });
   return { context, elements, storage };
 }
-
-for (const file of ["index.html", "app.js", "styles.css", "assets/physique-lines.svg"]) {
-  const canonical = fs.readFileSync(path.join(root, file));
-  const bundled = fs.readFileSync(path.join(root, "ios/PeakSet/Web", file));
-  assert.deepEqual(bundled, canonical, `${file} is out of sync with the iOS bundle`);
-}
-
-const appSwift = fs.readFileSync(path.join(root, "ios/PeakSet/PeakSetApp.swift"), "utf8");
-assert.match(appSwift, /applicationSupportsShakeToEdit\s*=\s*false/, "iOS shake-to-undo must stay disabled");
 
 const baseline = makeContext();
 const catalog = vm.runInContext(`({
@@ -224,4 +338,52 @@ assert.equal(vm.runInContext("state.profile.bodyweight", malformed.context), 200
 const timer = makeContext({ timer: { seconds: 90, left: 0, running: false, startedAt: null, endsAt: null } });
 assert.equal(vm.runInContext("state.timer.seconds", timer.context), 90, "the selected rest duration must survive reload");
 
-console.log(`PeakSet validation passed: ${catalog.exerciseIds.length} exercises, ${catalog.planIds.length} plans, state and workout regression checks.`);
+console.log(`Runtime regression checks passed: ${catalog.exerciseIds.length} exercises, ${catalog.planIds.length} plans, state and workout regression checks.`);
+
+// Audit 2026-10: regressions found when app.js and toolkit.js run together.
+const audit = makeContext();
+for (const [id, value] of Object.entries({ gender: "Male", age: "45", bodyweight: "-5", phase: "offseason" })) {
+  audit.elements.set(id, { value, innerHTML: "", classList: { add() {}, remove() {} } });
+}
+vm.runInContext("saveProfile()", audit.context);
+assert.equal(vm.runInContext("state.profile", audit.context), null, "onboarding must reject a negative body weight");
+vm.runInContext("startWorkout('chest-density')", audit.context);
+const auditFirst = vm.runInContext("state.activeWorkout.exercises[0].id", audit.context);
+vm.runInContext("updateSet(0, 0, 'rir', '1'); updateSet(0, 0, 'setType', 'top')", audit.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].sets[0].rir", audit.context), "1", "RIR entries must persist through updateSet");
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].sets[0].setType", audit.context), "top", "set-type entries must persist through updateSet");
+vm.runInContext("updateSet(0, 0, 'weight', '100'); updateSet(0, 0, 'reps', '8'); completeSet(0, 0)", audit.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].sets[0].done", audit.context), true, "a valid set must complete");
+vm.runInContext("updateSet(0, 0, 'rir', '0')", audit.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].sets[0].done", audit.context), true, "changing RIR must not reopen a completed set");
+vm.runInContext("updateSet(0, 1, 'weight', '100'); updateSet(0, 1, 'reps', '8.5'); completeSet(0, 1)", audit.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].sets[1].done", audit.context), false, "fractional reps must not complete a set");
+const auditSubstitute = vm.runInContext("liveExerciseCandidates(state.activeWorkout.exercises[0].id)[0].id", audit.context);
+vm.runInContext(`substituteActiveExercise(0, '${auditSubstitute}')`, audit.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].id", audit.context), auditFirst, "substituting must not relabel sets that were already entered");
+const auditSecond = vm.runInContext("state.activeWorkout.exercises[1].id", audit.context);
+audit.elements.set("liveExerciseAdd", { value: auditSecond, innerHTML: "", classList: { add() {}, remove() {} } });
+const auditCount = vm.runInContext("state.activeWorkout.exercises.length", audit.context);
+vm.runInContext("addLiveExercise()", audit.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises.length", audit.context), auditCount, "the toolkit Add control must reject duplicate exercises");
+vm.runInContext("removeLiveExercise(0)", audit.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].id", audit.context), auditFirst, "the toolkit Remove control must protect entered sets");
+vm.runInContext("startTimer(90, true, 2); moveLiveExercise(2, -1)", audit.context);
+assert.equal(vm.runInContext("state.timer.exerciseIndex", audit.context), 1, "the toolkit reorder control must keep the timer on its exercise");
+vm.runInContext("quickStartExercise('barbell-curl')", audit.context);
+assert.equal(vm.runInContext("state.activeWorkout.exercises[0].id", audit.context), auditFirst, "Quick Start must not replace a live toolkit workout");
+vm.runInContext("finishWorkout()", audit.context);
+assert.equal(vm.runInContext("state.workoutLogs[0].sets[0].rir", audit.context), "0", "saved logs must keep RIR");
+vm.runInContext("state.workoutLogs[0].sets = [1,2,3,4].map(() => ({ exerciseId: 'barbell-bench', exercise: 'Barbell Bench Press', weight: '100', reps: '12', rir: 'failure' }))", audit.context);
+assert.match(vm.runInContext("progressionSuggestion({ id: 'barbell-bench', targetReps: '8-12' })", audit.context), /Try 102.5 lb/, "sets taken to failure must still earn a load increase");
+vm.runInContext("handleNativeHealthKit({ status: 'stepsImported', steps: 4000 }); handleNativeHealthKit({ status: 'stepsImported', steps: 6000 })", audit.context);
+assert.equal(vm.runInContext("state.prepLogs.filter((entry) => entry.cardioType === 'HealthKit').length", audit.context), 1, "re-importing steps must replace today's HealthKit entry");
+assert.equal(vm.runInContext("state.prepLogs[0].steps", audit.context), 6000, "the latest step import must win");
+
+const corrupt = makeContext({ profile: { bodyweight: 200 }, workoutLogs: [null, { id: "keep", date: "2026-09-01T12:00:00Z", sets: [null, { exercise: "Barbell Bench Press", weight: "100", reps: "8" }] }], measurements: [null, { id: "m", date: "2026-09-01T12:00:00Z", waist: 32 }] });
+assert.equal(vm.runInContext("state.profile.bodyweight", corrupt.context), 200, "one malformed entry must not wipe the stored profile");
+assert.equal(vm.runInContext("state.workoutLogs.length", corrupt.context), 1, "valid workout logs must survive malformed neighbours");
+assert.equal(vm.runInContext("state.workoutLogs[0].sets.length", corrupt.context), 1, "malformed sets must be dropped, not crash migration");
+assert.equal(vm.runInContext("state.measurements.length", corrupt.context), 1, "valid measurements must survive malformed neighbours");
+
+console.log("Audit regression checks passed: live-workout guards, RIR logging, progression, HealthKit steps, corrupt-state recovery.");

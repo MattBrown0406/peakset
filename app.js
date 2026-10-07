@@ -1,5 +1,5 @@
 const STORE_KEY = "stageforge-v1";
-const APP_NAME = "PeakSet";
+const APP_NAME = "Mass Method";
 const DEFAULT_REST_SECONDS = 180;
 
 const muscles = ["chest", "back", "shoulders", "arms", "legs"];
@@ -53,6 +53,8 @@ const exerciseLibrary = [
   { id: "decline-barbell-press", name: "Decline Barbell Press", muscle: "chest", equipment: "Barbell, decline bench", hotel: false, cue: "Lower chest pressing with less shoulder demand." },
   { id: "smith-incline-press", name: "Smith Machine Incline Press", muscle: "chest", equipment: "Smith machine", hotel: false, cue: "Lock in the path and push close to failure." },
   { id: "machine-chest-press", name: "Machine Chest Press", muscle: "chest", equipment: "Chest press machine", hotel: false, cue: "Stable pressing for hard top sets and drop sets." },
+  { id: "machine-decline-chest-press", name: "Machine Decline Chest Press", muscle: "chest", equipment: "Decline chest press machine", hotel: false, cue: "Keep shoulder blades pinned and press through the lower-chest line." },
+  { id: "machine-incline-chest-press", name: "Machine Incline Chest Press", muscle: "chest", equipment: "Incline chest press machine", hotel: false, cue: "Set the seat for an upper-chest path and keep the shoulders down." },
   { id: "pec-deck", name: "Pec Deck Fly", muscle: "chest", equipment: "Pec deck", hotel: false, cue: "Drive elbows together and pause the squeeze." },
   { id: "high-cable-fly", name: "High Cable Fly", muscle: "chest", equipment: "Cable crossover", hotel: true, cue: "High-to-low path for lower chest finish." },
   { id: "mid-cable-fly", name: "Mid Cable Fly", muscle: "chest", equipment: "Cable crossover", hotel: true, cue: "Keep tension even through the midline." },
@@ -99,6 +101,7 @@ const exerciseLibrary = [
 
   { id: "barbell-curl", name: "Barbell Curl", muscle: "arms", equipment: "Barbell", hotel: false, cue: "Classic heavy biceps overload." },
   { id: "preacher-curl", name: "Preacher Curl", muscle: "arms", equipment: "Preacher bench", hotel: false, cue: "Lock elbows and own the stretch." },
+  { id: "machine-preacher-curl", name: "Machine Preacher Curl", muscle: "arms", equipment: "Preacher curl machine", hotel: false, cue: "Keep the upper arms planted and control the lengthened position." },
   { id: "incline-db-curl", name: "Incline Dumbbell Curl", muscle: "arms", equipment: "Dumbbells, incline bench", hotel: true, cue: "Long-head biceps stretch." },
   { id: "spider-curl", name: "Spider Curl", muscle: "arms", equipment: "Incline bench, dumbbells", hotel: true, cue: "Chest down, strict biceps squeeze." },
   { id: "cable-curl", name: "Cable Curl", muscle: "arms", equipment: "Cable bar or handles", hotel: true, cue: "Constant tension through the full rep." },
@@ -107,6 +110,7 @@ const exerciseLibrary = [
   { id: "concentration-curl", name: "Concentration Curl", muscle: "arms", equipment: "Dumbbell", hotel: true, cue: "Slow squeeze, no shoulder movement." },
   { id: "close-grip-bench", name: "Close-Grip Bench Press", muscle: "arms", equipment: "Barbell, bench", hotel: false, cue: "Heavy triceps compound." },
   { id: "skull-crusher", name: "Skull Crusher", muscle: "arms", equipment: "EZ bar or dumbbells", hotel: true, cue: "Let elbows travel slightly back for stretch." },
+  { id: "decline-skull-crusher", name: "Decline Skull Crusher", muscle: "arms", equipment: "EZ bar or dumbbells, decline bench", hotel: false, cue: "Keep the upper arms stable and lower behind the forehead under control." },
   { id: "crossbody-triceps-extension", name: "Crossbody Cable Triceps Extension", muscle: "arms", equipment: "Cable handle", hotel: true, cue: "Finish across the body for lateral-head work." },
   { id: "single-arm-pushdown", name: "Single-Arm Cable Pushdown", muscle: "arms", equipment: "Cable handle", hotel: true, cue: "Lock down the elbow and extend hard." },
   { id: "dip-triceps", name: "Triceps Dip", muscle: "arms", equipment: "Dip bars", hotel: false, cue: "Upright torso to bias triceps." },
@@ -124,12 +128,15 @@ const exerciseLibrary = [
   { id: "seated-leg-curl", name: "Seated Leg Curl", muscle: "legs", equipment: "Leg curl machine", hotel: false, cue: "Great lengthened hamstring tension." },
   { id: "nordic-curl", name: "Nordic Curl", muscle: "legs", equipment: "Anchor or partner", hotel: false, cue: "Advanced eccentric hamstring work." },
   { id: "hip-thrust", name: "Hip Thrust", muscle: "legs", equipment: "Barbell or dumbbell, bench", hotel: true, cue: "Posterior pelvic tilt and hard glute lockout." },
+  { id: "machine-hip-thrust", name: "Machine Hip Thrust", muscle: "legs", equipment: "Hip thrust machine", hotel: false, cue: "Brace the torso and finish with a controlled glute contraction." },
   { id: "cable-pull-through", name: "Cable Pull-Through", muscle: "legs", equipment: "Cable, rope", hotel: true, cue: "Hinge through the hips and squeeze glutes." },
-  { id: "seated-calf-raise", name: "Seated Calf Raise", muscle: "legs", equipment: "Seated calf machine", hotel: false, cue: "Soleus-focused calf work." },
+  { id: "seated-calf-raise", name: "Seated Calf Raises", muscle: "legs", equipment: "Seated calf machine", hotel: false, cue: "Soleus-focused calf work with a full stretch and controlled top position." },
+  { id: "standing-machine-calf-raise", name: "Standing Machine Calf Raises", muscle: "legs", equipment: "Standing calf raise machine", hotel: false, cue: "Keep the knees softly extended and use a full ankle range without bouncing." },
   { id: "leg-press-calf-raise", name: "Leg Press Calf Raise", muscle: "legs", equipment: "Leg press", hotel: false, cue: "Deep stretch and full plantar flexion." },
   { id: "cable-hip-abduction", name: "Cable Hip Abduction", muscle: "legs", equipment: "Cable, ankle cuff", hotel: true, cue: "Glute medius shape and hip stability." },
 
   { id: "cable-crunch", name: "Cable Crunch", muscle: "abs", equipment: "Cable, rope", hotel: true, cue: "Round the spine down and squeeze the abs, not the hips." },
+  { id: "stability-ball-crunch", name: "Stability Ball Crunches", muscle: "abs", equipment: "Stability ball", hotel: false, cue: "Let the torso extend over the ball, then shorten the ribs toward the pelvis." },
   { id: "hanging-leg-raise", name: "Hanging Leg Raise", muscle: "abs", equipment: "Pull-up bar or captain chair", hotel: false, cue: "Posteriorly tilt the pelvis before lifting the legs." },
   { id: "captains-chair-knee-raise", name: "Captain's Chair Knee Raise", muscle: "abs", equipment: "Captain chair", hotel: false, cue: "Curl knees up toward the ribs without swinging." },
   { id: "decline-sit-up", name: "Decline Sit-Up", muscle: "abs", equipment: "Decline bench", hotel: false, cue: "Control the lowering phase and avoid yanking the neck." },
@@ -186,7 +193,8 @@ const planTemplates = [
       ["db-shoulder-press", 4, "8-10", 105],
       ["db-lateral-raise", 5, "12-20", 45],
       ["cable-lateral-raise", 3, "15-20", 45],
-      ["rear-delt-fly", 4, "12-20", 60]
+      ["rear-delt-fly", 4, "12-20", 60],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -372,7 +380,8 @@ const planTemplates = [
       ["barbell-overhead-press", 4, "5-8", 150],
       ["machine-press", 4, "8-10", 105],
       ["machine-lateral-raise", 4, "12-15", 60],
-      ["reverse-pec-deck", 4, "12-20", 60]
+      ["reverse-pec-deck", 4, "12-20", 60],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -386,7 +395,8 @@ const planTemplates = [
       ["seated-lateral-raise", 4, "12-20", 45],
       ["lean-away-lateral-raise", 4, "12-20 each", 40],
       ["cable-lateral-raise", 3, "15-25", 35],
-      ["upright-row", 3, "12-15", 50]
+      ["upright-row", 3, "12-15", 50],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -414,7 +424,8 @@ const planTemplates = [
       ["arnold-press", 4, "10-12", 60],
       ["db-lateral-raise", 5, "15-25", 35],
       ["cable-lateral-raise", 4, "15-25", 35],
-      ["rear-delt-fly", 4, "15-20", 40]
+      ["rear-delt-fly", 4, "15-20", 40],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -583,7 +594,8 @@ const planTemplates = [
       ["wide-pulldown", 4, "10-12", 60],
       ["lean-away-lateral-raise", 4, "12-20 each", 40],
       ["straight-arm-pulldown", 3, "12-15", 40],
-      ["cable-lateral-raise", 3, "15-25", 35]
+      ["cable-lateral-raise", 3, "15-25", 35],
+      ["y-raise", 3, "12-15", 45]
     ]
   },
   {
@@ -680,6 +692,8 @@ function freshDefaultState() {
 let state = loadState();
 let timerTick = null;
 let audioContext = null;
+let bellAudio = null;
+let bellPlaybackStatus = { mode: "idle", error: "" };
 let coachNoteDraft = "";
 let liveCustomizerOpen = false;
 let exerciseHistorySelection = "";
@@ -694,7 +708,9 @@ function loadState() {
     const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
     const next = { ...freshDefaultState(), ...stored };
     ["customPlans", "workoutLogs", "weightLogs", "measurements"].forEach((key) => {
-      next[key] = Array.isArray(next[key]) ? [...next[key]] : [];
+      // Drop malformed entries instead of throwing: a throw here falls back to
+      // an empty state, and the next save would overwrite the user's history.
+      next[key] = Array.isArray(next[key]) ? next[key].filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry)) : [];
     });
     if (next.weightLogs.length === 0) {
       const migratedWeights = next.measurements
@@ -743,12 +759,29 @@ function loadState() {
     next.measurements = next.measurements.map(({ bodyweight, ...entry }) => entry);
     return next;
   } catch {
+    // Keep an untouched copy of unreadable data before the fresh state is saved over it.
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) localStorage.setItem(`${STORE_KEY}-recovery-${Date.now()}`, raw);
+    } catch {}
     return freshDefaultState();
   }
 }
 
+let storageWarningShown = false;
+
 function saveState() {
-  localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    storageWarningShown = false;
+  } catch {
+    // A full or blocked store must not crash the live workout. Keep the
+    // in-memory session and warn once so the user can export or clear space.
+    if (!storageWarningShown) {
+      storageWarningShown = true;
+      toast("Storage is full. This session is not being saved on the device.");
+    }
+  }
 }
 
 function escapeHtml(value) {
@@ -762,6 +795,10 @@ function escapeHtml(value) {
 
 function exerciseById(id) {
   return exerciseLibrary.find((item) => item.id === id) || exerciseLibrary[0];
+}
+
+function isRepsOnlyExercise(exercise) {
+  return Boolean(exercise?.repsOnly || exerciseById(exercise?.id).muscle === "abs");
 }
 
 function divisionSelect(id, selected = "") {
@@ -867,11 +904,65 @@ function getAudioContext() {
   if (typeof window === "undefined") return null;
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) return null;
-  if (!audioContext) audioContext = new AudioContextClass();
+  if (!audioContext || audioContext.state === "closed") audioContext = new AudioContextClass();
   if (audioContext.state === "suspended") {
     audioContext.resume().catch(() => {});
   }
   return audioContext;
+}
+
+function getBellAudio() {
+  if (typeof Audio === "undefined") return null;
+  if (!bellAudio) {
+    bellAudio = new Audio("assets/boxing-bell.wav");
+    bellAudio.preload = "auto";
+    bellAudio.volume = 1;
+    bellAudio.load();
+  }
+  return bellAudio;
+}
+
+async function awaitWithTimeout(promise, timeoutMs, label) {
+  let timeoutId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const error = new Error(`${label} timed out`);
+          error.name = "TimeoutError";
+          reject(error);
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function primeTimerAudio() {
+  const context = getAudioContext();
+  if (context?.state === "suspended") context.resume().catch(() => {});
+
+  const audio = getBellAudio();
+  if (!audio || !audio.paused) return;
+  audio.muted = true;
+  audio.currentTime = 0;
+  const playAttempt = audio.play();
+  if (playAttempt?.then) {
+    let reset = false;
+    const resetPrime = () => {
+      if (reset) return;
+      reset = true;
+      audio.pause();
+      try { audio.currentTime = 0; } catch (_) {}
+      audio.muted = false;
+    };
+    setTimeout(resetPrime, 800);
+    playAttempt
+      .then(resetPrime)
+      .catch(resetPrime);
+  }
 }
 
 function playBellStrike(context, startTime, duration = 1.35) {
@@ -911,9 +1002,43 @@ function playBellStrike(context, startTime, duration = 1.35) {
   });
 }
 
-function playBoxingBell() {
+async function playBoxingBell() {
+  const nativeBell = window.webkit?.messageHandlers?.peaksetPlayBell;
+  if (nativeBell) {
+    nativeBell.postMessage({});
+    bellPlaybackStatus = { mode: "native", error: "" };
+    return;
+  }
+
+  const audio = getBellAudio();
+  if (audio) {
+    try {
+      if (!audio.paused) audio.pause();
+      try { audio.currentTime = 0; } catch (_) {}
+      audio.muted = false;
+      audio.volume = 1;
+      await awaitWithTimeout(audio.play(), 800, "Bell audio playback");
+      if (audio.paused) throw new Error("Bell audio did not start");
+      bellPlaybackStatus = { mode: "asset", error: "" };
+      return;
+    } catch (error) {
+      audio.pause();
+      bellPlaybackStatus = { mode: "fallback", error: error?.name || "media-playback-failed" };
+      // Fall through to synthesized audio if media playback was interrupted.
+    }
+  }
+
   const context = getAudioContext();
   if (!context) return;
+  if (context.state === "suspended") {
+    try {
+      await awaitWithTimeout(context.resume(), 800, "Audio context resume");
+    } catch (_) {
+      return;
+    }
+  }
+  if (context.state !== "running") return;
+  bellPlaybackStatus = { mode: "synthesized", error: bellPlaybackStatus.error };
   const now = context.currentTime + 0.02;
   playBellStrike(context, now);
   playBellStrike(context, now + 0.38, 1.2);
@@ -945,8 +1070,20 @@ function saveProfile() {
     toast("Add gender, age, and starting body weight.");
     return;
   }
+  if (!Number.isInteger(profile.age) || profile.age < 13 || profile.age > 100) {
+    toast("Enter an age between 13 and 100.");
+    return;
+  }
+  if (!isPlausibleBodyweight(profile.bodyweight)) {
+    toast("Enter a body weight between 50 and 700 lb.");
+    return;
+  }
 
   const measurements = collectMeasurementInputs("");
+  if (hasInvalidMeasurement(measurements)) {
+    toast("Measurements must be positive numbers.");
+    return;
+  }
   state.profile = profile;
   state.phase = get("phase") || "offseason";
   state.weightLogs.unshift({
@@ -967,6 +1104,14 @@ function saveProfile() {
   saveState();
   toast("Profile created. Time to train.");
   render();
+}
+
+function isPlausibleBodyweight(value) {
+  return Number.isFinite(value) && value >= 50 && value <= 700;
+}
+
+function hasInvalidMeasurement(measurements) {
+  return Object.values(measurements).some((value) => value !== null && (!Number.isFinite(value) || value <= 0 || value > 150));
 }
 
 function collectMeasurementInputs(prefix) {
@@ -1068,6 +1213,12 @@ function phaseLabel(phase) {
     prep: "Contest Prep",
     travel: "Road Gym"
   }[phase] || "Off-season";
+}
+
+function muscleLabel(muscle) {
+  if (muscle === "travel") return "Road Gym";
+  if (!muscle) return "Custom";
+  return muscle[0].toUpperCase() + muscle.slice(1);
 }
 
 function todaysRecommendedPlan() {
@@ -1545,7 +1696,7 @@ async function exportLogbookPdf() {
   coachNoteDraft = note;
   const lines = buildCoachReportLines(days, note);
   const blob = createPdfBlob(lines);
-  const filename = `${APP_NAME.toLowerCase()}-coach-log-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const filename = `mass-method-coach-log-${new Date().toISOString().slice(0, 10)}.pdf`;
 
   if (await shareNativePdf(blob, filename)) {
     toast("PDF ready to send.");
@@ -2204,8 +2355,7 @@ function startCustomWorkout() {
     toast("Add at least one exercise.");
     return;
   }
-  const muscleLabel = muscle === "travel" ? "Road Gym" : `${muscle[0].toUpperCase()}${muscle.slice(1)}`;
-  const title = `${muscleLabel} Custom Session`;
+  const title = `${muscleLabel(muscle)} Custom Session`;
 
   const plan = {
     id: `builder-${Date.now()}`,
@@ -2262,9 +2412,11 @@ function beginWorkoutFromPlan(plan) {
     startedAt: new Date().toISOString(),
     exercises: plan.exercises.map(([id, sets, reps, rest, dropSets = 0]) => {
       const drops = Math.max(0, Math.min(4, Number(dropSets) || 0));
+      const libraryExercise = exerciseById(id);
       return {
         id,
-        name: exerciseById(id).name,
+        name: libraryExercise.name,
+        repsOnly: libraryExercise.muscle === "abs",
         targetSets: Number(sets),
         targetDropSets: drops,
         targetReps: String(reps),
@@ -2288,6 +2440,8 @@ function startWorkout(planId) {
 
 function quickStartExercise(id) {
   const ex = exerciseById(id);
+  // Quick sessions are transient. Start them directly instead of saving a
+  // throwaway template into customPlans, which cluttered Plans and Builder.
   return beginWorkoutFromPlan({
     id: `quick-${Date.now()}`,
     title: `${ex.name} Quick Log`,
@@ -2380,7 +2534,7 @@ function removeActiveWorkoutExercise(index) {
   if (state.timer.exerciseIndex === index) {
     clearInterval(timerTick);
     timerTick = null;
-    state.timer = { ...defaultState.timer };
+    stopTimer();
   } else if (state.timer.exerciseIndex > index) {
     state.timer.exerciseIndex -= 1;
   }
@@ -2415,8 +2569,10 @@ function substituteActiveWorkoutExercise(index) {
 
 function updateSet(exIndex, setIndex, field, value) {
   const set = state.activeWorkout?.exercises?.[exIndex]?.sets?.[setIndex];
-  if (!set || !["weight", "reps"].includes(field)) return;
-  if (set.done && set[field] !== value) set.done = false;
+  if (!set || !["weight", "reps", "rir", "setType"].includes(field)) return;
+  // Changing the load or reps of a completed set reopens it; RIR and set-type
+  // annotations do not change what was lifted.
+  if (set.done && ["weight", "reps"].includes(field) && set[field] !== value) set.done = false;
   set[field] = value;
   saveState();
 }
@@ -2425,10 +2581,12 @@ function completeSet(exIndex, setIndex) {
   const ex = state.activeWorkout?.exercises?.[exIndex];
   const set = ex?.sets?.[setIndex];
   if (!ex || !set) return;
+  const repsOnly = isRepsOnlyExercise(ex);
   const weight = Number(set.weight);
   const reps = Number(set.reps);
-  if (set.weight === "" || set.reps === "" || !Number.isFinite(weight) || weight < 0 || !Number.isInteger(reps) || reps <= 0) {
-    toast("Enter a non-negative weight and whole-number reps before completing the set.");
+  const weightValid = repsOnly || (set.weight !== "" && Number.isFinite(weight) && weight >= 0);
+  if (set.reps === "" || !Number.isInteger(reps) || reps <= 0 || !weightValid) {
+    toast(repsOnly ? "Enter reps before completing the set." : "Enter a non-negative weight and whole-number reps before completing the set.");
     return;
   }
   set.done = !set.done;
@@ -2450,7 +2608,7 @@ function adjustRest(seconds) {
 }
 
 function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null) {
-  getAudioContext();
+  primeTimerAudio();
   const now = Date.now();
   const duration = clampRestSeconds(seconds);
   if (state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
@@ -2492,10 +2650,12 @@ function ensureTimerTick() {
   timerTick = setInterval(() => {
     if (!state.timer.running) return;
     const left = Math.max(0, Math.ceil((state.timer.endsAt - Date.now()) / 1000));
+    if (left === state.timer.left && left > 0) return;
     state.timer.left = left;
     if (left <= 0) {
       state.timer.running = false;
       state.timer.left = 0;
+      if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel" });
       playBoxingBell();
       if (state.timer.fullscreen) {
         saveState();
@@ -2543,7 +2703,8 @@ function formatTime(seconds) {
 }
 
 function setLogSummary(set) {
-  return `${set.dropSet ? "Drop " : ""}${set.weight || "--"} x ${set.reps || "--"}`;
+  if (set.repsOnly || !set.weight) return `${set.dropSet ? "Drop " : ""}${set.reps || "--"} reps`;
+  return `${set.dropSet ? "Drop " : ""}${set.weight} x ${set.reps || "--"}`;
 }
 
 function restPresetButtons(fullscreen = false) {
@@ -2580,6 +2741,7 @@ function renderRestOverlay(left, progress) {
             ${restPresetButtons(true)}
           </div>
           <button class="primary-btn" onclick="closeRestOverlay()">${state.timer.running ? "Return to Workout" : "Next Set"}</button>
+          <button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button>
           <button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button>
         </div>
       </div>
@@ -2593,7 +2755,7 @@ function finishWorkout() {
   const sets = workout.exercises.flatMap((exercise) =>
     exercise.sets
       .filter((set) => set.done)
-      .map((set) => ({ exerciseId: exercise.id, exercise: exercise.name, weight: set.weight, reps: set.reps, dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
+      .map((set) => ({ exerciseId: exercise.id, exercise: exercise.name, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps, repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
   );
   if (sets.length === 0) {
     toast("Complete at least one set before saving.");
@@ -2707,9 +2869,9 @@ function renderSession() {
             </div>
             <div class="set-table">
               ${exercise.sets.map((set, setIndex) => `
-                <div class="set-row">
+                <div class="set-row ${isRepsOnlyExercise(exercise) ? "reps-only" : ""}">
                   <div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>
-                  <input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />
+                  ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
                   <input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
                   <button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
                 </div>
@@ -2735,6 +2897,7 @@ function renderSession() {
             ${restPresetButtons(false)}
           </div>
           <p class="muted" style="margin: 0; text-align: center; font-size: 12px;">Bell plays through the current device audio output.</p>
+          <button class="secondary-btn" onclick="playBoxingBell()">Test Bell</button>
           <button class="ghost-btn danger" onclick="stopTimer()">Stop Timer</button>
         </div>
       </aside>
@@ -2900,6 +3063,10 @@ function saveWeight() {
     toast("Add body weight before saving.");
     return;
   }
+  if (!isPlausibleBodyweight(bodyweight)) {
+    toast("Enter a body weight between 50 and 700 lb.");
+    return;
+  }
   const entry = {
     id: crypto.randomUUID(),
     date: new Date().toISOString(),
@@ -2918,6 +3085,10 @@ function saveMeasurement() {
   const hasMeasurement = Object.values(measurements).some((value) => value !== null && Number.isFinite(value));
   if (!hasMeasurement) {
     toast("Add at least one body measurement.");
+    return;
+  }
+  if (hasInvalidMeasurement(measurements)) {
+    toast("Measurements must be positive numbers.");
     return;
   }
   const entry = {
@@ -2993,7 +3164,7 @@ function render() {
     <div class="app">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">PS</div>
+          <div class="brand-mark">MM</div>
           <div>
             <p class="brand-title">${APP_NAME}</p>
             <p class="brand-subtitle">Bodybuilding logbook</p>
@@ -3014,5 +3185,19 @@ function render() {
   updateTimerDom();
 }
 
-render();
+// A rest timer can be running while the user browses another tab. Resume its
+// tick on load so it still completes (and rings) instead of stalling.
 if (state.timer.running) ensureTimerTick();
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && timerTick) {
+    clearInterval(timerTick);
+    timerTick = null;
+  } else if (!document.hidden && state.timer.running) {
+    primeTimerAudio();
+    if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "reconcile" });
+    else ensureTimerTick();
+  }
+});
+
+render();

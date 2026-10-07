@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feature/bodybuilder-toolkit
   pull_request:
   workflow_dispatch:
 
@@ -21,6 +22,7 @@ jobs:
       - name: Validate web and native integration
         run: |
           node --check app.js
+          node --check toolkit.js
           node scripts/validate-source.mjs
           git diff --exit-code
 

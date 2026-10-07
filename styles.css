@@ -7,8 +7,8 @@
   --text: #eef4fb;
   --muted: #92a0ad;
   --soft: #c5d0dc;
-  --blue: #1e9bff;
-  --blue-2: #67c2ff;
+  --blue: #b72f3b;
+  --blue-2: #ef6670;
   --green: #1ed8a5;
   --amber: #f6b23c;
   --red: #ff5a62;
@@ -134,7 +134,7 @@ button:disabled {
 
 .main {
   min-width: 0;
-  padding: max(18px, env(safe-area-inset-top)) 14px calc(126px + env(safe-area-inset-bottom));
+  padding: calc(18px + env(safe-area-inset-top, 0px)) 14px calc(126px + env(safe-area-inset-bottom, 0px));
 }
 
 .resume-workout {
@@ -829,6 +829,10 @@ textarea:focus {
   background: rgba(255, 255, 255, 0.045);
 }
 
+.set-row.reps-only {
+  grid-template-columns: 54px minmax(0, 1fr) 112px;
+}
+
 .set-number {
   display: grid;
   place-items: center;
@@ -884,7 +888,7 @@ textarea:focus {
   z-index: 35;
   display: grid;
   place-items: center;
-  padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+  padding: calc(18px + env(safe-area-inset-top, 0px)) 18px calc(18px + env(safe-area-inset-bottom, 0px));
   background:
     radial-gradient(circle at 50% 28%, rgba(30, 155, 255, 0.24), transparent 28rem),
     rgba(5, 7, 10, 0.96);
@@ -1017,10 +1021,17 @@ textarea:focus {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* Higher specificity than the mobile `.card.pad { padding: 14px }` reset so
+   the safe-area padding survives on phones. */
+.modal-screen .modal.card.pad {
+  padding-top: calc(18px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+}
+
 .toast {
   position: fixed;
   right: 22px;
-  bottom: max(22px, env(safe-area-inset-bottom));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
   z-index: 40;
   max-width: min(360px, calc(100vw - 44px));
   padding: 14px 16px;
@@ -1035,7 +1046,7 @@ textarea:focus {
   position: fixed;
   left: max(10px, calc((100vw - 430px) / 2 + 10px));
   right: max(10px, calc((100vw - 430px) / 2 + 10px));
-  bottom: max(10px, env(safe-area-inset-bottom));
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   z-index: 10;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1068,6 +1079,10 @@ textarea:focus {
 
 .set-row {
   grid-template-columns: 46px 1fr 1fr;
+}
+
+.set-row.reps-only {
+  grid-template-columns: 46px 1fr;
 }
 
 .set-row .primary-btn,
@@ -1122,5 +1137,189 @@ textarea:focus {
   .measurement-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     overflow-x: visible;
+  }
+}
+
+textarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+}
+
+.favorite-btn {
+  width: 40px;
+  min-width: 40px;
+  padding: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.favorite-btn.active {
+  color: var(--amber);
+  border-color: rgba(255, 190, 92, 0.5);
+  background: rgba(255, 190, 92, 0.12);
+}
+
+.previous-performance,
+.progression-callout,
+.compact-note {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.previous-performance p {
+  margin: 5px 0 0;
+}
+
+.progression-callout {
+  color: var(--text);
+  border-left: 3px solid var(--green);
+}
+
+.toolkit-exercise-controls {
+  margin: 12px 0;
+}
+
+.toolkit-exercise-controls select,
+.topbar select {
+  min-width: 180px;
+}
+
+.toolkit-set-row {
+  grid-template-columns: 48px minmax(70px, 0.8fr) minmax(65px, 0.7fr) minmax(82px, 0.7fr) minmax(112px, 1fr) 104px;
+}
+
+.toolkit-set-row.reps-only {
+  grid-template-columns: 48px minmax(65px, 0.8fr) minmax(82px, 0.8fr) minmax(112px, 1fr) 104px;
+}
+
+.mini-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mini-actions button {
+  width: auto;
+  min-width: 34px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+.mini-actions button.danger {
+  color: #ff8d91;
+}
+
+.equipment-checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.equipment-checks label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.equipment-checks input {
+  width: auto;
+}
+
+.toolkit-history {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 900px) {
+  .toolkit-set-row,
+  .toolkit-set-row.reps-only {
+    grid-template-columns: 42px repeat(2, minmax(0, 1fr));
+  }
+
+  .toolkit-set-row select,
+  .toolkit-set-row button {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .toolkit-exercise-controls .actions,
+  .topbar .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .toolkit-exercise-controls select,
+  .topbar select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .toolkit-set-row,
+  .toolkit-set-row.reps-only {
+    grid-template-columns: 40px repeat(2, minmax(0, 1fr));
+  }
+
+  /* Weight + reps, then RIR + set type, then Complete: three short rows per
+     set instead of five stacked full-width fields. */
+  .toolkit-set-row > *:not(.set-number) {
+    grid-column: auto;
+  }
+
+  .toolkit-set-row > .set-number {
+    grid-row: span 3;
+  }
+
+  .toolkit-set-row > button:last-child {
+    grid-column: 2 / -1;
+  }
+
+  .equipment-checks {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Long exercise names must not squeeze rest/target badges into tall pills. */
+.card-head > .badge {
+  flex-shrink: 0;
+  align-self: flex-start;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  /* Keep live-workout controls compact: Copy Last + Substitute on one row,
+     set/order buttons on the next, Remove last. */
+  .toolkit-exercise-controls .actions {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .toolkit-exercise-controls .actions > .secondary-btn,
+  .toolkit-exercise-controls .actions > select {
+    grid-column: span 2;
+  }
+
+  .toolkit-exercise-controls .actions > .ghost-btn.danger {
+    grid-column: 1 / -1;
+  }
+
+  /* The phone tab bar wraps to two rows; keep toasts above it. */
+  .toast {
+    left: 16px;
+    right: 16px;
+    bottom: calc(126px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
   }
 }
