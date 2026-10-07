@@ -83,7 +83,7 @@ private struct SetEntryView: View {
                             model.weight += model.weightStep
                         }
                     }
-                    ValueRow(label: "reps", value: String(Int(model.reps.rounded())), selected: editingReps || model.exercise?.repsOnly == true) {
+                    ValueRow(label: "reps", value: WatchWorkoutModel.formatReps(model.reps), selected: editingReps || model.exercise?.repsOnly == true) {
                         editingReps = true
                     } minus: {
                         model.reps = max(1, model.reps - 1)

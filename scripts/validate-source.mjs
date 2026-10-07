@@ -646,9 +646,10 @@ assert.deepEqual(Array.from(run("state.workoutLogs[0].sets.map((set) => set.weig
 run("state.healthBody.enabled = true; state.healthBody.lastSyncAt = new Date(2026, 9, 4, 15, 30).toISOString(); healthSyncInFlight = false; syncHealthBody(true)");
 const since = new Date(run("window.__hk.at(-1).since"));
 assert.equal(since.getHours() + since.getMinutes(), 0, "Health re-syncs start at local midnight");
-run("handleNativeHealthKit({ status: 'error', action: 'syncWeight', message: 'nope' })");
+run("window.handleNativeHealthKit({ status: 'error', action: 'syncWeight', message: 'nope' })");
 assert.ok(!/import failed/i.test(run("state.healthBody.lastResult")), "a failed weight export is not reported as a failed import");
-run("state.healthBody.enabled = false; handleNativeHealthKit({ status: 'bodySamples', unit: 'lb', samples: [{ type: 'weight', id: 'z', date: new Date().toISOString(), value: 150 }] })");
+// Swift calls window.handleNativeHealthKit, which health.js wraps; the bare global is toolkit's base.
+run("state.healthBody.enabled = false; window.handleNativeHealthKit({ status: 'bodySamples', unit: 'lb', samples: [{ type: 'weight', id: 'z', date: new Date().toISOString(), value: 150 }] })");
 assert.ok(!run("state.weightLogs.some((entry) => entry.id.startsWith('hk-'))"), "a read that finishes after Health is turned off is ignored");
 // Restore never overwrites today's backup and blocks stray saves while reloading.
 run(`restoreBackupPayload({ format: "mass-method-backup", version: 1, state: { profile: { bodyweight: 1 }, backupStatus: { at: "2020-01-01T00:00:00Z" } } })`);
@@ -1100,9 +1101,21 @@ console.log("Audit round 8 checks passed.");
   // App Store upload rejects a watch binary that uses UserDefaults without a privacy manifest.
   assert(watchPrivacy.includes("NSPrivacyAccessedAPICategoryUserDefaults"), "Watch privacy manifest must declare UserDefaults");
   assert(/2B3C4D5E6F7A80000000F004 \/\* PrivacyInfo.xcprivacy in Resources \*\/,/.test(xcodeProject), "Watch PrivacyInfo.xcprivacy is not in the watch Resources phase");
-  // A rest started on the watch must not also schedule a phone notification (double alert).
-  assert(watchJs.includes('restStartedOnWatch: watchCommandInProgress && watchCommandAction === "completeSet"'), "Watch-started rests must be flagged to the native timer");
-  assert(swiftWebView.includes('payload["restStartedOnWatch"] as? Bool == true'), "Native timer must skip its notification for watch-started rests");
+  // The phone notification follows the real end time (a +15 s rest is not the preset length), and
+  // the phone always schedules it: the watch drops its own alert once a watch-logged set is confirmed.
+  assert(swiftWebView.includes("let fireIn = endsAtMs.map { $0 / 1000 - Date().timeIntervalSince1970 } ?? seconds"), "Native rest notification must be scheduled from endsAt");
+  assert(!swiftWebView.includes("restStartedOnWatch") && !watchJs.includes("restStartedOnWatch"), "Phone must always schedule its rest notification (watch drops its own on confirmation)");
+  assert(toolkit.includes('postMessage({ action: "start", seconds: timerTotalSeconds(), endsAt: state.timer.endsAt,'), "Native timer start must carry the real rest length");
+  // Watch: absurd phone input must clamp, never trap in Int().
+  const watchModel = read("ios/MassMethodWatch/WatchWorkoutModel.swift");
+  assert(watchModel.includes("static func clampWeight(_ value: Double) -> Double") && watchModel.includes("weight = Self.clampWeight(") && watchModel.includes("reps = Self.clampReps("), "Watch draft values must be clamped");
+  assert(!watchModel.includes("String(Int(reps.rounded()))") && !read("ios/MassMethodWatch/WatchWorkoutView.swift").includes("String(Int(model.reps.rounded()))"), "Watch reps formatting must go through clampReps");
+  // iCloud: poll a fresh URL (cached resource values never refresh off the run loop); skip undownloaded photos.
+  assert(backupService.includes("let probe = URL(fileURLWithPath: url.path)"), "iCloud download polling must probe a fresh URL");
+  assert(backupService.includes("if !Self.isDownloaded(realSource, placeholder: sourcePlaceholder) {"), "Photo restore must skip photos still downloading");
+  assert(backupService.includes("let logical = directory.appendingPathComponent(name)"), "Backup list must read metadata through the logical iCloud name");
+  // No main-frame blob:/data: navigation.
+  assert(swiftWebView.includes("decisionHandler(navigationAction.targetFrame?.isMainFrame == true ? .cancel : .allow)"), "Main-frame blob:/data: navigations must be refused");
   // iCloud restores must not block the snapshot queue or hang offline.
   assert(backupService.includes("let worker = location == .iCloud ? restoreQueue : queue"), "iCloud restores must run on their own queue");
   assert(backupService.includes("case downloadPending"), "iCloud restore needs a bounded download wait");
@@ -1120,12 +1133,21 @@ console.log("Audit round 8 checks passed.");
   assert(app.includes("if (!Array.isArray(stored.weightLogs)) {"), "Weight-log migration must only run for the pre-weightLogs schema");
   assert(app.includes("function knownPlanExercises(plan)") && !app.includes("${plan.exercises.map(([id, sets, reps]) => `"), "Plan previews must skip unknown exercise ids");
   assert(app.includes("Math.abs(delta) < fromPounds(0.2)"), "Scale-trend threshold must be unit-aware");
-  assert(read("settings.js").includes("return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, \"0\")}-${String(now.getDate()).padStart(2, \"0\")}`;"), "Snapshot day stamp must use the local date");
+  assert(read("settings.js").includes("function todayStamp() {\n  return localDateStamp();\n}") && app.includes("function localDateStamp(date = new Date()) {"), "Snapshot day stamp must use the local date");
   assert(read("volume.js").includes("function renderTrainingBlockCard() {\n  // A queued coach block whose start week has arrived becomes the active\n  // block here too, so this card and the volume bars below agree.\n  promotePendingBlock();"), "Training block card must promote a due pending block before rendering");
   // Bridge timing: no second bell after a hidden-page watch command, no stale reconcile kill, no double watch haptic.
   assert(app.includes('if (typeof document !== "undefined" && document.hidden) {\n    timerTick = null;\n    return;\n  }'), "Timer tick must not arm while the page is hidden");
   assert(toolkit.includes("if (state.timer.running && Number(state.timer.endsAt) - Date.now() > 1500) {\n      ensureTimerTick();\n      return;\n    }"), "Reconcile must not kill a rest started after the reconcile request");
   assert(read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes("guard endsAt.timeIntervalSinceNow > -2 else {"), "Watch must not replay the rest haptic after waking late");
+  // Journey-harness findings: junk logbook range, untitled logs, junk native lists, corrupt-storage boot, photo redelivery.
+  assert(app.includes("function logbookDays()") && !app.includes("Number(state.logbookRange || 7)") && !toolkit.includes("Number(state.logbookRange || 7)") && !read("coach.js").includes("Number(state.logbookRange || 7)"), "Logbook range must go through logbookDays()");
+  assert(app.includes('next.logbookRange = LOGBOOK_RANGES.includes(Number(next.logbookRange)) ? String(Number(next.logbookRange)) : "7";'), "Stored logbook range must be sanitized");
+  assert(app.includes('${log.title || "Workout"}'), "PDF must not print undefined for an untitled log");
+  assert(app.includes("  weeklyCheckIns: [],\n  prepLogs: [],"), "Fresh state must include toolkit arrays so the corrupt-storage boot render does not throw");
+  assert(read("settings.js").includes('.filter((backup) => backup && typeof backup === "object")'), "Native backup list must drop non-object entries");
+  assert(read("photos.js").includes("if (state.progressPhotos.some((photo) => photo.id === record.id)) return;"), "Redelivered photo saves must not duplicate records");
+  assert(toolkit.includes('return state.exerciseSettings[id] || { note: "", pain: "none" };'), "exerciseSetting must be read-only");
+  assert(app.includes("const filename = `mass-method-coach-log-${localDateStamp()}.pdf`;"), "PDF filename must use the local day");
   console.log("Audit round 12 checks passed.");
 }
 }

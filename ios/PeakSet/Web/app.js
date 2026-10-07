@@ -1,6 +1,8 @@
 const STORE_KEY = "stageforge-v1";
 const APP_NAME = "Mass Method";
 const DEFAULT_REST_SECONDS = 180;
+// Declared before loadState() runs: sanitizeStoredState reads it at script load.
+const LOGBOOK_RANGES = [7, 14, 30];
 
 const muscles = ["chest", "back", "shoulders", "arms", "legs"];
 const divisionOptions = [
@@ -673,6 +675,8 @@ const defaultState = {
   activeFilter: "all",
   libraryFilter: "chest",
   logbookRange: "7",
+  weeklyCheckIns: [],
+  prepLogs: [],
   todayPlanId: null,
   todayWorkoutPick: "recommended",
   units: "imperial",
@@ -836,8 +840,21 @@ function finiteOrNull(value) {
 
 // Stored state can come from a restored backup file, so every field a screen
 // prints is coerced to its real type here; numbers must be numbers.
+function logbookDays() {
+  const days = Number(state.logbookRange);
+  return LOGBOOK_RANGES.includes(days) ? days : 7;
+}
+
+// Local calendar day for file names (the UTC date names an evening US export
+// after tomorrow).
+function localDateStamp(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function sanitizeStoredState(next) {
   const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
+  // A restored or corrupted value here renders "Last NaN days" everywhere.
+  next.logbookRange = LOGBOOK_RANGES.includes(Number(next.logbookRange)) ? String(Number(next.logbookRange)) : "7";
   const objects = (value) => (Array.isArray(value) ? value.filter(isObject) : []);
   const textFields = ["id", "date", "note", "source", "cardioType", "notes", "title"];
   next.weightLogs = next.weightLogs.map((entry) => ({
@@ -1667,6 +1684,7 @@ function measurementRows(entry) {
 }
 
 function coachReportData(days) {
+  days = LOGBOOK_RANGES.includes(Number(days)) ? Number(days) : logbookDays();
   const workouts = state.workoutLogs.filter((log) => isWithinDays(log.date, days));
   const weights = state.weightLogs.filter((log) => isWithinDays(log.date, days));
   const measurements = state.measurements.filter((log) => isWithinDays(log.date, days));
@@ -1708,6 +1726,7 @@ function addReportSection(lines, title) {
 }
 
 function buildCoachReportLines(days, coachNote = "") {
+  days = LOGBOOK_RANGES.includes(Number(days)) ? Number(days) : logbookDays();
   const report = coachReportData(days);
   const profile = state.profile || {};
   const lines = [
@@ -1751,7 +1770,7 @@ function buildCoachReportLines(days, coachNote = "") {
   addReportSection(lines, "Workout Logs");
   if (report.workouts.length) {
     report.workouts.forEach((log) => {
-      lines.push({ text: `${formatShortDate(log.date)} - ${log.title}`, size: 11, bold: true });
+      lines.push({ text: `${formatShortDate(log.date)} - ${log.title || "Workout"}`, size: 11, bold: true });
       lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume`, size: 10 });
       const grouped = (log.sets || []).reduce((groups, set) => {
         if (!groups[set.exercise]) groups[set.exercise] = [];
@@ -1888,12 +1907,12 @@ async function shareNativePdf(blob, filename) {
 }
 
 async function exportLogbookPdf() {
-  const days = Number(state.logbookRange || 7);
+  const days = logbookDays();
   const note = document.getElementById("coachNote")?.value ?? coachNoteDraft;
   coachNoteDraft = note;
   const lines = buildCoachReportLines(days, note);
   const blob = createPdfBlob(lines);
-  const filename = `mass-method-coach-log-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const filename = `mass-method-coach-log-${localDateStamp()}.pdf`;
 
   if (await shareNativePdf(blob, filename)) {
     toast("PDF ready to send.");
@@ -3275,7 +3294,7 @@ function renderProgress() {
 }
 
 function renderLogbook() {
-  const days = Number(state.logbookRange || 7);
+  const days = logbookDays();
   const report = coachReportData(days);
   const latestMeasurementRows = measurementRows(report.latestMeasurement);
   return `

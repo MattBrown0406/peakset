@@ -185,7 +185,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         guard var current = snapshot, let exercise, let set = nextSet else { return }
         let exerciseIndex = selectedExercise
         let weightText = exercise.repsOnly ? "" : Self.format(weight)
-        let repsText = String(Int(reps.rounded()))
+        let repsText = Self.formatReps(reps)
         let completedAt = Date()
         // Apply locally so the next set and the rest timer appear immediately.
         pendingCompletions.append(PendingCompletion(exerciseIndex: exercise.index, setIndex: set.index, exerciseID: exercise.id ?? "", label: set.label, weight: weightText, reps: repsText, completedAt: completedAt))
@@ -353,8 +353,11 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         guard let exercise else { return }
         let set = exercise.sets.first { !$0.done }
         loadingDraft = true
-        weight = Double(set?.weight.isEmpty == false ? set!.weight : exercise.suggestedWeight) ?? 0
-        reps = Double(set?.reps.isEmpty == false ? set!.reps : exercise.suggestedReps) ?? 8
+        // The phone's number inputs accept anything ("1e400", 20 digits); an
+        // unclamped value would trap in Int() and crash the watch on every
+        // launch until the phone edited that set.
+        weight = Self.clampWeight(Double(set?.weight.isEmpty == false ? set!.weight : exercise.suggestedWeight) ?? 0)
+        reps = Self.clampReps(Double(set?.reps.isEmpty == false ? set!.reps : exercise.suggestedReps) ?? 8)
         loadingDraft = false
         draftEdited = false
     }
@@ -367,6 +370,9 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         // A rest started on the watch has no phone notification behind it
         // (the phone may be locked), so the watch schedules its own; it fires
         // even with the wrist down when the app is suspended.
+        // Clear the previous rest's delivered alert so they don't pile up in
+        // Notification Center.
+        center.removeDeliveredNotifications(withIdentifiers: [restNotificationID])
         if localRestStartedOnWatch, let localRest, localRest.end == endsAt {
             let content = UNMutableNotificationContent()
             content.title = "Rest complete"
@@ -390,8 +396,24 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         }
     }
 
+    static let maxWeight: Double = 2000
+    static let maxReps: Double = 200
+
+    static func clampWeight(_ value: Double) -> Double {
+        value.isFinite ? min(max(value, 0), maxWeight) : 0
+    }
+
+    static func clampReps(_ value: Double) -> Double {
+        value.isFinite ? min(max(value.rounded(), 1), maxReps) : 8
+    }
+
     static func format(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(format: "%.2f", value).replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
+        let safe = clampWeight(value)
+        return safe.rounded() == safe ? String(Int(safe)) : String(format: "%.2f", safe).replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
+    }
+
+    static func formatReps(_ value: Double) -> String {
+        String(Int(clampReps(value)))
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {

@@ -186,9 +186,11 @@ function exerciseMatchesEquipmentProfile(exercise, profile = activeEquipmentProf
     }));
 }
 
+// Read-only: rendering the Library must not persist a record for every
+// exercise shown (they would ride into every backup). saveExerciseSetting
+// creates the record.
 function exerciseSetting(id) {
-  if (!state.exerciseSettings[id]) state.exerciseSettings[id] = { note: "", pain: "none" };
-  return state.exerciseSettings[id];
+  return state.exerciseSettings[id] || { note: "", pain: "none" };
 }
 
 function isFavoriteExercise(id) {
@@ -874,7 +876,7 @@ const baseStartTimer = startTimer;
 startTimer = function startNativeBackedTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null, persistRest = true) {
   baseStartTimer(seconds, fullscreen, exerciseIndex, persistRest);
   // restTimerContext (watch.js) adds the Live Activity details when loaded.
-  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: state.timer.seconds, endsAt: state.timer.endsAt, ...(typeof restTimerContext === "function" ? restTimerContext() : {}) });
+  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: timerTotalSeconds(), endsAt: state.timer.endsAt, ...(typeof restTimerContext === "function" ? restTimerContext() : {}) });
 };
 
 const baseStopTimer = stopTimer;
@@ -1075,7 +1077,7 @@ buildCoachReportLines = function buildToolkitCoachReportLines(days, coachNote = 
 const baseRenderLogbook = renderLogbook;
 renderLogbook = function renderToolkitLogbook() {
   const base = baseRenderLogbook();
-  const days = Number(state.logbookRange || 7);
+  const days = logbookDays();
   const report = coachReportData(days);
   const addition = `<section class="card pad" style="margin-top:16px"><p class="eyebrow">Coach check-in detail</p><div class="grid two"><article><h3>Recovery</h3>${report.weeklyCheckIns.map((entry) => `<p class="muted">${formatShortDate(entry.date)} · Sleep ${entry.sleep || "--"} · Energy ${entry.energy || "--"}/5 · Recovery ${entry.recovery || "--"}/5</p>`).join("") || '<p class="muted">No check-ins.</p>'}</article><article><h3>Prep activity</h3>${report.prepLogs.map((entry) => `<p class="muted">${formatShortDate(entry.date)} · ${entry.cardioMinutes || 0} cardio min · ${(entry.steps || 0).toLocaleString()} steps · ${entry.posingMinutes || 0} posing min</p>`).join("") || '<p class="muted">No prep activity.</p>'}</article></div></section>`;
   return `${base}${addition}`;

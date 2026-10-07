@@ -94,11 +94,18 @@ final class PeakSetBackupService {
                 for url in urls {
                     // Not-yet-downloaded iCloud files appear as ".name.json.icloud".
                     guard let name = Self.realName(of: url), name.hasSuffix(".json") else { continue }
-                    let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                    // Read metadata through the logical name: the ".icloud" stub
+                    // reports its own (tiny, recent) size and date, which would
+                    // mis-sort "most recent" after a reinstall.
+                    let logical = directory.appendingPathComponent(name)
+                    let values = (try? logical.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]))
+                        ?? (try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]))
                     files.append(BackupFile(name: name, date: values?.contentModificationDate ?? .distantPast, bytes: values?.fileSize ?? 0, location: location))
                 }
             }
             completion(files.sorted { $0.date > $1.date })
+            // Photos still downloading when a restore ran are copied as they land.
+            self.photoQueue.async { self.restorePhotosFromICloud() }
         }
     }
 
@@ -142,14 +149,21 @@ final class PeakSetBackupService {
         try? fileManager.startDownloadingUbiquitousItem(at: url)
         let deadline = Date().addingTimeInterval(downloadTimeout)
         while true {
-            let status = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]).ubiquitousItemDownloadingStatus
-            if status == .current || status == .downloaded { return }
-            // A file that is not ubiquitous at all reports no status; if it is
-            // present on disk it can be read directly.
-            if status == nil, fileManager.fileExists(atPath: url.path), !fileManager.fileExists(atPath: placeholder.path) { return }
+            if Self.isDownloaded(url, placeholder: placeholder) { return }
             if Date() >= deadline { throw BackupError.downloadPending }
             Thread.sleep(forTimeInterval: 0.5)
         }
+    }
+
+    /// Resource values are cached per NSURL and only refreshed on a run-loop
+    /// pass, which a polling background queue never gets; probe a fresh URL.
+    private static func isDownloaded(_ url: URL, placeholder: URL) -> Bool {
+        let probe = URL(fileURLWithPath: url.path)
+        let status = try? probe.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]).ubiquitousItemDownloadingStatus
+        if status == .current || status == .downloaded { return true }
+        // A file that is not ubiquitous at all reports no status; if it is
+        // present on disk (and no stub remains) it can be read directly.
+        return status == nil && FileManager.default.fileExists(atPath: url.path) && !FileManager.default.fileExists(atPath: placeholder.path)
     }
 
     private func readCoordinated(_ url: URL) throws -> Data {
@@ -189,8 +203,10 @@ final class PeakSetBackupService {
         copyMissingFiles(from: cloudPhotos, to: PeakSetPhotoStore.directory)
     }
 
-    /// Copies photos the destination lacks. Coordinated reads make iCloud
-    /// download placeholders before copying. Athletes' photos ("coach-") stay local.
+    /// Copies photos the destination lacks. Photos still downloading from
+    /// iCloud are requested and skipped (a coordinated read would block the
+    /// queue until they land, forever when offline); `list()` retries later.
+    /// Athletes' photos ("coach-") stay local.
     private func copyMissingFiles(from source: URL, to destination: URL) {
         guard let urls = try? fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) else { return }
         try? fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
@@ -200,6 +216,11 @@ final class PeakSetBackupService {
             let placeholder = destination.appendingPathComponent(".\(name).icloud")
             guard !fileManager.fileExists(atPath: target.path), !fileManager.fileExists(atPath: placeholder.path) else { continue }
             let realSource = source.appendingPathComponent(name)
+            let sourcePlaceholder = source.appendingPathComponent(".\(name).icloud")
+            if !Self.isDownloaded(realSource, placeholder: sourcePlaceholder) {
+                try? fileManager.startDownloadingUbiquitousItem(at: realSource)
+                continue
+            }
             if let data = try? readCoordinated(realSource) {
                 try? data.write(to: target, options: .atomic)
             }

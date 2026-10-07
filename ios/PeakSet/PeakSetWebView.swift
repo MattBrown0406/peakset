@@ -172,7 +172,11 @@ struct PeakSetWebView: UIViewRepresentable {
                 return decisionHandler(.cancel)
             }
             switch scheme {
-            case "file", "about", "blob", "data", PeakSetPhotoSchemeHandler.scheme:
+            case "blob", "data":
+                // Sub-resources are fine; a main-frame navigation (an <a download>
+                // click) would replace the app page with the file and no way back.
+                decisionHandler(navigationAction.targetFrame?.isMainFrame == true ? .cancel : .allow)
+            case "file", "about", PeakSetPhotoSchemeHandler.scheme:
                 decisionHandler(.allow)
             case "http", "https", "mailto", "tel":
                 if navigationAction.navigationType == .linkActivated {
@@ -297,15 +301,16 @@ struct PeakSetWebView: UIViewRepresentable {
                 return
             }
             guard action == "start", let seconds = (payload["seconds"] as? NSNumber)?.doubleValue else { return }
-            if payload["restStartedOnWatch"] as? Bool == true {
-                // The watch already scheduled its own alert for this rest; a
-                // phone notification too would ring twice once the phone locks.
-                PeakSetTimerService.shared.cancel()
-            } else {
-                PeakSetTimerService.shared.start(seconds: seconds)
-            }
+            // `seconds` is the remembered preset; a +15 s or watch catch-up rest
+            // can end sooner or later than that, so the notification follows
+            // the real end time whenever the page sends one. The phone always
+            // schedules it: the watch drops its own alert once the phone
+            // confirms a watch-logged set, so exactly one alert remains.
+            let endsAtMs = (payload["endsAt"] as? NSNumber)?.doubleValue
+            let fireIn = endsAtMs.map { $0 / 1000 - Date().timeIntervalSince1970 } ?? seconds
+            PeakSetTimerService.shared.start(seconds: max(1, fireIn))
             if payload["liveActivity"] as? Bool == true,
-               let endsAtMs = (payload["endsAt"] as? NSNumber)?.doubleValue {
+               let endsAtMs {
                 let endsAt = Date(timeIntervalSince1970: endsAtMs / 1000)
                 PeakSetLiveActivityManager.shared.show(.init(
                     startedAt: Date(),

@@ -158,8 +158,7 @@ function nativeBackupPayload() {
 // Local calendar day, matching how the rest of the app keys days; the UTC
 // date would name an evening US snapshot after tomorrow.
 function todayStamp() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return localDateStamp();
 }
 
 async function shareOrDownload(text, filename, mime = "application/json") {
@@ -282,7 +281,7 @@ function handleNativeBackup(payload) {
     saveState();
     if (state.view === "more") render();
   } else if (payload.status === "list") {
-    nativeBackups = Array.isArray(payload.backups) ? payload.backups : [];
+    nativeBackups = (Array.isArray(payload.backups) ? payload.backups : []).filter((backup) => backup && typeof backup === "object");
     if (state.view === "more" || onboardingRestoreOpen) render();
   } else if (payload.status === "restore") {
     let parsed = null;

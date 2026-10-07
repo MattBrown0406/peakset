@@ -85,7 +85,7 @@ function mergedLatestMeasurement() {
   return merged;
 }
 
-async function buildCoachPackage(days = Number(state.logbookRange || 7)) {
+async function buildCoachPackage(days = logbookDays()) {
   const report = coachReportData(days);
   const photos = PHOTO_POSES
     .map(([pose]) => latestPhotoForPose(pose))
@@ -153,7 +153,7 @@ async function sendCheckInToCoach() {
   // side de-duplicates), so a late send never drops data.
   const since = Date.parse(state.lastCoachPackageAt || "");
   const gapDays = Number.isFinite(since) ? Math.ceil((Date.now() - since) / 86400000) + 1 : 0;
-  const pkg = await buildCoachPackage(Math.min(60, Math.max(Number(state.logbookRange || 7), gapDays)));
+  const pkg = await buildCoachPackage(Math.min(60, Math.max(logbookDays(), gapDays)));
   const name = `${fileSafe(state.athleteName)} check-in ${todayStamp()}.massmethod`;
   const result = await shareOrDownload(JSON.stringify(pkg), name, "application/x-massmethod");
   const sentAt = new Date().toISOString();

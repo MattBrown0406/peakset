@@ -24,7 +24,12 @@ const pendingThumbnailRequests = new Map();
 
 function photosMigrateState() {
   if (!Array.isArray(state.progressPhotos)) state.progressPhotos = [];
-  state.progressPhotos = state.progressPhotos.filter((photo) => photo && typeof photo === "object" && /^[A-Za-z0-9-]+$/.test(String(photo.id || "")));
+  const seenIds = new Set();
+  state.progressPhotos = state.progressPhotos.filter((photo) => {
+    if (!photo || typeof photo !== "object" || !/^[A-Za-z0-9-]+$/.test(String(photo.id || "")) || seenIds.has(photo.id)) return false;
+    seenIds.add(photo.id);
+    return true;
+  });
   if (!PHOTO_POSES.some(([key]) => key === state.photoPose)) state.photoPose = PHOTO_POSES[0][0];
   if (!state.photoCompare || typeof state.photoCompare !== "object") state.photoCompare = { beforeId: "", afterId: "", mode: "side" };
 }
@@ -75,6 +80,8 @@ function setPhotoPose(pose) {
 }
 
 function addPhotoRecord(record) {
+  // The native "saved" reply can be redelivered after a web process reload.
+  if (state.progressPhotos.some((photo) => photo.id === record.id)) return;
   state.progressPhotos.push(record);
   state.photoPose = record.pose;
   state.photoCompare = { ...state.photoCompare, beforeId: "", afterId: "" };
