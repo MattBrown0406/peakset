@@ -194,7 +194,9 @@ final class PeakSetBackupService {
 
     private func prune(_ directory: URL) {
         guard let urls = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
-        let sorted = urls.filter { $0.pathExtension == "json" }.sorted {
+        // Offloaded iCloud backups appear as ".name.json.icloud" stand-ins and
+        // still count toward the limit (deleting the stand-in deletes the file).
+        let sorted = urls.filter { Self.realName(of: $0)?.hasSuffix(".json") == true }.sorted {
             let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return lhs > rhs
@@ -352,6 +354,13 @@ final class PeakSetIncomingFiles {
             if size > 0, size < 50_000_000, let data = try? Data(contentsOf: url) {
                 // An empty string reaches the web app's "could not be read" message.
                 text = String(data: data, encoding: .utf8) ?? ""
+            }
+            // Files handed over by AirDrop, Mail or Messages are copied into
+            // Documents/Inbox (visible in Files); remove the copy once read.
+            if url.deletingLastPathComponent().lastPathComponent == "Inbox",
+               let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+               url.standardizedFileURL.path.hasPrefix(documents.appendingPathComponent("Inbox").standardizedFileURL.path) {
+                try? FileManager.default.removeItem(at: url)
             }
             DispatchQueue.main.async { self.enqueue(text) }
         }

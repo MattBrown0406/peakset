@@ -284,7 +284,11 @@ struct PeakSetWebView: UIViewRepresentable {
                 }
             case "restore":
                 guard let name = payload["name"] as? String,
-                      let location = PeakSetBackupService.Location(rawValue: payload["location"] as? String ?? "") else { return }
+                      let location = PeakSetBackupService.Location(rawValue: payload["location"] as? String ?? "") else {
+                    // The web app waits for a reply before re-enabling Restore.
+                    callJavaScript("handleNativeBackup", argument: ["status": "error", "kind": "restore", "message": "That backup could not be found."])
+                    return
+                }
                 service.read(name: name, location: location) { [weak self] result in
                     switch result {
                     case .success(let (json, date)):
@@ -438,8 +442,12 @@ struct PeakSetWebView: UIViewRepresentable {
                   let data = Data(base64Encoded: base64) else { return }
 
             let safeFilename = filename.replacingOccurrences(of: "/", with: "-")
-            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(safeFilename)
+            // A folder per share: two quick shares of the same filename must
+            // not overwrite (or, on completion, delete) each other's file.
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let fileURL = folder.appendingPathComponent(safeFilename)
             do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 try data.write(to: fileURL, options: .atomic)
                 presentShareSheet(for: fileURL)
             } catch {
@@ -464,15 +472,24 @@ struct PeakSetWebView: UIViewRepresentable {
             }
         }
 
+        /// Removes a shared temp file and its per-share folder.
+        static func removeSharedFile(_ fileURL: URL) {
+            try? FileManager.default.removeItem(at: fileURL)
+            let folder = fileURL.deletingLastPathComponent()
+            if UUID(uuidString: folder.lastPathComponent) != nil {
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
+
         private func presentShareSheet(for fileURL: URL) {
             DispatchQueue.main.async { [weak self] in
                 let activityController = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
                 guard let presenter = Self.topViewController() else {
-                    try? FileManager.default.removeItem(at: fileURL)
+                    Self.removeSharedFile(fileURL)
                     return
                 }
                 activityController.completionWithItemsHandler = { _, completed, _, _ in
-                    try? FileManager.default.removeItem(at: fileURL)
+                    Self.removeSharedFile(fileURL)
                     // Lets the web app tell a sent check-in from a cancelled share.
                     self?.callJavaScript("handleNativeShare", argument: ["filename": fileURL.lastPathComponent, "completed": completed])
                 }
