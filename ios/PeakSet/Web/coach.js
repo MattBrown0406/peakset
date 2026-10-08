@@ -146,7 +146,7 @@ async function buildCoachPackage(days = logbookDays()) {
     weightLogs: report.weights,
     // Entries the athlete deleted (or replaced) since; the coach drops them.
     deleted: (Array.isArray(state.deletedLogs) ? state.deletedLogs : []).filter((item) => {
-      const list = { weight: state.weightLogs, workout: state.workoutLogs, checkIn: state.weeklyCheckIns, prep: state.prepLogs }[item?.kind];
+      const list = { weight: state.weightLogs, workout: state.workoutLogs, checkIn: state.weeklyCheckIns, prep: state.prepLogs, measurement: state.measurements }[item?.kind];
       return !(Array.isArray(list) && list.some((entry) => entry?.id === item.id));
     }).slice(-300),
     // Latest value of every metric first (Health adds waist-only days), then
@@ -326,8 +326,10 @@ function mergeById(existing, incoming, limitDays = COACH_HISTORY_DAYS) {
   [...safeArray(existing), ...safeArray(incoming)].forEach((entry) => {
     if (entry.date) byId.set(entry.id, entry);
   });
+  // A day of tolerance for entries dated ahead of this phone's clock (the
+  // athlete's phone may run a few minutes fast).
   return [...byId.values()]
-    .filter((entry) => isWithinDays(entry.date, limitDays))
+    .filter((entry) => isWithinDays(entry.date, limitDays) || (Date.parse(entry.date) > Date.now() && Date.parse(entry.date) - Date.now() < 86400000))
     .sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
@@ -383,13 +385,13 @@ async function importCoachPackage(pkg) {
   const seenDeleted = new Set();
   // An entry a newer check-in contains again (an Apple Health reading that
   // returned after a hand-logged one was deleted) is no longer deleted.
-  const listKinds = { weight: pkg.weightLogs, workout: pkg.workoutLogs, checkIn: pkg.weeklyCheckIns, prep: pkg.prepLogs };
+  const listKinds = { weight: pkg.weightLogs, workout: pkg.workoutLogs, checkIn: pkg.weeklyCheckIns, prep: pkg.prepLogs, measurement: pkg.measurements };
   const presentAgain = (kind, id) => newer && safeArray(listKinds[kind]).some((entry) => entry.id === id);
   // A package's own lists are the truth for its ids (older builds kept a
   // deletion record for a Health reading that came back).
   const inThisPackage = (kind, id) => safeArray(listKinds[kind]).some((entry) => entry.id === id);
   [...safeArray(existing.deleted).filter((item) => !presentAgain(item.kind, item.id)), ...safeArray(pkg.deleted).slice(-300).filter((item) => !inThisPackage(item.kind, item.id))].forEach((item) => {
-    const kind = ["weight", "workout", "checkIn", "prep"].includes(item?.kind) ? item.kind : null;
+    const kind = ["weight", "workout", "checkIn", "prep", "measurement"].includes(item?.kind) ? item.kind : null;
     const id = typeof item?.id === "string" ? item.id.slice(0, 80) : "";
     if (!kind || !id || seenDeleted.has(`${kind}:${id}`)) return;
     seenDeleted.add(`${kind}:${id}`);
@@ -403,7 +405,7 @@ async function importCoachPackage(pkg) {
     const days = cleanNumber(item.rangeDays, 1, 366);
     return Number.isFinite(end) && end > generatedTime && days ? [end - days * 86400000, end] : null;
   }).filter(Boolean);
-  const kindOf = { weightLogs: "weight", workoutLogs: "workout", weeklyCheckIns: "checkIn", prepLogs: "prep" };
+  const kindOf = { weightLogs: "weight", workoutLogs: "workout", weeklyCheckIns: "checkIn", prepLogs: "prep", measurements: "measurement" };
   const pruneMissing = (list, incoming, apply = true, key = "") => {
     const tombstones = deletedByKind[kindOf[key]];
     const kept = safeArray(list).filter((entry) => !tombstones?.has(entry?.id));
@@ -431,7 +433,16 @@ async function importCoachPackage(pkg) {
     profile: newer ? profile : existing.profile,
     updatedAt: newer ? generatedAt : existing.updatedAt,
     weightLogs: mergeById(pruneMissing(existing.weightLogs, pkg.weightLogs, incomingUnitsMatch, "weightLogs"), incomingUnitsMatch ? keepIncoming(cleanList(pkg.weightLogs, CLEAN.weight), existing.weightLogs, "weightLogs") : []),
-    measurements: mergeById(existing.measurements, incomingUnitsMatch ? cleanList(pkg.measurements, CLEAN.measurement) : [], 365).slice(0, 30),
+    // The package's "latest-<date>" summary replaces the previous one (a
+    // deleted tape check-in moves the athlete's latest date back), and
+    // deleted tape check-ins are dropped like other deleted entries.
+    measurements: mergeById(
+      safeArray(existing.measurements)
+        .filter((entry) => !deletedByKind.measurement?.has(entry?.id))
+        .filter((entry) => !(newer && incomingUnitsMatch && String(entry?.id || "").startsWith("latest-") && !safeArray(pkg.measurements).some((item) => item?.id === entry.id))),
+      incomingUnitsMatch ? keepIncoming(cleanList(pkg.measurements, CLEAN.measurement), existing.measurements, "measurements") : [],
+      365
+    ).slice(0, 30),
     // Exercise summaries are shown for the newest workouts only; dropping
     // them from older entries keeps a full roster inside the storage budget.
     workoutLogs: mergeById(pruneMissing(existing.workoutLogs, pkg.workoutLogs, true, "workoutLogs"), keepIncoming(cleanList(pkg.workoutLogs, CLEAN.workout), existing.workoutLogs, "workoutLogs")).slice(0, 60).map((log, index) => (index < 15 ? log : (({ exercises, ...rest }) => rest)(log))),
@@ -537,7 +548,11 @@ function importProgram(program) {
     if (contentKey(existing) !== contentKey(plan, plan.scheduleDay || existing.scheduleDay)) updates.push({ existingIndex, plan });
     else if (!existing.sourceId && plan.sourceId) existing.sourceId = plan.sourceId;
   });
-  const block = program?.block && typeof program.block === "object" ? program.block : null;
+  const offeredBlock = program?.block && typeof program.block === "object" ? program.block : null;
+  // The same block re-opened (same file again) must not replace the running
+  // block or re-queue it.
+  const blockKey = offeredBlock ? JSON.stringify([from, offeredBlock.name, offeredBlock.accumulationWeeks, offeredBlock.focus, offeredBlock.start]) : "";
+  const block = offeredBlock && ![state.trainingBlock?.sourceKey, state.pendingTrainingBlock?.sourceKey].includes(blockKey) ? offeredBlock : null;
   const message = String(program?.message || "").slice(0, 2000);
   if (!plans.length && !updates.length && !block) {
     // A weekly re-send often only carries a new note from the coach.
@@ -576,7 +591,8 @@ function importProgram(program) {
       accumulationWeeks: Math.max(3, Math.min(6, Number(block.accumulationWeeks) || 4)),
       deload: true,
       focus: (Array.isArray(block.focus) ? block.focus : []).filter((key) => MUSCLE_GROUPS.some((group) => group.key === key)).slice(0, 3),
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      sourceKey: blockKey
     };
     // Finish the current block (often its deload) first; the coach's block
     // takes over on its start date.

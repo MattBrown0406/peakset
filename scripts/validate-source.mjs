@@ -1553,6 +1553,29 @@ console.log("Audit round 8 checks passed.");
       runCs("var shown25 = []; document.querySelector = (sel) => null; document.createElement = () => ({ dataset: {}, setAttribute() {}, remove() {} }); document.body.appendChild = (el) => shown25.push(el.textContent); localStorage.setItem = () => { throw new Error('full'); }; saveState(); shown25 = []; toast('The photo could not be saved.'); toast('That weigh-in is already saved.'); toast('Workout saved.')");
       assert.equal(runCs("shown25.join('|')"), "The photo could not be saved.|That weigh-in is already saved.", "failure and guard messages still show while saves fail; success claims don't");
     }
+    // Round 27: a deleted tape measurement leaves the coach's "latest"; a re-opened program doesn't re-queue its block.
+    {
+      const at = makeContext({ profile: { bodyweight: 200, gender: "Female", age: 30 }, athleteName: "Ana", measurements: [{ id: "m-good", date: new Date(Date.now() - 8 * 86400000).toISOString(), waist: 27 }] });
+      const runAt = (code) => vm.runInContext(code, at.context);
+      const coach27 = makeContext({ profile: { bodyweight: 210 }, coach: { enabled: true, name: "Kim", athletes: {} } });
+      const send = async () => vm.runInContext(`importCoachPackage(${JSON.stringify(JSON.parse(JSON.stringify(await vm.runInContext("buildCoachPackage(14)", at.context))))})`, coach27.context);
+      await send();
+      runAt("window.confirm = () => true; state.measurements.unshift({ id: 'm-typo', date: new Date(Date.now() - 86400000).toISOString(), waist: 2.65 })");
+      await send();
+      assert.equal(vm.runInContext("coachAthletes()[0].measurements[0].waist", coach27.context), 2.65, "the coach first sees the newest measurement");
+      runAt("deleteLogEntry('measurement', 'm-typo')");
+      await send();
+      assert.equal(vm.runInContext("coachAthletes()[0].measurements[0].waist", coach27.context), 27, "a deleted tape measurement is no longer the coach's latest");
+      const pb = makeContext({ profile: { bodyweight: 200 } });
+      let asks = 0;
+      pb.context.window.confirm = () => { asks += 1; return true; };
+      const prog27 = JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", block: { name: "Kim block", accumulationWeeks: 4, focus: ["chest"], start: "now" }, plans: [{ id: "p27", title: "Push", muscle: "chest", phase: "offseason", rest: 120, note: "x", exercises: [["barbell-bench", 3, "8", 120, 0, {}]] }] }));
+      vm.runInContext(`handleIncomingFileText(${prog27})`, pb.context);
+      const blockId = vm.runInContext("state.trainingBlock && state.trainingBlock.id", pb.context);
+      const before27 = asks;
+      vm.runInContext(`handleIncomingFileText(${prog27})`, pb.context);
+      assert.equal(vm.runInContext("state.trainingBlock.id", pb.context) + "|" + (asks - before27), blockId + "|0", "re-opening the same program doesn't replace or re-queue its block");
+    }
     console.log("Audit round 19 checks passed.");
   }
   }
