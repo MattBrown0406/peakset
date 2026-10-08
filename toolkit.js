@@ -414,7 +414,7 @@ function renderExerciseHistoryPanel(id) {
       <div class="card-head"><div><p class="eyebrow">Exercise history</p><h2>${escapeHtml(exercise.name)}</h2></div><button class="ghost-btn" onclick="closeExerciseHistory()">Close</button></div>
       <div class="grid three">
         <div class="stat card"><p class="value">${bestWeight ? formatWeight(bestWeight, 2) : "--"}</p><p class="label">Best weight (${weightUnit()})</p></div>
-        <div class="stat card"><p class="value">${bestE1rm ? formatWeight(bestE1rm, 1) : "--"}</p><p class="label">Estimated 1RM</p></div>
+        <div class="stat card"><p class="value">${bestE1rm ? formatWeight(bestE1rm, 1) : "--"}</p><p class="label">Estimated 1RM (${weightUnit()})</p></div>
         <div class="stat card"><p class="value">${sets.length}</p><p class="label">Logged sets</p></div>
       </div>
       ${e1rmValues.length > 1 ? `<div style="margin-top:12px">${sparkline(e1rmValues)}</div>` : ""}
@@ -486,6 +486,8 @@ function selectEquipmentProfile(id) {
 
 function deleteEquipmentProfile(id) {
   if (state.equipmentProfiles.length <= 1) return toast("Keep at least one equipment profile.");
+  // The full-gym profile is the way back to unrestricted plans.
+  if (id === "all-equipment") return toast("Commercial Gym can't be deleted; it is the full-equipment profile.");
   const profile = state.equipmentProfiles.find((item) => item.id === id);
   if (!profile || !window.confirm(`Delete the "${profile.name}" equipment profile?`)) return;
   state.equipmentProfiles = state.equipmentProfiles.filter((item) => item.id !== id);
@@ -616,8 +618,9 @@ function saveBuilderTemplate() {
     // The form doesn't show phase, plan-level rest or equipment profile; keep
     // the template's own (a coach's prep template stays a prep template).
     const existing = state.customPlans[editingIndex];
-    state.customPlans[editingIndex] = { ...existing, ...plan, id: existing.id, phase: plan.muscle === "travel" ? "travel" : existing.phase === "travel" ? plan.phase : (existing.phase ?? plan.phase), rest: existing.rest ?? plan.rest, equipmentProfileId: existing.equipmentProfileId ?? plan.equipmentProfileId };
+    state.customPlans[editingIndex] = { ...existing, ...plan, id: existing.id, phase: plan.muscle === "travel" ? "travel" : existing.phase === "travel" ? plan.phase : (existing.phase ?? plan.phase), rest: existing.rest ?? plan.rest, equipmentProfileId: existing.equipmentProfileId ?? plan.equipmentProfileId, scheduledAt: plan.scheduleDay && plan.scheduleDay !== existing.scheduleDay ? Date.now() : existing.scheduledAt };
   } else {
+    if (plan.scheduleDay) plan.scheduledAt = Date.now();
     state.customPlans.unshift(plan);
   }
   state.builderEditingPlanId = null;
@@ -676,6 +679,11 @@ function duplicateScheduledWeek() {
 function updateCustomPlanSchedule(id, scheduleDay) {
   const plan = state.customPlans.find((item) => item.id === id);
   if (!plan) return;
+  if (scheduleDay && plan.scheduleDay !== scheduleDay) {
+    plan.scheduledAt = Date.now();
+    const others = state.customPlans.filter((item) => item.id !== id && item.scheduleDay === scheduleDay);
+    if (others.length) toast(`${others.map((item) => item.title).join(", ")} is also on ${scheduleDay}. Today shows ${plan.title} first, then the other.`);
+  }
   plan.scheduleDay = scheduleDay;
   saveState();
   render();
@@ -712,9 +720,14 @@ renderBuilder = function renderToolkitBuilder() {
 const baseTodaysRecommendedPlan = todaysRecommendedPlan;
 todaysRecommendedPlan = function scheduledRecommendedPlan() {
   const day = new Date().toLocaleDateString("en-US", { weekday: "long" });
-  const scheduled = state.customPlans.find((plan) => plan.scheduleDay === day);
-  // Once today's scheduled workout is done, Today moves on to the rotation.
-  if (scheduled && !finishedTodayTitles().has(scheduled.title)) return scheduled;
+  // The most recently scheduled template for today first; once it is done,
+  // the next one for today (AM/PM splits), then the rotation.
+  const finished = finishedTodayTitles();
+  const scheduled = state.customPlans
+    .filter((plan) => plan.scheduleDay === day)
+    .sort((a, b) => (Number(b.scheduledAt) || 0) - (Number(a.scheduledAt) || 0))
+    .find((plan) => !finished.has(plan.title));
+  if (scheduled) return scheduled;
   // Don't recommend today the muscles tomorrow's scheduled template trains.
   // Calendar day, not +24 h: on the short spring-forward day +24 h lands on
   // the day after tomorrow.
@@ -1214,7 +1227,7 @@ function saveWeeklyCheckIn() {
     notes: document.getElementById("checkNotes")?.value.trim() || ""
   };
   const readiness = [entry.energy, entry.hunger, entry.digestion, entry.recovery].filter((value) => value !== null);
-  if (entry.sleep !== null && (!Number.isFinite(entry.sleep) || entry.sleep <= 0 || entry.sleep > 24)) return toast("Enter sleep between 0 and 24 hours.");
+  if (entry.sleep !== null && (!Number.isFinite(entry.sleep) || entry.sleep <= 0 || entry.sleep > 24)) return toast("Enter sleep between 0.5 and 24 hours.");
   if (readiness.some((value) => !Number.isFinite(value) || value < 1 || value > 5)) return toast("Readiness ratings must be between 1 and 5.");
   if (entry.sleep === null && readiness.length === 0 && !entry.notes) return toast("Add at least one check-in value or note.");
   state.weeklyCheckIns.unshift(entry);
@@ -1250,6 +1263,11 @@ function setMeasurementTrend(key) {
 // Newest value for one metric; a waist-only Health reading must not blank
 // out the rest of the tape check-in.
 function latestMeasurementValue(key) {
+  // Body fat also comes from weigh-ins (smart scale via Apple Health).
+  if (key === "bodyFat" && typeof bodyFatSeries === "function") {
+    const latest = bodyFatSeries().at(-1);
+    if (latest) return latest.value;
+  }
   const entry = state.measurements.find((item) => item[key] !== null && item[key] !== undefined && item[key] !== "");
   return entry ? entry[key] : null;
 }
@@ -1302,6 +1320,16 @@ function handleNativeHealthKit(payload) {
 }
 window.handleNativeHealthKit = handleNativeHealthKit;
 
+// Recent Entries shows the newest few; "Show all" reaches older mistakes.
+let showAllRecentEntries = false;
+function recentEntriesLimit(count) {
+  return showAllRecentEntries ? Infinity : count;
+}
+function toggleAllRecentEntries() {
+  showAllRecentEntries = !showAllRecentEntries;
+  render();
+}
+
 renderProgress = function renderToolkitProgress() {
   const weights = [...state.weightLogs].reverse().map((entry) => Number(entry.bodyweight)).filter(Boolean);
   const latestWeight = state.weightLogs[0];
@@ -1309,7 +1337,9 @@ renderProgress = function renderToolkitProgress() {
   const latestManualWeight = state.weightLogs.find((entry) => !String(entry.id || "").startsWith("hk-"));
   const latestMeasurement = state.measurements[0];
   const trendKey = state.measurementTrendKey;
-  const trendValues = [...state.measurements].reverse().map((entry) => Number(entry[trendKey])).filter(Boolean);
+  const trendValues = trendKey === "bodyFat" && typeof bodyFatSeries === "function"
+    ? bodyFatSeries().map((point) => Number(point.value)).filter(Boolean)
+    : [...state.measurements].reverse().map((entry) => Number(entry[trendKey])).filter(Boolean);
   const checkIn = state.weeklyCheckIns[0];
   const prep = state.prepLogs[0];
   const average = weeklyAverageWeight();
@@ -1320,7 +1350,7 @@ renderProgress = function renderToolkitProgress() {
     <div class="grid two progress-grid" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Physique check-in</p><h2>Expanded Measurements</h2><div class="measurement-grid">${measurementFields("measure")}</div><button class="primary-btn" onclick="saveMeasurement()">Save Measurements</button></section><section class="card pad"><div class="card-head"><h2>Measurement Trend</h2><select onchange="setMeasurementTrend(this.value)">${measurementDefinitions.map(([key,label]) => `<option value="${key}" ${key === trendKey ? "selected" : ""}>${label}</option>`).join("")}</select></div>${trendValues.length > 1 ? sparkline(trendValues) : '<div class="empty"><p class="muted">Add two measurements for this marker.</p></div>'}${latestMeasurement ? `<div class="measurement-grid" style="margin-top:12px">${measurementDefinitions.map(([key,label]) => `<div class="stat card"><p class="value">${latestMeasurementValue(key) ?? "--"}</p><p class="label">${label}</p></div>`).join("")}</div>` : ""}</section></div>
     <div class="grid two" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Weekly check-in</p><h2>Recovery and readiness</h2><div class="grid three">${[["checkSleep","Sleep (hours)","0.5"],["checkEnergy","Energy / 5","1"],["checkHunger","Hunger / 5","1"],["checkDigestion","Digestion / 5","1"],["checkRecovery","Recovery / 5","1"]].map(([id,label,step]) => `<div class="field"><label for="${id}">${label}</label><input id="${id}" type="number" inputmode="decimal" min="1" max="${id === "checkSleep" ? 24 : 5}" step="${step}" /></div>`).join("")}</div><div class="field"><label for="checkNotes">Notes</label><textarea id="checkNotes" rows="3" placeholder="Sleep, joints, appetite, stress..."></textarea></div><button class="primary-btn" onclick="saveWeeklyCheckIn()">Save Weekly Check-In</button></section><section class="card pad"><p class="eyebrow">Contest-prep adherence</p><h2>Cardio, Steps, and Posing</h2><div class="grid two"><div class="field"><label for="prepCardioType">Cardio type</label><input id="prepCardioType" placeholder="Incline treadmill" /></div><div class="field"><label for="prepCardioMinutes">Minutes</label><input id="prepCardioMinutes" type="number" inputmode="decimal" min="0" /></div><div class="field"><label for="prepSteps">Steps</label><input id="prepSteps" type="number" inputmode="decimal" min="0" /></div><div class="field"><label for="prepPosing">Posing minutes</label><input id="prepPosing" type="number" inputmode="decimal" min="0" /></div></div><div class="field"><label for="prepNotes">Notes</label><input id="prepNotes" placeholder="Coach-prescribed work and adherence..." /></div><button class="primary-btn" onclick="savePrepLog()">Save Prep Activity</button></section></div>
     <section class="card pad" style="margin-top:12px"><h2>Recent Check-Ins</h2><div class="grid two"><div>${state.weeklyCheckIns.slice(0,6).map((entry) => `<div class="exercise-row"><span><span class="row-date">${formatShortDate(entry.date)}</span> · Sleep ${entry.sleep || "--"}h</span><strong>Recovery ${entry.recovery || "--"}/5</strong>${deleteEntryButton("checkIn", entry)}</div>`).join("") || '<p class="muted">No weekly check-ins.</p>'}</div><div>${state.prepLogs.slice(0,6).map((entry) => `<div class="exercise-row"><span><span class="row-date">${formatShortDate(entry.date)}</span> · ${escapeHtml(entry.cardioType === "HealthKit" ? "Apple Health steps" : entry.cardioType || "Activity")}</span><strong>${entry.cardioMinutes || 0} min · ${(entry.steps || 0).toLocaleString()} steps · ${entry.posingMinutes || 0} posing</strong>${entry.cardioType === "HealthKit" ? "" : deleteEntryButton("prep", entry)}</div>`).join("") || '<p class="muted">No prep activity.</p>'}</div></div></section>
-    <section class="card pad" style="margin-top:12px"><h2>Recent Entries</h2><p class="muted compact-note">Delete a mistyped entry here. Apple Health readings are managed in Apple Health.</p><div class="grid two"><div><h3>Weigh-ins</h3>${state.weightLogs.filter((entry) => !String(entry.id || "").startsWith("hk-")).slice(0, 8).map((entry) => `<div class="exercise-row"><span class="row-date">${formatShortDate(entry.date)}</span><strong>${formatWeight(entry.bodyweight)} ${weightUnit()}</strong>${deleteEntryButton("weight", entry)}</div>`).join("") || '<p class="muted">No weigh-ins yet.</p>'}</div><div><h3>Measurements</h3>${state.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).slice(0, 5).map((entry) => `<div class="exercise-row"><span class="row-date">${formatShortDate(entry.date)}</span><strong>${((count) => `${count} measurement${count === 1 ? "" : "s"}`)(measurementDefinitions.filter(([key]) => Number(entry[key]) > 0).length)}</strong>${deleteEntryButton("measurement", entry)}</div>`).join("") || '<p class="muted">No measurements yet.</p>'}</div></div></section>`;
+    <section class="card pad" style="margin-top:12px"><h2>Recent Entries</h2><p class="muted compact-note">Delete a mistyped entry here. Apple Health readings are managed in Apple Health.</p><button class="ghost-btn" onclick="toggleAllRecentEntries()">${showAllRecentEntries ? "Show recent only" : "Show all entries"}</button><div class="grid two"><div><h3>Weigh-ins</h3>${state.weightLogs.filter((entry) => !String(entry.id || "").startsWith("hk-")).slice(0, recentEntriesLimit(8)).map((entry) => `<div class="exercise-row"><span class="row-date">${formatShortDate(entry.date)}</span><strong>${formatWeight(entry.bodyweight)} ${weightUnit()}</strong>${deleteEntryButton("weight", entry)}</div>`).join("") || '<p class="muted">No weigh-ins yet.</p>'}</div><div><h3>Measurements</h3>${state.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).slice(0, recentEntriesLimit(5)).map((entry) => `<div class="exercise-row"><span class="row-date">${formatShortDate(entry.date)}</span><strong>${((count) => `${count} measurement${count === 1 ? "" : "s"}`)(measurementDefinitions.filter(([key]) => Number(entry[key]) > 0).length)}</strong>${deleteEntryButton("measurement", entry)}</div>`).join("") || '<p class="muted">No measurements yet.</p>'}</div></div></section>`;
 };
 
 const baseCoachReportData = coachReportData;

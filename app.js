@@ -2003,7 +2003,7 @@ function coachReportData(days) {
   const volume = workouts.reduce((sum, log) => sum + (Number(log.volume) || totalVolume(log)), 0);
   const sortedWeights = [...weights].sort((a, b) => new Date(a.date) - new Date(b.date));
   const weightDelta = sortedWeights.length > 1
-    ? (Number(sortedWeights[sortedWeights.length - 1].bodyweight) - Number(sortedWeights[0].bodyweight)).toFixed(1)
+    ? ((delta) => `${delta > 0 ? "+" : ""}${delta.toFixed(1)}`)(Number((Number(sortedWeights[sortedWeights.length - 1].bodyweight) - Number(sortedWeights[0].bodyweight)).toFixed(1)) + 0)
     : null;
   return {
     days,
@@ -2726,7 +2726,7 @@ function allPlans() {
 }
 
 function renderPlans() {
-  const filters = ["all", "chest", "back", "shoulders", "arms", "legs", "prep", "travel"];
+  const filters = ["all", "chest", "back", "shoulders", "arms", "legs", "abs", "prep", "travel"];
   // Saved and coach-sent templates first: they are what the athlete is looking for.
   const plans = [...(state.customPlans || []), ...planTemplates].filter((plan) => {
     if (state.activeFilter === "all") return true;

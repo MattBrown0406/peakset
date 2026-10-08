@@ -1530,6 +1530,19 @@ console.log("Audit round 8 checks passed.");
       runD("const exB = state.activeWorkout.exercises[0]; exB.sets[0].weight = '100'; exB.sets[0].reps = '8'; completeSet(0, 0); var firstEnd = state.timer.endsAt; exB.sets[1].weight = '100'; exB.sets[1].reps = '8'; completeSet(0, 1); completeSet(0, 1)");
       assert.ok(runD("state.timer.running && Math.abs(state.timer.endsAt - firstEnd) < 1500"), "undoing a mis-tapped set brings back the rest it replaced");
     }
+    // Round 24: same-day templates, body fat from weigh-ins, every entry deletable.
+    {
+      const sd = makeContext({ profile: { bodyweight: 200, createdAt: new Date().toISOString() } });
+      const runSd = (code) => vm.runInContext(code, sd.context);
+      runSd("window.confirm = () => true; var today24 = new Date().toLocaleDateString('en-US', { weekday: 'long' }); state.customPlans = [{ id: 'pull', title: 'Pull', muscle: 'back', phase: 'offseason', rest: 90, note: '', scheduleDay: today24, scheduledAt: Date.now() - 60000, exercises: [['lat-pulldown', 3, '10', 90, 0, {}]] }, { id: 'push', title: 'Push', muscle: 'chest', phase: 'offseason', rest: 90, note: '', scheduleDay: '', exercises: [['barbell-bench', 3, '8', 120, 0, {}]] }]; updateCustomPlanSchedule('push', today24)");
+      assert.equal(runSd("todaysRecommendedPlan().id"), "push", "the template just scheduled for today is the one Today shows");
+      runSd("state.workoutLogs.unshift({ id: 'done-push', title: 'Push', date: new Date().toISOString(), sets: [] })");
+      assert.equal(runSd("todaysRecommendedPlan().id"), "pull", "after it is done, the other template scheduled today is offered");
+      runSd("state.measurements = [{ id: 'm1', date: new Date(Date.now() - 30 * 86400000).toISOString(), bodyFat: 16 }]; state.weightLogs = [{ id: 'hk-day-x', date: new Date().toISOString(), bodyweight: 190, bodyFat: 12.4, source: 'healthkit' }]");
+      assert.equal(runSd("latestMeasurementValue('bodyFat')"), 12.4, "the Body Fat % tile uses the newest reading, including smart-scale weigh-ins");
+      runSd("state.weightLogs = Array.from({ length: 12 }, (_, i) => ({ id: 'w' + i, date: new Date(Date.now() - i * 86400000).toISOString(), bodyweight: 200 - i })); toggleAllRecentEntries(); setView('progress')");
+      assert.ok(runSd("renderContent()").includes("deleteLogEntry('weight', 'w11')") || runSd("renderContent()").includes("'w11'"), "Show all entries reaches the oldest weigh-in's Delete");
+    }
     console.log("Audit round 19 checks passed.");
   }
   }
