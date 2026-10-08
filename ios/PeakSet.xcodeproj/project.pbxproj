@@ -13,7 +13,65 @@
 		1A2B3C4D5E6F700000000004 /* Web in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000104 /* Web */; };
 		1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */; };
 		1A2B3C4D5E6F700000000006 /* boxing-bell.wav in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000108 /* boxing-bell.wav */; };
+		1A2B3C4D5E6F700000000007 /* PeakSetBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000001001 /* PeakSetBackupService.swift */; };
+		1A2B3C4D5E6F700000000008 /* PeakSetPhotos.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000001002 /* PeakSetPhotos.swift */; };
+		1A2B3C4D5E6F700000000009 /* PeakSetLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000001003 /* PeakSetLiveActivity.swift */; };
+		1A2B3C4D5E6F70000000000A /* PeakSetWatchBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000001004 /* PeakSetWatchBridge.swift */; };
+		2B3C4D5E6F7A80000000000E /* RestTimerAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000001 /* RestTimerAttributes.swift */; };
+		2B3C4D5E6F7A80000000000F /* RestTimerAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000001 /* RestTimerAttributes.swift */; };
+		2B3C4D5E6F7A800000000010 /* MassMethodWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000002 /* MassMethodWidgetsBundle.swift */; };
+		2B3C4D5E6F7A800000000011 /* RestTimerLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000003 /* RestTimerLiveActivity.swift */; };
+		2B3C4D5E6F7A800000000012 /* MassMethodWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000005 /* MassMethodWatchApp.swift */; };
+		2B3C4D5E6F7A800000000013 /* WatchWorkoutModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000006 /* WatchWorkoutModel.swift */; };
+		2B3C4D5E6F7A800000000014 /* WatchWorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000007 /* WatchWorkoutView.swift */; };
+		2B3C4D5E6F7A800000000015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000008 /* Assets.xcassets */; };
+		2B3C4D5E6F7A800000000016 /* MassMethodWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		2B3C4D5E6F7A800000000017 /* MassMethodWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		2B3C4D5E6F7A80000000F002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */; };
+		2B3C4D5E6F7A80000000F004 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2B3C4D5E6F7A800000000022 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A2B3C4D5E6F700000000600 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2B3C4D5E6F7A800000000020;
+			remoteInfo = MassMethodWidgets;
+		};
+		2B3C4D5E6F7A800000000023 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A2B3C4D5E6F700000000600 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2B3C4D5E6F7A800000000021;
+			remoteInfo = MassMethodWatch;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		2B3C4D5E6F7A80000000001E /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				2B3C4D5E6F7A800000000016 /* MassMethodWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2B3C4D5E6F7A80000000001F /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				2B3C4D5E6F7A800000000017 /* MassMethodWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		1A2B3C4D5E6F700000000100 /* PeakSet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PeakSet.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -25,10 +83,40 @@
 		1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetNativeServices.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000107 /* PeakSet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PeakSet.entitlements; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000108 /* boxing-bell.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "boxing-bell.wav"; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000001001 /* PeakSetBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetBackupService.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000001002 /* PeakSetPhotos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetPhotos.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000001003 /* PeakSetLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetLiveActivity.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000001004 /* PeakSetWatchBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetWatchBridge.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000001 /* RestTimerAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestTimerAttributes.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000002 /* MassMethodWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MassMethodWidgetsBundle.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000003 /* RestTimerLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestTimerLiveActivity.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000005 /* MassMethodWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MassMethodWatchApp.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000006 /* WatchWorkoutModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchWorkoutModel.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000007 /* WatchWorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchWorkoutView.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MassMethodWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MassMethodWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		1A2B3C4D5E6F700000000200 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2B3C4D5E6F7A800000000019 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2B3C4D5E6F7A80000000001C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -42,6 +130,9 @@
 			isa = PBXGroup;
 			children = (
 				1A2B3C4D5E6F700000000301 /* PeakSet */,
+				2B3C4D5E6F7A80000000000B /* Shared */,
+				2B3C4D5E6F7A80000000000C /* MassMethodWidgets */,
+				2B3C4D5E6F7A80000000000D /* MassMethodWatch */,
 				1A2B3C4D5E6F700000000302 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -57,6 +148,11 @@
 				1A2B3C4D5E6F700000000106 /* PeakSetNativeServices.swift */,
 				1A2B3C4D5E6F700000000107 /* PeakSet.entitlements */,
 				1A2B3C4D5E6F700000000108 /* boxing-bell.wav */,
+				2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */,
+				1A2B3C4D5E6F700000001004 /* PeakSetWatchBridge.swift */,
+				1A2B3C4D5E6F700000001003 /* PeakSetLiveActivity.swift */,
+				1A2B3C4D5E6F700000001002 /* PeakSetPhotos.swift */,
+				1A2B3C4D5E6F700000001001 /* PeakSetBackupService.swift */,
 			);
 			path = PeakSet;
 			sourceTree = "<group>";
@@ -65,8 +161,40 @@
 			isa = PBXGroup;
 			children = (
 				1A2B3C4D5E6F700000000100 /* PeakSet.app */,
+				2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */,
+				2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		2B3C4D5E6F7A80000000000B /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				2B3C4D5E6F7A800000000001 /* RestTimerAttributes.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		2B3C4D5E6F7A80000000000C /* MassMethodWidgets */ = {
+			isa = PBXGroup;
+			children = (
+				2B3C4D5E6F7A800000000002 /* MassMethodWidgetsBundle.swift */,
+				2B3C4D5E6F7A800000000003 /* RestTimerLiveActivity.swift */,
+				2B3C4D5E6F7A800000000004 /* Info.plist */,
+			);
+			path = MassMethodWidgets;
+			sourceTree = "<group>";
+		};
+		2B3C4D5E6F7A80000000000D /* MassMethodWatch */ = {
+			isa = PBXGroup;
+			children = (
+				2B3C4D5E6F7A800000000005 /* MassMethodWatchApp.swift */,
+				2B3C4D5E6F7A800000000006 /* WatchWorkoutModel.swift */,
+				2B3C4D5E6F7A800000000007 /* WatchWorkoutView.swift */,
+				2B3C4D5E6F7A800000000008 /* Assets.xcassets */,
+				2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */,
+			);
+			path = MassMethodWatch;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -79,14 +207,52 @@
 				1A2B3C4D5E6F700000000500 /* Sources */,
 				1A2B3C4D5E6F700000000200 /* Frameworks */,
 				1A2B3C4D5E6F700000000501 /* Resources */,
+				2B3C4D5E6F7A80000000001E /* Embed Foundation Extensions */,
+				2B3C4D5E6F7A80000000001F /* Embed Watch Content */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2B3C4D5E6F7A800000000024 /* PBXTargetDependency */,
+				2B3C4D5E6F7A800000000025 /* PBXTargetDependency */,
+			);
+			name = PeakSet;
+			productName = PeakSet;
+			productReference = 1A2B3C4D5E6F700000000100 /* PeakSet.app */;
+			productType = "com.apple.product-type.application";
+		};
+		2B3C4D5E6F7A800000000020 /* MassMethodWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2B3C4D5E6F7A800000000026 /* Build configuration list for PBXNativeTarget "MassMethodWidgets" */;
+			buildPhases = (
+				2B3C4D5E6F7A800000000018 /* Sources */,
+				2B3C4D5E6F7A800000000019 /* Frameworks */,
+				2B3C4D5E6F7A80000000001A /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = PeakSet;
-			productName = PeakSet;
-			productReference = 1A2B3C4D5E6F700000000100 /* PeakSet.app */;
+			name = MassMethodWidgets;
+			productName = MassMethodWidgets;
+			productReference = 2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		2B3C4D5E6F7A800000000021 /* MassMethodWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2B3C4D5E6F7A800000000027 /* Build configuration list for PBXNativeTarget "MassMethodWatch" */;
+			buildPhases = (
+				2B3C4D5E6F7A80000000001B /* Sources */,
+				2B3C4D5E6F7A80000000001C /* Frameworks */,
+				2B3C4D5E6F7A80000000001D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MassMethodWatch;
+			productName = MassMethodWatch;
+			productReference = 2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -99,10 +265,19 @@
 				LastSwiftUpdateCheck = 2650;
 				LastUpgradeCheck = 2650;
 				TargetAttributes = {
+					2B3C4D5E6F7A800000000020 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					2B3C4D5E6F7A800000000021 = {
+						CreatedOnToolsVersion = 26.5;
+					};
 					1A2B3C4D5E6F700000000400 = {
 						CreatedOnToolsVersion = 26.5;
 						SystemCapabilities = {
 							com.apple.HealthKit = {
+								enabled = 1;
+							};
+							com.apple.iCloud = {
 								enabled = 1;
 							};
 						};
@@ -123,6 +298,8 @@
 			projectRoot = "";
 			targets = (
 				1A2B3C4D5E6F700000000400 /* PeakSet */,
+				2B3C4D5E6F7A800000000020 /* MassMethodWidgets */,
+				2B3C4D5E6F7A800000000021 /* MassMethodWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -135,6 +312,23 @@
 				1A2B3C4D5E6F700000000003 /* Assets.xcassets in Resources */,
 				1A2B3C4D5E6F700000000004 /* Web in Resources */,
 				1A2B3C4D5E6F700000000006 /* boxing-bell.wav in Resources */,
+				2B3C4D5E6F7A80000000F002 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2B3C4D5E6F7A80000000001A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2B3C4D5E6F7A80000000001D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2B3C4D5E6F7A800000000015 /* Assets.xcassets in Resources */,
+				2B3C4D5E6F7A80000000F004 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -148,9 +342,46 @@
 				1A2B3C4D5E6F700000000001 /* PeakSetApp.swift in Sources */,
 				1A2B3C4D5E6F700000000002 /* PeakSetWebView.swift in Sources */,
 				1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */,
+				2B3C4D5E6F7A80000000000E /* RestTimerAttributes.swift in Sources */,
+				1A2B3C4D5E6F70000000000A /* PeakSetWatchBridge.swift in Sources */,
+				1A2B3C4D5E6F700000000009 /* PeakSetLiveActivity.swift in Sources */,
+				1A2B3C4D5E6F700000000008 /* PeakSetPhotos.swift in Sources */,
+				1A2B3C4D5E6F700000000007 /* PeakSetBackupService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		2B3C4D5E6F7A800000000018 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2B3C4D5E6F7A800000000010 /* MassMethodWidgetsBundle.swift in Sources */,
+				2B3C4D5E6F7A800000000011 /* RestTimerLiveActivity.swift in Sources */,
+				2B3C4D5E6F7A80000000000F /* RestTimerAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2B3C4D5E6F7A80000000001B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2B3C4D5E6F7A800000000012 /* MassMethodWatchApp.swift in Sources */,
+				2B3C4D5E6F7A800000000013 /* WatchWorkoutModel.swift in Sources */,
+				2B3C4D5E6F7A800000000014 /* WatchWorkoutView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* Begin PBXTargetDependency section */
+		2B3C4D5E6F7A800000000024 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2B3C4D5E6F7A800000000020 /* MassMethodWidgets */;
+			targetProxy = 2B3C4D5E6F7A800000000022 /* PBXContainerItemProxy */;
+		};
+		2B3C4D5E6F7A800000000025 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2B3C4D5E6F7A800000000021 /* MassMethodWatch */;
+			targetProxy = 2B3C4D5E6F7A800000000023 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
@@ -323,6 +554,114 @@
 			};
 			name = Release;
 		};
+		2B3C4D5E6F7A800000000028 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = 4D2KRG86P2;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MassMethodWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mattbrown.peakset.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		2B3C4D5E6F7A800000000029 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = 4D2KRG86P2;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MassMethodWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mattbrown.peakset.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		2B3C4D5E6F7A80000000002A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = 4D2KRG86P2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Mass Method";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.mattbrown.peakset;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mattbrown.peakset.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		2B3C4D5E6F7A80000000002B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = 4D2KRG86P2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Mass Method";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.mattbrown.peakset;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mattbrown.peakset.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -340,6 +679,24 @@
 			buildConfigurations = (
 				1A2B3C4D5E6F700000000701 /* Debug */,
 				1A2B3C4D5E6F700000000702 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2B3C4D5E6F7A800000000026 /* Build configuration list for PBXNativeTarget "MassMethodWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2B3C4D5E6F7A800000000028 /* Debug */,
+				2B3C4D5E6F7A800000000029 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2B3C4D5E6F7A800000000027 /* Build configuration list for PBXNativeTarget "MassMethodWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2B3C4D5E6F7A80000000002A /* Debug */,
+				2B3C4D5E6F7A80000000002B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

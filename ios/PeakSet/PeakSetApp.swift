@@ -17,6 +17,9 @@ final class PeakSetAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificat
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        // Activate early so watch commands queued while the phone was locked
+        // are received even before the web app has loaded.
+        PeakSetWatchBridge.shared.activate()
         return true
     }
 
@@ -45,7 +48,11 @@ struct PeakSetApp: App {
     var body: some Scene {
         WindowGroup {
             PeakSetWebView()
+                .background(Color(red: 0.039, green: 0.055, blue: 0.102))
                 .ignoresSafeArea()
+                .onOpenURL { url in
+                    PeakSetIncomingFiles.shared.open(url)
+                }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     PeakSetAudioSession.activate()
                 }

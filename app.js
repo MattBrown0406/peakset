@@ -1,6 +1,32 @@
 const STORE_KEY = "stageforge-v1";
 const APP_NAME = "Mass Method";
 const DEFAULT_REST_SECONDS = 180;
+// Declared before loadState() runs: sanitizeStoredState reads it at script load.
+const LOGBOOK_RANGES = [7, 14, 30];
+// A plan or live workout from an imported program/backup must stay renderable:
+// 50k exercises froze the session view and persisted across launches.
+const MAX_PLAN_EXERCISES = 30;
+const MAX_PLAN_SETS = 14;
+const MAX_STATE_DEPTH = 16;
+
+// Replaces objects nested deeper than `maxDepth` with null, iteratively (no
+// recursion), so a crafted backup with thousands of nested levels cannot blow
+// the stack in the snapshot/restore paths that walk the whole state.
+function pruneDeepObjects(root, maxDepth = MAX_STATE_DEPTH) {
+  if (!root || typeof root !== "object") return root;
+  const stack = [[root, 0]];
+  while (stack.length) {
+    const [node, depth] = stack.pop();
+    const keys = Array.isArray(node) ? node.keys() : Object.keys(node);
+    for (const key of keys) {
+      const child = node[key];
+      if (!child || typeof child !== "object") continue;
+      if (depth + 1 >= maxDepth) node[key] = null;
+      else stack.push([child, depth + 1]);
+    }
+  }
+  return root;
+}
 
 const muscles = ["chest", "back", "shoulders", "arms", "legs"];
 const divisionOptions = [
@@ -122,7 +148,7 @@ const exerciseLibrary = [
   { id: "leg-press", name: "Leg Press", muscle: "legs", equipment: "Leg press", hotel: false, cue: "Control depth and keep hips down." },
   { id: "leg-extension", name: "Leg Extension", muscle: "legs", equipment: "Leg extension", hotel: false, cue: "Pause at lockout for quad detail." },
   { id: "walking-lunge", name: "Walking Lunge", muscle: "legs", equipment: "Dumbbells", hotel: true, cue: "Long stride for glutes, shorter for quads." },
-  { id: "goblet-squat", name: "Goblet Squat", muscle: "legs", equipment: "Dumbbell", hotel: true, cue: "Slow tempo makes 50 lb feel heavy." },
+  { id: "goblet-squat", name: "Goblet Squat", muscle: "legs", equipment: "Dumbbell", hotel: true, cue: "Slow tempo makes a light dumbbell feel heavy." },
   { id: "db-step-up", name: "Dumbbell Step-Up", muscle: "legs", equipment: "Dumbbells, bench", hotel: true, cue: "Drive through the front leg, no bounce." },
   { id: "lying-leg-curl", name: "Lying Leg Curl", muscle: "legs", equipment: "Leg curl machine", hotel: false, cue: "Hamstring squeeze without hip lift." },
   { id: "seated-leg-curl", name: "Seated Leg Curl", muscle: "legs", equipment: "Leg curl machine", hotel: false, cue: "Great lengthened hamstring tension." },
@@ -247,7 +273,7 @@ const planTemplates = [
     muscle: "travel",
     phase: "travel",
     rest: 45,
-    note: "Built around a hotel bench, 5-50 lb dumbbells, cables, rope, handles, and ankle cuffs.",
+    note: "Built around a hotel bench, light-to-moderate dumbbells (up to about 50 lb / 22.5 kg), cables, rope, handles, and ankle cuffs.",
     exercises: [
       ["db-bulgarian-split-squat", 4, "10-15 each", 60],
       ["incline-db-press", 4, "10-15", 60],
@@ -673,8 +699,11 @@ const defaultState = {
   activeFilter: "all",
   libraryFilter: "chest",
   logbookRange: "7",
+  weeklyCheckIns: [],
+  prepLogs: [],
   todayPlanId: null,
   todayWorkoutPick: "recommended",
+  units: "imperial",
   timer: { seconds: DEFAULT_REST_SECONDS, left: 0, running: false, startedAt: null, endsAt: null, fullscreen: false, exerciseIndex: null }
 };
 
@@ -685,6 +714,8 @@ function freshDefaultState() {
     workoutLogs: [],
     weightLogs: [],
     measurements: [],
+    weeklyCheckIns: [],
+    prepLogs: [],
     timer: { ...defaultState.timer }
   };
 }
@@ -698,6 +729,56 @@ let coachNoteDraft = "";
 let liveCustomizerOpen = false;
 let exerciseHistorySelection = "";
 
+const KG_PER_LB = 0.45359237;
+const CM_PER_IN = 2.54;
+
+function isMetric() {
+  return state?.units === "metric";
+}
+
+function weightUnit() {
+  return isMetric() ? "kg" : "lb";
+}
+
+function lengthUnit() {
+  return isMetric() ? "cm" : "in";
+}
+
+// Pound-based thresholds and copy are written once in lb and shown in the
+// athlete's unit.
+function fromPounds(pounds) {
+  return isMetric() ? pounds * KG_PER_LB : pounds;
+}
+
+function formatWeight(value, digits = 1) {
+  // null is Number(null) === 0; a cleared weight (e.g. after an iCloud
+  // restore stripped a Health-derived value) must read "--", not "0".
+  if (value === null || value === undefined || value === "") return "--";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  // `+ 0` turns -0 into 0 so tiny negative changes never read "-0".
+  return (Number(number.toFixed(digits)) + 0).toLocaleString();
+}
+
+function plural(count, singular, pluralForm = `${singular}s`) {
+  return `${count} ${Number(count) === 1 ? singular : pluralForm}`;
+}
+
+function formatSignedChange(value, digits = 1) {
+  const rounded = Number(Number(value).toFixed(digits)) + 0;
+  return `${rounded > 0 ? "+" : ""}${rounded.toFixed(digits)}`;
+}
+
+function measurementValueText(value, unit) {
+  return unit === "%" ? `${value}%` : `${value} ${unit}`;
+}
+
+function weightRangeText(lowLb, highLb, direction) {
+  const low = formatWeight(fromPounds(lowLb), 2);
+  const high = formatWeight(fromPounds(highLb), 2);
+  return `${low}-${high} ${weightUnit()} ${direction} per week`;
+}
+
 function clampRestSeconds(value) {
   return Math.max(15, Math.min(300, Number(value) || DEFAULT_REST_SECONDS));
 }
@@ -705,14 +786,17 @@ function clampRestSeconds(value) {
 function loadState() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORE_KEY));
-    const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? pruneDeepObjects(parsed) : {};
     const next = { ...freshDefaultState(), ...stored };
     ["customPlans", "workoutLogs", "weightLogs", "measurements"].forEach((key) => {
       // Drop malformed entries instead of throwing: a throw here falls back to
       // an empty state, and the next save would overwrite the user's history.
       next[key] = Array.isArray(next[key]) ? next[key].filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry)) : [];
     });
-    if (next.weightLogs.length === 0) {
+    // Only the pre-weightLogs schema needs this migration. Re-running it on
+    // an emptied list would re-seed a (possibly Health-derived) profile weight
+    // as a hand-entered log that then leaks into iCloud snapshots.
+    if (!Array.isArray(stored.weightLogs)) {
       const migratedWeights = next.measurements
         .filter((entry) => entry.bodyweight)
         .map((entry) => ({
@@ -738,6 +822,7 @@ function loadState() {
     if (savedTimer.running && Number.isFinite(endsAt) && endsAt > Date.now()) {
       next.timer = {
         seconds,
+        total: Math.max(1, Math.round(Number(savedTimer.total)) || seconds),
         left: Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)),
         running: true,
         startedAt: Number(savedTimer.startedAt) || null,
@@ -757,6 +842,7 @@ function loadState() {
       };
     }
     next.measurements = next.measurements.map(({ bodyweight, ...entry }) => entry);
+    sanitizeStoredState(next);
     return next;
   } catch {
     // Keep an untouched copy of unreadable data before the fresh state is saved over it.
@@ -769,9 +855,103 @@ function loadState() {
 }
 
 let storageWarningShown = false;
+// Set while a restore reloads the page so a timer tick cannot overwrite it.
+let restoringState = false;
+
+function finiteOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+// Stored state can come from a restored backup file, so every field a screen
+// prints is coerced to its real type here; numbers must be numbers.
+function logbookDays() {
+  const days = Number(state.logbookRange);
+  return LOGBOOK_RANGES.includes(days) ? days : 7;
+}
+
+// Local calendar day for file names (the UTC date names an evening US export
+// after tomorrow).
+function localDateStamp(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function sanitizeStoredState(next) {
+  const isObject = (value) => value && typeof value === "object" && !Array.isArray(value);
+  // A restored or corrupted value here renders "Last NaN days" everywhere.
+  next.logbookRange = LOGBOOK_RANGES.includes(Number(next.logbookRange)) ? String(Number(next.logbookRange)) : "7";
+  const objects = (value) => (Array.isArray(value) ? value.filter(isObject) : []);
+  const textFields = ["id", "date", "note", "source", "cardioType", "notes", "title"];
+  next.weightLogs = next.weightLogs.map((entry) => ({
+    ...entry,
+    bodyweight: finiteOrNull(entry.bodyweight),
+    ...("bodyFat" in entry ? { bodyFat: finiteOrNull(entry.bodyFat) } : {}),
+    ...("leanMass" in entry ? { leanMass: finiteOrNull(entry.leanMass) } : {})
+  }));
+  next.measurements = next.measurements.map((entry) => Object.fromEntries(Object.entries(entry).map(([key, value]) => [
+    key,
+    key === "healthFields" ? (Array.isArray(value) ? value.map(String) : [])
+      : key === "_unitOrigin" ? (value && typeof value === "object" ? value : undefined)
+      : textFields.includes(key) ? String(value ?? "") : finiteOrNull(value)
+  ])));
+  next.customPlans = next.customPlans.map((plan) => ({ ...plan, title: String(plan.title ?? "Workout"), exercises: Array.isArray(plan.exercises) ? plan.exercises.filter((spec) => Array.isArray(spec) || isObject(spec)) : [] }));
+  next.weeklyCheckIns = objects(next.weeklyCheckIns).map((entry) => ({
+    ...entry,
+    ...Object.fromEntries(["sleep", "energy", "hunger", "digestion", "recovery"].map((key) => [key, finiteOrNull(entry[key])])),
+    notes: String(entry.notes ?? "")
+  }));
+  next.prepLogs = objects(next.prepLogs).map((entry) => ({
+    ...entry,
+    cardioType: String(entry.cardioType ?? ""),
+    cardioMinutes: finiteOrNull(entry.cardioMinutes) ?? 0,
+    steps: finiteOrNull(entry.steps) ?? 0,
+    posingMinutes: finiteOrNull(entry.posingMinutes) ?? 0,
+    notes: String(entry.notes ?? "")
+  }));
+  if (next.coachMessage !== null && next.coachMessage !== undefined) {
+    const message = next.coachMessage;
+    next.coachMessage = isObject(message)
+      ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), receivedAt: String(message.receivedAt ?? "") }
+      : null;
+  }
+  // A stored volume of "1e400" rendered as ∞; 0 makes readers recompute it.
+  next.workoutLogs = next.workoutLogs.map((log) => ("volume" in log ? { ...log, volume: finiteOrNull(log.volume) ?? 0 } : log));
+  // A malformed live workout would crash every screen, including the one
+  // used to restore a good backup; rebuild it from known-good parts.
+  const workout = next.activeWorkout;
+  if (workout !== null && workout !== undefined) {
+    const exercises = isObject(workout) && Array.isArray(workout.exercises)
+      ? workout.exercises.filter((exercise) => isObject(exercise) && Array.isArray(exercise.sets) && exerciseLibrary.some((item) => item.id === exercise.id)).slice(0, MAX_PLAN_EXERCISES).map((exercise) => ({
+          ...exercise,
+          name: String(exercise.name ?? exerciseById(exercise.id).name),
+          targetSets: Math.max(1, Math.min(12, Math.trunc(finiteOrNull(exercise.targetSets) ?? 3))),
+          targetDropSets: Math.max(0, Math.min(4, Math.trunc(finiteOrNull(exercise.targetDropSets) ?? 0))),
+          targetReps: String(exercise.targetReps ?? "8-12"),
+          rest: clampRestSeconds(exercise.rest),
+          group: String(exercise.group ?? ""),
+          sets: exercise.sets.filter(isObject).slice(0, MAX_PLAN_SETS + 4).map((set) => ({
+            ...set,
+            set: Math.trunc(finiteOrNull(set.set) ?? 1),
+            label: String(set.label ?? set.set ?? ""),
+            weight: String(set.weight ?? ""),
+            reps: String(set.reps ?? ""),
+            rir: String(set.rir ?? ""),
+            done: Boolean(set.done),
+            dropSet: Boolean(set.dropSet)
+          }))
+        }))
+      : [];
+    next.activeWorkout = exercises.length && exercises.every((exercise) => exercise.sets.length)
+      ? { ...workout, id: String(workout.id ?? crypto.randomUUID()), title: String(workout.title ?? "Workout"), exercises }
+      : null;
+  }
+}
 
 function saveState() {
+  if (restoringState) return;
   try {
+    if (typeof builderDraft !== "undefined") state.builderDraft = builderDraft;
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
     storageWarningShown = false;
   } catch {
@@ -793,6 +973,13 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+// Plan rows whose exercise id is unknown (restored from a build that renamed
+// it) are skipped when the workout starts, so previews skip them too instead
+// of showing the library's first exercise.
+function knownPlanExercises(plan) {
+  return (plan?.exercises || []).filter((row) => Array.isArray(row) && exerciseLibrary.some((item) => item.id === row[0]));
+}
+
 function exerciseById(id) {
   return exerciseLibrary.find((item) => item.id === id) || exerciseLibrary[0];
 }
@@ -804,7 +991,7 @@ function isRepsOnlyExercise(exercise) {
 function divisionSelect(id, selected = "") {
   const normalizedSelected = selected || "";
   const customOption = normalizedSelected && !divisionOptions.includes(normalizedSelected)
-    ? `<option value="${escapeHtml(normalizedSelected)}">${escapeHtml(normalizedSelected)}</option>`
+    ? `<option value="${escapeHtml(normalizedSelected)}" selected>${escapeHtml(normalizedSelected)}</option>`
     : "";
   return `
     <select id="${id}">
@@ -874,6 +1061,8 @@ function chooseTodayWorkout(pick) {
   }
 
   state.todayPlanId = selected.id;
+  // A pick is for today only; tomorrow Today follows the schedule again.
+  state.todayPlanDate = new Date().toDateString();
   saveState();
   render();
 }
@@ -1055,8 +1244,18 @@ function measurementFields(prefix = "") {
   `).join("");
 }
 
+// Units are chosen during onboarding, before any data exists to convert.
+function setOnboardingUnits(units, button) {
+  setChoice("onboardingUnits", units, button);
+  state.units = units === "metric" ? "metric" : "imperial";
+  document.querySelectorAll("[data-weight-unit]").forEach((el) => { el.textContent = weightUnit(); });
+  document.querySelectorAll("[data-length-unit]").forEach((el) => { el.textContent = lengthUnit(); });
+}
+
 function saveProfile() {
   const get = (id) => document.getElementById(id)?.value.trim() || "";
+  const chosenUnits = get("onboardingUnits");
+  if (chosenUnits === "metric" || chosenUnits === "imperial") state.units = chosenUnits;
   const profile = {
     gender: get("gender"),
     age: Number(get("age")),
@@ -1075,7 +1274,7 @@ function saveProfile() {
     return;
   }
   if (!isPlausibleBodyweight(profile.bodyweight)) {
-    toast("Enter a body weight between 50 and 700 lb.");
+    toast(bodyweightRangeMessage());
     return;
   }
 
@@ -1107,11 +1306,16 @@ function saveProfile() {
 }
 
 function isPlausibleBodyweight(value) {
-  return Number.isFinite(value) && value >= 50 && value <= 700;
+  return Number.isFinite(value) && value >= fromPounds(50) && value <= fromPounds(700);
+}
+
+function bodyweightRangeMessage() {
+  return `Enter a body weight between ${formatWeight(fromPounds(50), 0)} and ${formatWeight(fromPounds(700), 0)} ${weightUnit()}.`;
 }
 
 function hasInvalidMeasurement(measurements) {
-  return Object.values(measurements).some((value) => value !== null && (!Number.isFinite(value) || value <= 0 || value > 150));
+  const maxLength = isMetric() ? 150 * CM_PER_IN : 150;
+  return Object.entries(measurements).some(([key, value]) => value !== null && (!Number.isFinite(value) || value <= 0 || value > (key === "bodyFat" ? 75 : maxLength)));
 }
 
 function collectMeasurementInputs(prefix) {
@@ -1156,7 +1360,7 @@ function renderOnboarding() {
             </div>
             <div class="grid two">
               <div class="field">
-                <label for="bodyweight">Starting Body Weight</label>
+                <label for="bodyweight">Starting Body Weight (<span data-weight-unit>${weightUnit()}</span>)</label>
                 <input id="bodyweight" type="number" step="0.1" placeholder="218.4" />
               </div>
               <div class="field">
@@ -1180,7 +1384,15 @@ function renderOnboarding() {
               </div>
             </div>
             <div>
-              <h3>Starting Measurements</h3>
+              <div class="field">
+                <label>Units</label>
+                <input id="onboardingUnits" type="hidden" value="${state.units === "metric" ? "metric" : "imperial"}" />
+                <div class="choice-grid">
+                  <button class="choice-btn ${state.units === "metric" ? "" : "active"}" data-choice="onboardingUnits" onclick="setOnboardingUnits('imperial', this)">lb · inches</button>
+                  <button class="choice-btn ${state.units === "metric" ? "active" : ""}" data-choice="onboardingUnits" onclick="setOnboardingUnits('metric', this)">kg · cm</button>
+                </div>
+              </div>
+              <h3>Starting Measurements (<span data-length-unit>${lengthUnit()}</span>)</h3>
               <div class="measurement-grid">${measurementFields("")}</div>
             </div>
             <button class="primary-btn" onclick="saveProfile()">Enter ${APP_NAME}</button>
@@ -1199,7 +1411,8 @@ function navHtml() {
     ["builder", "Builder"],
     ["progress", "Progress"],
     ["history", "History"],
-    ["logbook", "Logbook"]
+    ["logbook", "Logbook"],
+    ["more", "More"]
   ];
   return items.map(([id, label]) => `
     <button class="${state.view === id ? "active" : ""}" ${state.view === id ? 'aria-current="page"' : ""} onclick="setView('${id}')">${label}</button>
@@ -1228,11 +1441,14 @@ function todaysRecommendedPlan() {
 }
 
 function todaysSelectedPlan() {
-  const selected = state.todayPlanId ? allPlans().find((plan) => plan.id === state.todayPlanId) : null;
+  const pickedToday = state.todayPlanId && state.todayPlanDate === new Date().toDateString();
+  const selected = pickedToday ? allPlans().find((plan) => plan.id === state.todayPlanId) : null;
   return selected || todaysRecommendedPlan();
 }
 
 function todayWorkoutSelect() {
+  // An earlier day's pick has expired; show the schedule-driven default.
+  const activePick = state.todayPlanDate === new Date().toDateString() ? state.todayWorkoutPick : "recommended";
   const options = [
     ["recommended", "Recommended"],
     ["any", "Random Any"],
@@ -1246,7 +1462,7 @@ function todayWorkoutSelect() {
   ];
   return `
     <select id="todayWorkoutPick" onchange="chooseTodayWorkout(this.value)">
-      ${options.map(([value, label]) => `<option value="${value}" ${state.todayWorkoutPick === value ? "selected" : ""}>${label}</option>`).join("")}
+      ${options.map(([value, label]) => `<option value="${value}" ${activePick === value ? "selected" : ""}>${label}</option>`).join("")}
     </select>
   `;
 }
@@ -1257,11 +1473,15 @@ function totalVolume(log) {
 
 function stats() {
   const lastWeight = state.weightLogs[0];
-  const firstWeight = state.weightLogs[state.weightLogs.length - 1];
+  const startedAt = Date.parse(state.profile?.createdAt || "");
+  const sinceStart = Number.isFinite(startedAt)
+    ? state.weightLogs.filter((entry) => Date.parse(entry.date) >= startedAt - 86400000)
+    : state.weightLogs;
+  const firstWeight = sinceStart[sinceStart.length - 1] || state.weightLogs[state.weightLogs.length - 1];
   const lastSeven = state.workoutLogs.filter((log) => Date.now() - new Date(log.date).getTime() < 7 * 86400000);
   const weeklyVolume = lastSeven.reduce((sum, log) => sum + (Number(log.volume) || totalVolume(log)), 0);
   const weightDelta = lastWeight && firstWeight
-    ? (Number(lastWeight.bodyweight || 0) - Number(firstWeight.bodyweight || 0)).toFixed(1)
+    ? (Number((Number(lastWeight.bodyweight || 0) - Number(firstWeight.bodyweight || 0)).toFixed(1)) + 0).toFixed(1)
     : "0.0";
   return { lastWeight, weeklyVolume, weightDelta, workouts: lastSeven.length };
 }
@@ -1270,11 +1490,23 @@ function normalizedExerciseName(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+let exerciseIdIndex = null;
+let exerciseNameIndex = null;
+
+function exerciseIndexes() {
+  if (!exerciseIdIndex) {
+    exerciseIdIndex = new Map(exerciseLibrary.map((exercise) => [exercise.id, exercise]));
+    exerciseNameIndex = new Map(exerciseLibrary.map((exercise) => [normalizedExerciseName(exercise.name), exercise]));
+  }
+  return { byId: exerciseIdIndex, byName: exerciseNameIndex };
+}
+
+// Called per logged set on every launch and History render; a per-set scan of
+// the library made a 40k-set backup freeze for seconds.
 function loggedExerciseId(set) {
-  const stableMatch = exerciseLibrary.find((exercise) => exercise.id === set?.exerciseId);
-  if (stableMatch) return stableMatch.id;
-  const loggedName = normalizedExerciseName(set?.exercise);
-  return exerciseLibrary.find((exercise) => normalizedExerciseName(exercise.name) === loggedName)?.id || null;
+  const { byId, byName } = exerciseIndexes();
+  if (byId.has(set?.exerciseId)) return set.exerciseId;
+  return byName.get(normalizedExerciseName(set?.exercise))?.id || null;
 }
 
 function workoutLogSets(log) {
@@ -1311,7 +1543,9 @@ function exerciseHistoryData(exerciseId) {
         const rawReps = Number(set.reps);
         const weight = Number.isFinite(rawWeight) && rawWeight > 0 ? rawWeight : null;
         const reps = Number.isFinite(rawReps) && rawReps > 0 ? rawReps : null;
-        const volume = weight !== null && reps !== null ? weight * reps : 0;
+        const repsOnly = Boolean(set.repsOnly) || exercise.muscle === "abs";
+        // Reps-only (abs) work tracks total reps instead of load x reps.
+        const volume = repsOnly ? reps || 0 : weight !== null && reps !== null ? weight * reps : 0;
         const estimatedOneRepMax = weight !== null && reps !== null && reps <= 30
           ? weight * (1 + reps / 30)
           : 0;
@@ -1321,6 +1555,7 @@ function exerciseHistoryData(exerciseId) {
           volume,
           estimatedOneRepMax,
           dropSet: Boolean(set.dropSet),
+          repsOnly,
           label: set.label || ""
         };
       });
@@ -1366,7 +1601,7 @@ function historyMetric(value, suffix = "") {
   return `${Number(value.toFixed(1)).toLocaleString()}${suffix}`;
 }
 
-function exerciseVolumeSparkline(entries, exerciseName) {
+function exerciseVolumeSparkline(entries, exerciseName, unitLabel = weightUnit()) {
   if (!entries.length) return '<div class="empty"><p class="muted">Complete this exercise in at least one saved workout to start the trend.</p></div>';
   const width = 620;
   const height = 104;
@@ -1378,18 +1613,19 @@ function exerciseVolumeSparkline(entries, exerciseName) {
     return { x, y };
   });
   const points = coordinates.map(({ x, y }) => `${x},${y}`).join(" ");
-  const summary = entries.map((entry) => `${formatShortDate(entry.date)}: ${Math.round(entry.volume).toLocaleString()} pounds`).join(", ");
+  const summary = entries.map((entry) => `${formatShortDate(entry.date)}: ${Math.round(entry.volume).toLocaleString()} ${unitLabel}`).join(", ");
   return `
     <svg class="sparkline exercise-history-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(exerciseName)} session volume trend. ${escapeHtml(summary)}">
       <line x1="0" y1="${height - 8}" x2="${width}" y2="${height - 8}" stroke="rgba(255,255,255,0.12)" />
-      <polyline points="${points}" fill="none" stroke="#1ED8A5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
-      ${coordinates.map(({ x, y }) => `<circle cx="${x}" cy="${y}" r="5" fill="#1ED8A5" />`).join("")}
+      <polyline points="${points}" fill="none" stroke="#2DD4BF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+      ${coordinates.map(({ x, y }) => `<circle cx="${x}" cy="${y}" r="5" fill="#2DD4BF" />`).join("")}
     </svg>
   `;
 }
 
 function historySetSummary(set) {
-  const weight = set.weight === null ? "--" : `${Number(set.weight.toFixed(1)).toLocaleString()} lb`;
+  if (set.repsOnly) return `${set.dropSet ? "Drop · " : ""}${set.reps === null ? "--" : Number(set.reps.toFixed(1)).toLocaleString()} reps`;
+  const weight = set.weight === null ? "--" : `${Number(set.weight.toFixed(1)).toLocaleString()} ${weightUnit()}`;
   const reps = set.reps === null ? "-- reps" : `${Number(set.reps.toFixed(1)).toLocaleString()} reps`;
   return `${set.dropSet ? "Drop · " : ""}${weight} × ${reps}`;
 }
@@ -1422,15 +1658,15 @@ function renderExerciseHistory() {
     <div class="grid today-stats history-stats">
       <article class="card stat"><p class="value">${history.sessionCount}</p><p class="label">Sessions</p></article>
       <article class="card stat"><p class="value">${history.setCount}</p><p class="label">Logged sets</p></article>
-      <article class="card stat"><p class="value">${historyMetric(history.bestWeight)}</p><p class="label">Heaviest lb</p></article>
-      <article class="card stat"><p class="value">${historyMetric(history.estimatedOneRepMax)}</p><p class="label">Estimated 1RM lb</p></article>
+      <article class="card stat"><p class="value">${historyMetric(history.bestWeight)}</p><p class="label">Heaviest ${weightUnit()}</p></article>
+      <article class="card stat"><p class="value">${historyMetric(history.estimatedOneRepMax)}</p><p class="label">Estimated 1RM ${weightUnit()}</p></article>
     </div>
     <section class="card pad history-panel history-trend-card">
       <div class="card-head">
         <div><p class="eyebrow">Volume trend</p><h2>${escapeHtml(history.exercise.name)}</h2></div>
-        <span class="badge blue">Last ${history.sessionVolumes.length || 0} sessions</span>
+        <span class="badge blue">Last ${plural(history.sessionVolumes.length || 0, "session")}</span>
       </div>
-      ${exerciseVolumeSparkline(history.sessionVolumes, history.exercise.name)}
+      ${exerciseVolumeSparkline(history.sessionVolumes, history.exercise.name, history.exercise.muscle === "abs" ? "reps" : weightUnit())}
       <div class="history-trend-labels">
         <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes[0].date) : "First session"}</span>
         <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes.at(-1).date) : "Latest session"}</span>
@@ -1439,10 +1675,10 @@ function renderExerciseHistory() {
     <section class="card pad history-panel">
       <div class="card-head"><div><p class="eyebrow">Personal records</p><h2>Best performances</h2></div></div>
       <div class="grid two history-records">
-        <article class="log-card card"><strong>Estimated 1RM</strong><p class="history-record-value">${historyMetric(history.estimatedOneRepMax, " lb")}</p><p class="muted">${history.bestSet ? `${historyMetric(history.bestSet.weight, " lb")} × ${historyMetric(history.bestSet.reps, " reps")} · ${formatShortDate(history.bestSet.date)}` : "No weighted sets yet."}</p></article>
-        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${historyMetric(history.bestSessionVolume, " lb")}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
+        <article class="log-card card"><strong>Estimated 1RM</strong><p class="history-record-value">${historyMetric(history.estimatedOneRepMax, ` ${weightUnit()}`)}</p><p class="muted">${history.bestSet ? `${historyMetric(history.bestSet.weight, ` ${weightUnit()}`)} × ${historyMetric(history.bestSet.reps, " reps")} · ${formatShortDate(history.bestSet.date)}` : "No weighted sets yet."}</p></article>
+        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${history.exercise.muscle === "abs" ? plural(Math.round(history.bestSessionVolume), "rep") : historyMetric(history.bestSessionVolume, ` ${weightUnit()}`)}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
         <article class="log-card card"><strong>Highest reps</strong><p class="history-record-value">${historyMetric(history.bestReps)}</p><p class="muted">Highest recorded reps in one set.</p></article>
-        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${historyMetric(history.totalVolume, " lb")}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
+        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${history.exercise.muscle === "abs" ? plural(Math.round(history.totalVolume), "rep") : historyMetric(history.totalVolume, ` ${weightUnit()}`)}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
       </div>
     </section>
     <section class="card pad history-panel">
@@ -1451,7 +1687,7 @@ function renderExerciseHistory() {
         ${history.recentSessions.map((session) => `
           <article class="log-card card history-session">
             <div class="card-head"><strong>${escapeHtml(session.title)}</strong><span class="badge">${formatShortDate(session.date)}</span></div>
-            <p class="muted">${session.sets.length} ${session.sets.length === 1 ? "set" : "sets"} · ${Math.round(session.volume).toLocaleString()} lb volume</p>
+            <p class="muted">${plural(session.sets.length, "set")} · ${history.exercise.muscle === "abs" ? plural(Math.round(session.volume), "rep") : `${Math.round(session.volume).toLocaleString()} ${weightUnit()} volume`}</p>
             <div class="history-set-list">${session.sets.map((set) => `<span class="history-set">${escapeHtml(historySetSummary(set))}</span>`).join("")}</div>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No saved sets for this exercise yet. Complete a workout and they will appear here.</p></div>'}
@@ -1477,17 +1713,18 @@ function formatShortDate(dateString) {
 function measurementRows(entry) {
   if (!entry) return [];
   return [
-    ["Chest", entry.chest, "in"],
-    ["Waist", entry.waist, "in"],
-    ["Shoulders", entry.shoulders, "in"],
-    ["Arm", entry.arm, "in"],
-    ["Thigh", entry.thigh, "in"],
-    ["Calf", entry.calf, "in"],
+    ["Chest", entry.chest, lengthUnit()],
+    ["Waist", entry.waist, lengthUnit()],
+    ["Shoulders", entry.shoulders, lengthUnit()],
+    ["Arm", entry.arm, lengthUnit()],
+    ["Thigh", entry.thigh, lengthUnit()],
+    ["Calf", entry.calf, lengthUnit()],
     ["Body Fat", entry.bodyFat, "%"]
   ].filter(([, value]) => value !== null && value !== undefined && value !== "");
 }
 
 function coachReportData(days) {
+  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.round(Number(days)) : logbookDays();
   const workouts = state.workoutLogs.filter((log) => isWithinDays(log.date, days));
   const weights = state.weightLogs.filter((log) => isWithinDays(log.date, days));
   const measurements = state.measurements.filter((log) => isWithinDays(log.date, days));
@@ -1508,8 +1745,19 @@ function coachReportData(days) {
   };
 }
 
+// The PDF uses WinAnsiEncoding (Latin-1 for these code points): keep accented
+// Latin letters, map typographic punctuation to ASCII, drop anything else.
 function plainReportText(value) {
-  return String(value ?? "").replace(/[^\x20-\x7E]/g, " ").replace(/\s+/g, " ").trim();
+  return String(value ?? "")
+    .normalize("NFC")
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/\u00B7/g, "-")
+    .replace(/[^\x20-\x7E\xA0-\xFF]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function addReportSection(lines, title) {
@@ -1518,13 +1766,14 @@ function addReportSection(lines, title) {
 }
 
 function buildCoachReportLines(days, coachNote = "") {
+  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.round(Number(days)) : logbookDays();
   const report = coachReportData(days);
   const profile = state.profile || {};
   const lines = [
     { text: `${APP_NAME} Coach Logbook`, size: 20, bold: true },
     { text: `${days}-day report generated ${new Date().toLocaleDateString()}`, size: 10 },
     { text: `Athlete: ${profile.gender || "Not set"} - Age ${profile.age || "--"} - ${profile.division || "No division/goal set"}`, size: 10 },
-    { text: `Phase: ${phaseLabel(state.phase)} - Current body weight: ${report.latestWeight?.bodyweight || profile.bodyweight || "--"} lb`, size: 10 }
+    { text: `Phase: ${phaseLabel(state.phase)} - Current body weight: ${report.latestWeight?.bodyweight || profile.bodyweight || "--"} ${weightUnit()}`, size: 10 }
   ];
 
   if (coachNote.trim()) {
@@ -1534,15 +1783,15 @@ function buildCoachReportLines(days, coachNote = "") {
 
   addReportSection(lines, "Weekly Summary");
   lines.push({ text: `Workouts: ${report.workouts.length}`, size: 10 });
-  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString()} lb`, size: 10 });
+  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString()} ${weightUnit()}`, size: 10 });
   lines.push({ text: `Body weight logs: ${report.weights.length}`, size: 10 });
-  lines.push({ text: `Weight change in range: ${report.weightDelta === null ? "Needs 2 weigh-ins" : `${report.weightDelta} lb`}`, size: 10 });
-  lines.push({ text: `Measurement check-ins: ${report.measurements.length}`, size: 10 });
+  lines.push({ text: `Weight change in range: ${report.weightDelta === null ? "Needs 2 weigh-ins" : `${report.weightDelta} ${weightUnit()}`}`, size: 10 });
+  lines.push({ text: `Measurement check-ins: ${report.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).length}`, size: 10 });
 
   addReportSection(lines, "Body Weight");
   if (report.weights.length) {
     report.weights.forEach((entry) => {
-      lines.push({ text: `${formatShortDate(entry.date)} - ${entry.bodyweight} lb${entry.note ? ` - ${entry.note}` : ""}`, size: 10 });
+      lines.push({ text: `${formatShortDate(entry.date)} - ${formatWeight(entry.bodyweight)} ${weightUnit()}${Number(entry.bodyFat) > 0 ? ` - ${formatWeight(entry.bodyFat)}% body fat` : ""}${entry.note ? ` - ${entry.note}` : ""}`, size: 10 });
     });
   } else {
     lines.push({ text: "No body weight logs in this range.", size: 10 });
@@ -1552,7 +1801,7 @@ function buildCoachReportLines(days, coachNote = "") {
   if (report.latestMeasurement) {
     lines.push({ text: `Latest: ${formatShortDate(report.latestMeasurement.date)}${report.latestMeasurement.note ? ` - ${report.latestMeasurement.note}` : ""}`, size: 10 });
     measurementRows(report.latestMeasurement).forEach(([label, value, unit]) => {
-      lines.push({ text: `${label}: ${value}${unit}`, size: 10 });
+      lines.push({ text: `${String(label).replace(/ %$/, "")}: ${measurementValueText(value, unit)}`, size: 10 });
     });
   } else {
     lines.push({ text: "No measurements logged yet.", size: 10 });
@@ -1561,13 +1810,15 @@ function buildCoachReportLines(days, coachNote = "") {
   addReportSection(lines, "Workout Logs");
   if (report.workouts.length) {
     report.workouts.forEach((log) => {
-      lines.push({ text: `${formatShortDate(log.date)} - ${log.title}`, size: 11, bold: true });
-      lines.push({ text: `${(log.sets || []).length} sets - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} lb volume`, size: 10 });
+      lines.push({ text: `${formatShortDate(log.date)} - ${log.title || "Workout"}`, size: 11, bold: true });
+      lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume`, size: 10 });
+      // Null-prototype: an exercise named "constructor" must not hit Object.prototype.
       const grouped = (log.sets || []).reduce((groups, set) => {
-        if (!groups[set.exercise]) groups[set.exercise] = [];
-        groups[set.exercise].push(setLogSummary(set));
+        const key = String(set.exercise ?? "Exercise");
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(setLogSummary(set));
         return groups;
-      }, {});
+      }, Object.create(null));
       Object.entries(grouped).forEach(([exercise, sets]) => {
         lines.push({ text: `${exercise}: ${sets.join(", ")}`, size: 9 });
       });
@@ -1583,7 +1834,10 @@ function wrapPdfText(text, maxChars) {
   const words = plainReportText(text).split(" ");
   const rows = [];
   let row = "";
-  words.forEach((word) => {
+  // Hard-break words longer than a line (URLs, hashtags) so nothing runs off
+  // the page.
+  const pieces = words.flatMap((word) => word.length > maxChars ? word.match(new RegExp(`.{1,${maxChars}}`, "g")) : [word]);
+  pieces.forEach((word) => {
     const next = row ? `${row} ${word}` : word;
     if (next.length > maxChars && row) {
       rows.push(row);
@@ -1623,8 +1877,8 @@ function createPdfBlob(lines) {
   const pages = paginateReport(lines);
   const objects = [];
   objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
-  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
-  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>";
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
   const pageIds = [];
 
   pages.forEach((page, index) => {
@@ -1656,7 +1910,11 @@ function createPdfBlob(lines) {
     pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
   }
   pdf += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
-  return new Blob([pdf], { type: "application/pdf" });
+  // One byte per character (all text is within Latin-1), so string offsets in
+  // the xref equal byte offsets. A plain string Blob would be UTF-8 encoded.
+  const bytes = new Uint8Array(pdf.length);
+  for (let index = 0; index < pdf.length; index += 1) bytes[index] = pdf.charCodeAt(index) & 0xff;
+  return new Blob([bytes], { type: "application/pdf" });
 }
 
 function downloadBlob(blob, filename) {
@@ -1691,12 +1949,12 @@ async function shareNativePdf(blob, filename) {
 }
 
 async function exportLogbookPdf() {
-  const days = Number(state.logbookRange || 7);
+  const days = logbookDays();
   const note = document.getElementById("coachNote")?.value ?? coachNoteDraft;
   coachNoteDraft = note;
   const lines = buildCoachReportLines(days, note);
   const blob = createPdfBlob(lines);
-  const filename = `mass-method-coach-log-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const filename = `mass-method-coach-log-${localDateStamp()}.pdf`;
 
   if (await shareNativePdf(blob, filename)) {
     toast("PDF ready to send.");
@@ -1731,7 +1989,9 @@ function getStageTimeline() {
   const targetDate = goalDateRaw ? new Date(`${goalDateRaw}T12:00:00`) : null;
   const validTarget = targetDate && Number.isFinite(targetDate.getTime());
   const today = new Date();
-  const daysOut = validTarget ? Math.ceil((targetDate - today) / 86400000) : null;
+  // Whole calendar days between local dates (show day = 0), DST-safe.
+  const calendarDay = (date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000;
+  const daysOut = validTarget ? Math.round(calendarDay(targetDate) - calendarDay(today)) : null;
   const weeksOut = daysOut === null ? null : Math.max(0, Math.ceil(daysOut / 7));
 
   const stage = weeksOut === null
@@ -1776,7 +2036,7 @@ function getStageTimeline() {
                 badge: `${weeksOut} weeks out`,
                 phase: "prep",
                 focus: "Hold strength, tighten execution, increase posing consistency, and watch waist trend closely.",
-                target: "0.5-1.25 lb down per week",
+                target: weightRangeText(0.5, 1.25, "down"),
                 progress: 70
               }
             : weeksOut <= 16
@@ -1785,7 +2045,7 @@ function getStageTimeline() {
                   badge: `${weeksOut} weeks out`,
                   phase: "prep",
                   focus: "Create the weekly deficit while protecting heavy compounds and key body-part volume.",
-                  target: "0.5-1.5 lb down per week",
+                  target: weightRangeText(0.5, 1.5, "down"),
                   progress: 52
                 }
               : weeksOut <= 24
@@ -1802,7 +2062,7 @@ function getStageTimeline() {
                     badge: `${weeksOut} weeks out`,
                     phase: "offseason",
                     focus: "Push progressive overload and weak-point volume while keeping waist gain under control.",
-                    target: "0.25-0.75 lb up per week",
+                    target: weightRangeText(0.25, 0.75, "up"),
                     progress: 12
                   };
 
@@ -1827,11 +2087,12 @@ function weightTrendSummary() {
   const early = average(recent.slice(0, midpoint).map((entry) => Number(entry.bodyweight)));
   const late = average(recent.slice(midpoint).map((entry) => Number(entry.bodyweight)));
   const delta = late - early;
-  const label = Math.abs(delta) < 0.2 ? "Flat" : delta > 0 ? "Trending up" : "Trending down";
+  // 0.2 lb is the "flat" band; in kg the same physical change is smaller.
+  const label = Math.abs(delta) < fromPounds(0.2) ? "Flat" : delta > 0 ? "Trending up" : "Trending down";
   return {
     label,
     delta,
-    detail: `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} lb over recent logs`
+    detail: `${formatSignedChange(delta)} ${weightUnit()} over recent logs`
   };
 }
 
@@ -1875,6 +2136,37 @@ function comparableMeasurementChanges(current, baseline, keys) {
   });
 }
 
+// Per-metric series: entries without a value (e.g. a waist-only Apple Health
+// reading) never hide the other measurements.
+function measurementSeries(key) {
+  return sortedMeasurementLogs().map((entry) => ({ date: entry.date, value: numericMeasurement(entry, key) })).filter((point) => point.value !== null);
+}
+
+// Left/right/legacy arm and thigh keys describe one body part each.
+const MEASUREMENT_PART_FAMILIES = { arm: ["leftArm", "rightArm", "arm"], thigh: ["leftThigh", "rightThigh", "thigh"] };
+
+function measurementPartKey(key) {
+  const family = MEASUREMENT_PART_FAMILIES[key];
+  return family ? family.find((member) => measurementSeries(member).length >= 2) || null : key;
+}
+
+function measurementPartChanges(keys, compareTo) {
+  const seen = new Set();
+  return keys.flatMap((key) => {
+    const familyName = Object.keys(MEASUREMENT_PART_FAMILIES).find((name) => MEASUREMENT_PART_FAMILIES[name].includes(key));
+    const part = familyName || key;
+    if (seen.has(part)) return [];
+    const seriesKey = familyName ? measurementPartKey(familyName) : key;
+    const series = seriesKey ? measurementSeries(seriesKey) : [];
+    if (series.length < 2) return [];
+    seen.add(part);
+    const metric = measurementMetrics.find((item) => item.key === seriesKey);
+    const label = familyName ? (familyName === "arm" ? "Arms" : "Thighs") : metric?.label || seriesKey;
+    const baseline = compareTo === "first" ? series[0] : series[series.length - 2];
+    return [{ key: seriesKey, label, change: series[series.length - 1].value - baseline.value, direction: metric?.direction || "up" }];
+  });
+}
+
 function weakPointMeasurementStatus() {
   const logs = sortedMeasurementLogs();
   if (logs.length < 2) {
@@ -1885,9 +2177,7 @@ function weakPointMeasurementStatus() {
     };
   }
 
-  const latest = logs[logs.length - 1];
-  const baseline = logs[0];
-  const changes = comparableMeasurementChanges(latest, baseline, growthMeasurementKeys);
+  const changes = measurementPartChanges(growthMeasurementKeys, "first");
 
   if (changes.length < 3) {
     return {
@@ -1901,7 +2191,7 @@ function weakPointMeasurementStatus() {
   return {
     done: true,
     label: "Weak-point measurements reviewed",
-    detail: `Lowest change since baseline: ${weakest.label} ${weakest.change >= 0 ? "+" : ""}${weakest.change.toFixed(1)} in.`
+    detail: `Lowest change since baseline: ${weakest.label} ${formatSignedChange(weakest.change)} ${lengthUnit()}.`
   };
 }
 
@@ -1915,9 +2205,7 @@ function physiqueMeasurementProgressStatus() {
     };
   }
 
-  const latest = logs[logs.length - 1];
-  const previous = logs[logs.length - 2];
-  const changes = comparableMeasurementChanges(latest, previous, measurementMetrics.map((metric) => metric.key));
+  const changes = measurementPartChanges(measurementMetrics.map((metric) => metric.key), "previous");
 
   if (!changes.length) {
     return {
@@ -1927,19 +2215,17 @@ function physiqueMeasurementProgressStatus() {
     };
   }
 
-  const ranked = changes.map((change) => {
-    const metric = measurementMetrics.find((item) => item.key === change.key);
-    const progress = metric?.direction === "down" ? -change.change : change.change;
-    return { ...change, progress, direction: metric?.direction || "up" };
-  }).sort((a, b) => b.progress - a.progress);
+  const ranked = changes.map((change) => ({ ...change, progress: change.direction === "down" ? -change.change : change.change })).sort((a, b) => b.progress - a.progress);
 
   const best = ranked[0];
-  if (best.progress >= 0.1) {
-    const unit = best.key === "bodyFat" ? "%" : "in";
+  // 0.1 in (or 0.1 % body fat) counts as progress; convert for cm.
+  const threshold = best.key === "bodyFat" || !isMetric() ? 0.1 : 0.1 * CM_PER_IN;
+  if (best.progress >= threshold) {
+    const unit = best.key === "bodyFat" ? "%" : lengthUnit();
     return {
       done: true,
       label: "Body measurements progressing",
-      detail: `${best.label} ${best.change >= 0 ? "+" : ""}${best.change.toFixed(1)} ${unit} since last check-in.`
+      detail: `${best.label} ${formatSignedChange(best.change)} ${unit} since last check-in.`
     };
   }
 
@@ -1951,7 +2237,9 @@ function physiqueMeasurementProgressStatus() {
 }
 
 function stageChecklist(timeline) {
-  const lastMeasurementDays = daysSince(state.measurements[0]?.date);
+  // Only hand-entered tape check-ins count as "current"; Health adds daily
+  // single-metric readings.
+  const lastMeasurementDays = daysSince(state.measurements.find((entry) => !String(entry.id || "").startsWith("hk-"))?.date);
   const lastWeightDays = daysSince(state.weightLogs[0]?.date);
   const lastWorkoutDays = daysSince(state.workoutLogs[0]?.date);
   const measurementDue = lastMeasurementDays === null || lastMeasurementDays >= 7;
@@ -1963,21 +2251,36 @@ function stageChecklist(timeline) {
     { done: !workoutDue, label: "Training log is current" }
   ];
 
+  // Waist vs scale needs two waist readings (tape or Health) and two weigh-ins
+  // in the last two weeks to compare the trends.
+  const recentWaist = state.measurements.filter((entry) => entry.waist && isWithinDays(entry.date, 14)).length;
+  const recentWeighIns = state.weightLogs.filter((entry) => entry.bodyweight && isWithinDays(entry.date, 14)).length;
+  const waistReady = recentWaist >= 2 && recentWeighIns >= 2;
+  const waistItem = (label) => ({
+    done: waistReady,
+    label,
+    detail: waistReady ? "" : `Needs 2 waist readings and 2 weigh-ins in the last 14 days. ${Math.min(recentWaist, 2)}/2 waist · ${Math.min(recentWeighIns, 2)}/2 weigh-ins.`
+  });
+  const weekPrep = state.prepLogs.filter((entry) => isWithinDays(entry.date, 7));
+
   if (timeline.phase === "prep") {
     return [
       ...base,
-      { done: false, label: "Posing practice scheduled" },
-      { done: false, label: "Cardio target reviewed" },
-      { done: false, label: "Waist trend checked against scale trend" }
+      { done: weekPrep.some((entry) => Number(entry.posingMinutes) > 0), label: "Posing practice logged this week" },
+      { done: weekPrep.some((entry) => Number(entry.cardioMinutes) > 0), label: "Cardio logged this week" },
+      waistItem("Waist trend checked against scale trend")
     ];
   }
 
   if (timeline.phase === "bulking") {
+    // Only a block in progress counts (not one queued or already finished).
+    const running = typeof blockWeekInfo === "function" && blockWeekInfo()?.status === "active";
+    const block = running && typeof validTrainingBlock === "function" ? validTrainingBlock(state.trainingBlock) : null;
     return [
       ...base,
-      { done: false, label: "Weak body part priority selected" },
-      { done: false, label: "Progressive overload target set" },
-      { done: false, label: "Waist gain checked before adding food" }
+      { done: Boolean(block?.focus.length), label: "Weak body part priority selected", detail: block?.focus.length ? "" : "Pick weak points when you start a training block in Plans." },
+      { done: Boolean(block), label: "Progressive overload block running", detail: block ? "" : "Start a training block in Plans for weekly progression targets." },
+      waistItem("Waist gain checked before adding food")
     ];
   }
 
@@ -2027,7 +2330,7 @@ function renderStageTimeline() {
         <div class="signal-card">
           <span class="badge">Target</span>
           <strong>${escapeHtml(timeline.target)}</strong>
-          <p class="muted">${timeline.weeksOut === null ? "Add a date below." : `${timeline.daysOut} days until goal date.`}</p>
+          <p class="muted">${timeline.weeksOut === null ? "Add a date below." : timeline.daysOut > 0 ? `${plural(timeline.daysOut, "day")} until goal date.` : timeline.daysOut === 0 ? "Show day. Trust the process." : `Show was ${plural(-timeline.daysOut, "day")} ago.`}</p>
         </div>
         <div class="signal-card">
           <span class="badge">Scale trend</span>
@@ -2089,10 +2392,10 @@ function renderToday() {
       </article>
       <article class="card stat">
         <p class="value">${Math.round(s.weeklyVolume).toLocaleString()}</p>
-        <p class="label">Weekly volume lbs</p>
+        <p class="label">Weekly volume ${weightUnit()}</p>
       </article>
       <article class="card stat">
-        <p class="value">${s.lastWeight?.bodyweight || profile.bodyweight || "--"}</p>
+        <p class="value">${formatWeight(s.lastWeight?.bodyweight || profile.bodyweight)}</p>
         <p class="label">Current body weight</p>
       </article>
       <article class="card stat">
@@ -2120,10 +2423,10 @@ function renderToday() {
           ${todayWorkoutSelect()}
         </div>
         <div class="exercise-list">
-          ${plan.exercises.map(([id, sets, reps]) => `
+          ${knownPlanExercises(plan).map(([id, sets, reps]) => `
             <div class="exercise-row">
               <strong>${escapeHtml(exerciseById(id).name)}</strong>
-              <span class="badge">${sets} x ${reps}</span>
+              <span class="badge">${escapeHtml(sets)} x ${escapeHtml(reps)}</span>
             </div>
           `).join("")}
         </div>
@@ -2171,10 +2474,10 @@ function renderPlanCard(plan) {
       </div>
       <p class="muted">${escapeHtml(plan.note)}</p>
       <div class="exercise-list">
-        ${plan.exercises.slice(0, 5).map(([id, sets, reps]) => `
+        ${knownPlanExercises(plan).slice(0, 5).map(([id, sets, reps]) => `
           <div class="exercise-row">
             <span class="truncate">${escapeHtml(exerciseById(id).name)}</span>
-            <span class="badge">${sets} x ${reps}</span>
+            <span class="badge">${escapeHtml(sets)} x ${escapeHtml(reps)}</span>
           </div>
         `).join("")}
       </div>
@@ -2316,7 +2619,13 @@ function renderBuilder() {
   `;
 }
 
-let builderDraft = [];
+// The draft survives the app being closed; entries are re-validated on load.
+var builderDraft = Array.isArray(state.builderDraft)
+  ? state.builderDraft.filter((spec) => {
+      const id = Array.isArray(spec) ? spec[0] : spec?.id;
+      return exerciseLibrary.some((exercise) => exercise.id === id);
+    })
+  : [];
 
 function addBuilderExercise() {
   const id = document.getElementById("customExercise").value;
@@ -2513,6 +2822,9 @@ function moveActiveWorkoutExercise(index, direction) {
   [exercises[index], exercises[target]] = [exercises[target], exercises[index]];
   if (state.timer.exerciseIndex === index) state.timer.exerciseIndex = target;
   else if (state.timer.exerciseIndex === target) state.timer.exerciseIndex = index;
+  const anchor = state.activeWorkout.lastExerciseIndex;
+  if (anchor === index) state.activeWorkout.lastExerciseIndex = target;
+  else if (anchor === target) state.activeWorkout.lastExerciseIndex = index;
   saveState();
   render();
   return true;
@@ -2538,6 +2850,9 @@ function removeActiveWorkoutExercise(index) {
   } else if (state.timer.exerciseIndex > index) {
     state.timer.exerciseIndex -= 1;
   }
+  const anchor = state.activeWorkout.lastExerciseIndex;
+  if (anchor === index) state.activeWorkout.lastExerciseIndex = null;
+  else if (Number.isInteger(anchor) && anchor > index) state.activeWorkout.lastExerciseIndex = anchor - 1;
   saveState();
   render();
   toast(`${exercise.name} removed.`);
@@ -2572,9 +2887,27 @@ function updateSet(exIndex, setIndex, field, value) {
   if (!set || !["weight", "reps", "rir", "setType"].includes(field)) return;
   // Changing the load or reps of a completed set reopens it; RIR and set-type
   // annotations do not change what was lifted.
-  if (set.done && ["weight", "reps"].includes(field) && set[field] !== value) set.done = false;
+  const reopened = set.done && ["weight", "reps"].includes(field) && set[field] !== value;
+  if (reopened) set.done = false;
   set[field] = value;
   saveState();
+  if (reopened) reflectReopenedSet(exIndex, setIndex);
+}
+
+function reflectReopenedSet(exIndex, setIndex) {
+  const button = document.querySelector?.(`[data-set-button="${exIndex}-${setIndex}"]`);
+  if (button) {
+    button.className = "primary-btn";
+    button.textContent = "Complete";
+  }
+  const counter = document.querySelector?.("[data-sets-completed]");
+  const workout = state.activeWorkout;
+  if (counter && workout) {
+    const completed = workout.exercises.reduce((sum, exercise) => sum + exercise.sets.filter((item) => item.done).length, 0);
+    const total = workout.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0);
+    counter.textContent = `${completed} of ${total} sets completed`;
+  }
+  toast("Set reopened. Tap Complete again to log the change.");
 }
 
 function completeSet(exIndex, setIndex) {
@@ -2597,25 +2930,39 @@ function completeSet(exIndex, setIndex) {
 
 function adjustRest(seconds) {
   const timer = state.timer;
-  const next = Math.max(15, Math.min(300, (timer.running ? timer.left : timer.seconds) + seconds));
   if (timer.running) {
-    startTimer(next, Boolean(timer.fullscreen), timer.exerciseIndex ?? null);
-  } else {
+    // The tick pauses while the page is hidden; read the real remaining time.
+    const remaining = Math.ceil((Number(timer.endsAt) - Date.now()) / 1000);
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      stopTimer();
+      return;
+    }
+    timer.left = remaining;
+    // Adjusting a running rest changes only this rest, never the exercise's
+    // planned rest, and -15 near the end shortens instead of clamping up.
+    startTimer(Math.max(1, Math.min(600, timer.left + seconds)), Boolean(timer.fullscreen), timer.exerciseIndex ?? null, false);
+    return;
+  }
+  const next = Math.max(15, Math.min(300, timer.seconds + seconds));
+  {
     state.timer.seconds = next;
     saveState();
     render();
   }
 }
 
-function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null) {
+function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null, persistRest = true) {
   primeTimerAudio();
   const now = Date.now();
-  const duration = clampRestSeconds(seconds);
-  if (state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
+  const duration = persistRest ? clampRestSeconds(seconds) : Math.max(1, Math.min(600, Math.round(Number(seconds)) || 1));
+  if (persistRest && state.activeWorkout && exerciseIndex !== null && state.activeWorkout.exercises[exerciseIndex]) {
     state.activeWorkout.exercises[exerciseIndex].rest = duration;
   }
+  // A one-off adjustment (+15s, watch catch-up) changes only this rest: the
+  // remembered preset `seconds` stays, and `total` drives the progress ring.
   state.timer = {
-    seconds: duration,
+    seconds: persistRest ? duration : clampRestSeconds(state.timer.seconds),
+    total: duration,
     left: duration,
     running: true,
     startedAt: now,
@@ -2627,7 +2974,13 @@ function startTimer(seconds = state.timer.seconds, fullscreen = false, exerciseI
   ensureTimerTick();
 }
 
+function clearTimerTick() {
+  if (timerTick) clearInterval(timerTick);
+  timerTick = null;
+}
+
 function stopTimer() {
+  clearTimerTick();
   state.timer.running = false;
   state.timer.left = 0;
   state.timer.startedAt = null;
@@ -2647,15 +3000,23 @@ function closeRestOverlay() {
 
 function ensureTimerTick() {
   if (timerTick) clearInterval(timerTick);
+  // Hidden page (locked phone): the native notification rings on time and the
+  // visible branch of visibilitychange re-arms the tick via reconcile. A tick
+  // armed here by a late watch command would ring a second bell on return.
+  if (typeof document !== "undefined" && document.hidden) {
+    timerTick = null;
+    return;
+  }
   timerTick = setInterval(() => {
     if (!state.timer.running) return;
     const left = Math.max(0, Math.ceil((state.timer.endsAt - Date.now()) / 1000));
     if (left === state.timer.left && left > 0) return;
     state.timer.left = left;
     if (left <= 0) {
+      clearTimerTick();
       state.timer.running = false;
       state.timer.left = 0;
-      if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel" });
+      if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "cancel", workoutActive: Boolean(state.activeWorkout) });
       playBoxingBell();
       if (state.timer.fullscreen) {
         saveState();
@@ -2669,10 +3030,15 @@ function ensureTimerTick() {
   }, 250);
 }
 
+function timerTotalSeconds() {
+  return Math.max(1, Number(state.timer.total) || Number(state.timer.seconds) || 1);
+}
+
 function updateTimerDom() {
-  const total = Math.max(1, state.timer.seconds);
+  const total = timerTotalSeconds();
   const left = timerDisplaySeconds();
-  const elapsed = total - left;
+  // Idle: the face shows the preset, which may exceed the last rest's total.
+  const elapsed = state.timer.running || state.timer.fullscreen ? total - left : 0;
   document.querySelectorAll(".timer-face").forEach((face) => {
     face.style.setProperty("--progress", `${Math.min(360, (elapsed / total) * 360)}deg`);
   });
@@ -2755,7 +3121,7 @@ function finishWorkout() {
   const sets = workout.exercises.flatMap((exercise) =>
     exercise.sets
       .filter((set) => set.done)
-      .map((set) => ({ exerciseId: exercise.id, exercise: exercise.name, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps, repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set) }))
+      .map((set) => ({ exerciseId: exercise.id, exercise: exercise.name, weight: isRepsOnlyExercise(exercise) ? "" : set.weight, reps: set.reps, repsOnly: isRepsOnlyExercise(exercise), dropSet: Boolean(set.dropSet), label: set.label || String(set.set), ...(set._unitOrigin?.weight ? { _unitOrigin: { weight: set._unitOrigin.weight } } : {}) }))
   );
   if (sets.length === 0) {
     toast("Complete at least one set before saving.");
@@ -2799,10 +3165,10 @@ function renderSession() {
   const completed = workout.exercises.reduce((sum, ex) => sum + ex.sets.filter((set) => set.done).length, 0);
   const total = workout.exercises.reduce((sum, ex) => sum + ex.sets.length, 0);
   const left = timerDisplaySeconds();
-  const totalTimer = Math.max(1, state.timer.seconds);
+  const totalTimer = timerTotalSeconds();
   const progress = state.timer.running || state.timer.fullscreen ? ((totalTimer - left) / totalTimer) * 360 : 0;
 
-  setTimeout(ensureTimerTick, 0);
+  if (state.timer.running) setTimeout(ensureTimerTick, 0);
 
   return `
     ${renderRestOverlay(left, progress)}
@@ -2810,7 +3176,7 @@ function renderSession() {
       <div>
         <p class="eyebrow">Live workout</p>
         <h1>${escapeHtml(workout.title)}</h1>
-        <p class="muted">${completed} of ${total} sets completed</p>
+        <p class="muted" data-sets-completed>${completed} of ${total} sets completed</p>
       </div>
       <div class="actions">
         <button class="secondary-btn" onclick="finishWorkout()">Save Session</button>
@@ -2873,7 +3239,7 @@ function renderSession() {
                   <div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>
                   ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
                   <input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
-                  <button class="${set.done ? "secondary-btn" : "primary-btn"}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
+                  <button class="${set.done ? "secondary-btn" : "primary-btn"}" data-set-button="${exIndex}-${setIndex}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
                 </div>
               `).join("")}
             </div>
@@ -2970,7 +3336,7 @@ function renderProgress() {
 }
 
 function renderLogbook() {
-  const days = Number(state.logbookRange || 7);
+  const days = logbookDays();
   const report = coachReportData(days);
   const latestMeasurementRows = measurementRows(report.latestMeasurement);
   return `
@@ -3005,14 +3371,14 @@ function renderLogbook() {
       </article>
       <article class="card stat">
         <p class="value">${Math.round(report.volume).toLocaleString()}</p>
-        <p class="label">Volume lbs</p>
+        <p class="label">Volume ${weightUnit()}</p>
       </article>
       <article class="card stat">
         <p class="value">${report.weights.length}</p>
         <p class="label">Weight logs</p>
       </article>
       <article class="card stat">
-        <p class="value">${report.measurements.length}</p>
+        <p class="value">${report.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).length}</p>
         <p class="label">Check-ins</p>
       </article>
     </div>
@@ -3028,13 +3394,13 @@ function renderLogbook() {
         <article class="log-card card">
           <strong>Body weight</strong>
           ${report.weights.slice(0, 6).map((entry) => `
-            <p class="muted">${formatShortDate(entry.date)} - ${entry.bodyweight} lb${entry.note ? ` - ${escapeHtml(entry.note)}` : ""}</p>
+            <p class="muted">${formatShortDate(entry.date)} - ${formatWeight(entry.bodyweight)} ${weightUnit()}${Number(entry.bodyFat) > 0 ? ` · ${formatWeight(entry.bodyFat)}% BF` : ""}${entry.note ? ` - ${escapeHtml(entry.note)}` : ""}</p>
           `).join("") || '<p class="muted">No body weight logs in this range.</p>'}
         </article>
         <article class="log-card card">
           <strong>Latest measurements</strong>
           ${latestMeasurementRows.map(([label, value, unit]) => `
-            <p class="muted">${label}: ${value}${unit}</p>
+            <p class="muted">${escapeHtml(String(label).replace(/ %$/, ""))}: ${escapeHtml(measurementValueText(value, unit))}</p>
           `).join("") || '<p class="muted">No measurements logged yet.</p>'}
         </article>
       </div>
@@ -3048,7 +3414,7 @@ function renderLogbook() {
               <strong>${escapeHtml(log.title)}</strong>
               <span class="badge">${formatShortDate(log.date)}</span>
             </div>
-            <p class="muted">${(log.sets || []).length} sets, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} lbs volume</p>
+            <p class="muted">${plural((log.sets || []).length, "set")}, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume</p>
             <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}</p>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No workouts logged in this range.</p></div>'}
@@ -3064,7 +3430,7 @@ function saveWeight() {
     return;
   }
   if (!isPlausibleBodyweight(bodyweight)) {
-    toast("Enter a body weight between 50 and 700 lb.");
+    toast(bodyweightRangeMessage());
     return;
   }
   const entry = {
@@ -3116,7 +3482,7 @@ function sparkline(values) {
   }).join(" ");
   return `
     <svg class="sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Body weight trend">
-      <polyline points="${points}" fill="none" stroke="#1ED8A5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+      <polyline points="${points}" fill="none" stroke="#2DD4BF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
       <line x1="0" y1="${height - 8}" x2="${width}" y2="${height - 8}" stroke="rgba(255,255,255,0.12)" />
     </svg>
   `;
@@ -3174,7 +3540,7 @@ function render() {
         <div class="sidebar-card">
           <span class="badge blue">${phaseLabel(state.phase)}</span>
           <p style="margin: 12px 0 6px; font-weight: 850;">Road Gym ready</p>
-          <p class="muted">Hotel bench, dumbbells to 50, cable handles, rope, and ankle cuffs.</p>
+          <p class="muted">Hotel bench, dumbbells to 50 lb / 22.5 kg, cable handles, rope, and ankle cuffs.</p>
         </div>
       </aside>
       <main class="main">${renderActiveWorkoutBanner()}${renderContent()}</main>

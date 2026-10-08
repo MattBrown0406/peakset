@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - main
-      - feature/bodybuilder-toolkit
+      - "feature/**"
+      - "fix/**"
   pull_request:
   workflow_dispatch:
 
@@ -21,17 +22,24 @@ jobs:
 
       - name: Validate web and native integration
         run: |
-          node --check app.js
-          node --check toolkit.js
+          for script in *.js; do node --check "$script"; done
           node scripts/validate-source.mjs
-          git diff --exit-code
+          # `git diff` ignores untracked files, so a freshly synced module
+          # would pass unnoticed; fail on any working-tree change at all.
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Bundled web app is out of date. Run scripts/sync-ios-web.sh and commit the result."
+            git status --porcelain
+            exit 1
+          fi
 
       - name: Build iOS Simulator app
         run: |
+          # The scheme builds the iPhone app plus its embedded Live Activity
+          # widget and watchOS app, each against its own simulator SDK.
           xcodebuild \
             -project ios/PeakSet.xcodeproj \
-            -target PeakSet \
+            -scheme PeakSet \
             -configuration Debug \
-            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
             build
