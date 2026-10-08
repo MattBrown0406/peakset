@@ -1364,7 +1364,7 @@ console.log("Audit round 8 checks passed.");
     assert.ok(read("watch.js").includes("command.unit !== weightUnit()") && read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes('"unit": current.unit'), "watch weights carry their unit");
     run19("state.workoutLogs = [{ id: 'gone-1', title: 'Old', date: new Date().toISOString(), sets: [] }]; deleteLogEntry('workout', 'gone-1')");
     assert.ok(run19("state.deletedLogs.some((item) => item.kind === 'workout' && item.id === 'gone-1')"), "deletions are remembered for the coach");
-    assert.ok(read("coach.js").includes("deleted: (Array.isArray(state.deletedLogs) ? state.deletedLogs : []).slice(-300),") && read("coach.js").includes("const tombstones = deletedByKind[kindOf[key]];"), "coach check-ins carry and apply deletions");
+    assert.ok(read("coach.js").includes("deleted: (Array.isArray(state.deletedLogs) ? state.deletedLogs : []).filter(") && read("coach.js").includes("const tombstones = deletedByKind[kindOf[key]];"), "coach check-ins carry and apply deletions");
     // A re-sent program: identical templates are skipped, edited ones update in place.
     run19("window.confirm = () => true; state.customPlans = []");
     const program = (reps) => JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", plans: [{ id: "custom-coach-1", title: "Push A", muscle: "chest", phase: "offseason", rest: 120, note: "x", scheduleDay: "Monday", exercises: [["barbell-bench", 3, reps, 120, 0, {}]] }] });
@@ -1430,6 +1430,35 @@ console.log("Audit round 8 checks passed.");
     assert.equal(vm.runInContext("coachAthletes()[0].workoutLogs.map((log) => log.id).join(',')", coachB.context), "keep-1", "re-opening an old check-in doesn't bring back a deleted workout");
     const reload = makeContext(JSON.parse(coachB.storage.get("stageforge-v1")));
     assert.equal(vm.runInContext("coachAthletes()[0].deleted.length", reload.context), 1, "the coach keeps the athlete's deletions across reloads");
+    // Round 20: rotation still covers every muscle on a limited profile; packages' own lists beat stale deletions.
+    {
+      const rot = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() }, activeEquipmentProfileId: "road-gym" });
+      const runRot = (code) => vm.runInContext(code, rot.context);
+      runRot("window.confirm = () => true; state.activeEquipmentProfileId = 'road-gym'; state.workoutLogs = []");
+      const seen = new Set();
+      for (let i = 0; i < 10; i += 1) {
+        seen.add(runRot(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'rg-${i}', title: plan.title, date: new Date(Date.now() - (20 - ${i}) * 86400000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); return plan.title; })()`));
+      }
+      assert.ok(seen.size >= 4, `Road Gym recommendations rotate (saw ${[...seen].join(", ")})`);
+      const hkPkg = { ...base19, generatedAt: new Date().toISOString(), workoutLogs: [], weightLogs: [{ id: "hk-day-2026-10-05", date: new Date(Date.now() - day).toISOString(), bodyweight: 180 }], deleted: [{ kind: "weight", id: "hk-day-2026-10-05" }] };
+      const coachC = makeContext({ profile: { bodyweight: 210 }, coach: { enabled: true, name: "Kim", athletes: {} } });
+      await vm.runInContext(`importCoachPackage(${JSON.stringify(hkPkg)})`, coachC.context);
+      assert.equal(vm.runInContext("coachAthletes()[0].weightLogs.length", coachC.context), 1, "a package's own entries beat its stale deletion records");
+      const athlete20 = makeContext({ profile: { bodyweight: 200 }, weightLogs: [{ id: "hk-day-x", date: new Date().toISOString(), bodyweight: 180 }], deletedLogs: [{ kind: "weight", id: "hk-day-x", at: new Date().toISOString() }] });
+      const msg = makeContext({ profile: { bodyweight: 200 } });
+      const runMsg = (code) => vm.runInContext(code, msg.context);
+      let asked = 0;
+      msg.context.window.confirm = () => { asked += 1; return true; };
+      const prog20 = (message) => JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", message, plans: [{ id: "p1", title: "Push A", muscle: "chest", phase: "offseason", rest: 120, note: "x", exercises: [["barbell-bench", 3, "8", 120, 0, {}]] }] }));
+      runMsg(`handleIncomingFileText(${prog20("Week 1")})`);
+      runMsg(`handleIncomingFileText(${prog20("Week 2")})`);
+      assert.equal(runMsg("state.view + '|' + state.coachMessage.message"), "today|Week 2", "a message-only re-send opens Today, where the note is shown");
+      runMsg("dismissCoachMessage()");
+      const before = asked;
+      runMsg(`handleIncomingFileText(${prog20("Week 2")})`);
+      assert.equal(asked, before, "a dismissed note is not offered again as new");
+      assert.equal(JSON.parse(JSON.stringify(await vm.runInContext("buildCoachPackage(14)", athlete20.context))).deleted.length, 0, "check-ins don't list entries the athlete still has as deleted");
+    }
     console.log("Audit round 19 checks passed.");
   }
   }

@@ -963,9 +963,11 @@ function sanitizeStoredState(next) {
   if (next.coachMessage !== null && next.coachMessage !== undefined) {
     const message = next.coachMessage;
     next.coachMessage = isObject(message)
-      ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), ...(Number.isFinite(message.newCount) && Number.isFinite(message.updatedCount) ? { newCount: Math.max(0, Math.min(100, Math.trunc(message.newCount))), updatedCount: Math.max(0, Math.min(100, Math.trunc(message.updatedCount))) } : {}), receivedAt: String(message.receivedAt ?? "") }
+      ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), ...(Number.isFinite(message.newCount) && Number.isFinite(message.updatedCount) ? { newCount: Math.max(0, Math.min(100, Math.trunc(message.newCount))), updatedCount: Math.max(0, Math.min(100, Math.trunc(message.updatedCount))) } : {}), ...(message.block === true ? { block: true } : {}), receivedAt: String(message.receivedAt ?? "") }
       : null;
   }
+  const seenNote = next.lastCoachMessageSeen;
+  next.lastCoachMessageSeen = isObject(seenNote) ? { from: String(seenNote.from ?? "").slice(0, 60), message: String(seenNote.message ?? "").slice(0, 2000) } : null;
   next.deletedLogs = (Array.isArray(next.deletedLogs) ? next.deletedLogs : []).filter((item) => isObject(item) && typeof item.id === "string" && typeof item.kind === "string").slice(-300);
   // A stored volume of "1e400" rendered as ∞; 0 makes readers recompute it.
   next.workoutLogs = next.workoutLogs.map((log) => ("volume" in log ? { ...log, volume: finiteOrNull(log.volume) ?? 0 } : log));
@@ -1597,11 +1599,14 @@ function todaysRecommendedPlan(avoidMuscles = [], planFits = null) {
   if (typeof planFits === "function") {
     const fitting = candidates.filter(planFits);
     const travel = planTemplates.filter((plan) => plan.phase === "travel" && planFits(plan));
-    if (fitting.length) candidates = fitting;
-    else if (travel.length) {
-      candidates = travel.filter((plan) => rotation.includes(planMuscle(plan))).length ? travel.filter((plan) => rotation.includes(planMuscle(plan))) : travel;
-      fallback = travel[0];
-    }
+    // Muscles no phase plan can cover with this equipment get a Road Gym
+    // template, so the rotation still reaches every muscle group.
+    const covered = new Set(fitting.map(planMuscle));
+    const travelForRotation = travel.filter((plan) => rotation.includes(planMuscle(plan)) && !covered.has(planMuscle(plan)));
+    const merged = [...fitting, ...travelForRotation];
+    if (merged.length) candidates = merged;
+    else if (travel.length) candidates = travel;
+    if (!fitting.length && travel.length) fallback = travel[0];
   }
   if (!candidates.length) return fallback;
   const lastTrained = Object.fromEntries([...new Set([...rotation, ...candidates.map(planMuscle)])].map((muscle) => [muscle, -Infinity]));
