@@ -153,11 +153,16 @@ function applyHealthBodySamples(samples) {
   state.weightLogs.sort(newestFirst);
   state.measurements.sort(newestFirst);
   if (state.profile && state.weightLogs[0]?.bodyweight) state.profile.bodyweight = state.weightLogs[0].bodyweight;
+  // HealthKit hides read denial by returning no samples. On a first sync
+  // that is far more likely than an empty Health history, so point there.
+  const firstSync = !state.healthBody.lastSyncAt;
   state.healthBody.lastSyncAt = new Date().toISOString();
   delete state.healthBody.resyncFrom;
   state.healthBody.lastResult = changedDays
     ? `Updated ${changedDays} ${changedDays === 1 ? "day" : "days"} from Apple Health.`
-    : "Up to date with Apple Health.";
+    : firstSync && !(Array.isArray(samples) && samples.length)
+      ? "No body data found in Apple Health. If you expected some, allow Mass Method in Settings › Health › Data Access & Devices."
+      : "Up to date with Apple Health.";
   saveState();
   render();
   return changedDays;
@@ -248,7 +253,9 @@ function bodyFatSeries() {
 function renderBodyCompositionCard() {
   const series = bodyFatSeries();
   const latest = series.at(-1);
-  const monthAgo = [...series].reverse().find((point) => !isWithinDays(point.date, 28));
+  // Compare with a reading roughly four weeks old (21-35 days), not any older one.
+  const ageDays = (point) => (Date.now() - Date.parse(point.date)) / 86400000;
+  const monthAgo = [...series].reverse().find((point) => ageDays(point) >= 21 && ageDays(point) <= 35);
   const lean = state.weightLogs.find((entry) => Number(entry.leanMass) > 0);
   if (!latest && !lean && !state.healthBody?.enabled) return "";
   const change = latest && monthAgo ? latest.value - monthAgo.value : null;
@@ -270,12 +277,19 @@ coachReportData = function coachReportWithMergedMeasurements(days) {
   const report = baseCoachReportDataForHealth(days);
   if (!report.measurements.length) return report;
   const merged = { date: report.measurements[0].date, note: report.measurements[0].note || "" };
+  const contributingDates = new Set();
   report.measurements.forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
       if (["id", "date", "note", "source", "healthFields", "_unitOrigin"].includes(key)) return;
-      if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") merged[key] = value;
+      if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") {
+        merged[key] = value;
+        contributingDates.add(entry.date);
+      }
     });
   });
+  // Several check-ins merged: say so instead of stamping old tape values with the newest date and source.
+  const times = [...contributingDates].map((date) => Date.parse(date)).filter(Number.isFinite);
+  if (times.length > 1) merged.note = `Most recent value of each since ${formatShortDate(new Date(Math.min(...times)).toISOString())}`;
   return { ...report, latestMeasurement: merged };
 };
 

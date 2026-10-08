@@ -87,11 +87,13 @@ function mergedLatestMeasurement() {
   const merged = { id: `latest-${newest}`, date: newest, healthFields: [] };
   const fromHealth = (entry, key) => String(entry.id || "").startsWith("hk-") || (Array.isArray(entry.healthFields) && entry.healthFields.includes(key));
   let bodyFatDate = null;
+  const contributingDates = new Set();
   state.measurements.forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
       if (["id", "date", "note", "source", "healthFields", "_unitOrigin"].includes(key)) return;
       if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") {
         merged[key] = value;
+        contributingDates.add(entry.date);
         if (key === "bodyFat") bodyFatDate = entry.date;
         if (fromHealth(entry, key)) merged.healthFields.push(key);
       }
@@ -105,6 +107,9 @@ function mergedLatestMeasurement() {
     merged.healthFields = merged.healthFields.filter((key) => key !== "bodyFat");
     if (fromHealth(scaleBodyFat, "bodyFat")) merged.healthFields.push("bodyFat");
   }
+  // Values merged from several check-ins must not read as all measured on the newest date.
+  const times = [...contributingDates].map((date) => Date.parse(date)).filter(Number.isFinite);
+  if (times.length > 1) merged.sinceDate = new Date(Math.min(...times)).toISOString();
   return merged;
 }
 
@@ -401,13 +406,15 @@ function sanitizePlan(plan, from) {
 
 function importProgram(program) {
   const from = String(program?.from || "your coach").slice(0, 60);
-  const plans = (Array.isArray(program?.plans) ? program.plans : []).slice(0, 50).map((plan) => sanitizePlan(plan, from)).filter(Boolean);
+  const offered = Array.isArray(program?.plans) ? program.plans : [];
+  const plans = offered.slice(0, MAX_PROGRAM_PLANS).map((plan) => sanitizePlan(plan, from)).filter(Boolean);
   const block = program?.block && typeof program.block === "object" ? program.block : null;
   if (!plans.length && !block) {
     toast("That program has no workouts this app can load.");
     return false;
   }
-  const summary = [plans.length ? `${plans.length} workout${plans.length === 1 ? "" : "s"}` : "", block ? `a ${Number(block.accumulationWeeks) || 4}-week training block` : ""].filter(Boolean).join(" and ");
+  // Say so when a program was larger than this app accepts, rather than dropping workouts silently.
+  const summary = [plans.length ? `${plans.length} workout${plans.length === 1 ? "" : "s"}${offered.length > MAX_PROGRAM_PLANS ? ` (the first ${MAX_PROGRAM_PLANS} of ${offered.length})` : ""}` : "", block ? `a ${Number(block.accumulationWeeks) || 4}-week training block` : ""].filter(Boolean).join(" and ");
   if (!window.confirm(`Add ${summary} from ${from}?`)) return false;
   state.customPlans.unshift(...plans);
   if (block) {
@@ -446,9 +453,12 @@ function dismissCoachMessage() {
 
 // ---------- Coach: build and send a program ----------
 
+const MAX_PROGRAM_PLANS = 50;
+
 function toggleProgramPlan(id) {
   const ids = new Set(coachProgramDraft.planIds);
   if (ids.has(id)) ids.delete(id);
+  else if (ids.size >= MAX_PROGRAM_PLANS) return toast(`A program can include up to ${MAX_PROGRAM_PLANS} workouts.`);
   else ids.add(id);
   coachProgramDraft = { ...coachProgramDraft, planIds: [...ids] };
   render();
@@ -525,13 +535,28 @@ function removeAthlete(id) {
   render();
 }
 
+// The check-in's current week is partial (empty on a Monday check-in); show
+// it only once it has training, otherwise the last completed week.
+function athleteVolumeWeek(athlete) {
+  const weeks = safeArray(athlete.volumeWeeks).filter((week) => week && typeof week === "object" && week.totals && typeof week.totals === "object");
+  const total = (week) => Object.values(week.totals).reduce((sum, value) => sum + (Number(value) || 0), 0);
+  return weeks[0] && total(weeks[0]) > 0 ? weeks[0] : weeks[1] || weeks[0] || null;
+}
+
 function athleteSummary(athlete) {
+  // Windows end at the check-in, not at "now": the numbers must not shrink
+  // the longer the coach waits to open it.
+  const anchor = Number.isFinite(Date.parse(athlete.updatedAt)) ? Date.parse(athlete.updatedAt) : Date.now();
+  const within = (date, days) => {
+    const time = Date.parse(date);
+    return Number.isFinite(time) && time <= anchor + 60000 && anchor - time < days * 86400000;
+  };
   const weights = safeArray(athlete.weightLogs).map((entry) => ({ date: entry.date, value: Number(entry.bodyweight) })).filter((entry) => entry.value > 0);
-  const recent = weights.filter((entry) => isWithinDays(entry.date, 7));
+  const recent = weights.filter((entry) => within(entry.date, 7));
   const avg = recent.length ? recent.reduce((sum, entry) => sum + entry.value, 0) / recent.length : null;
-  const prior = weights.filter((entry) => !isWithinDays(entry.date, 7) && isWithinDays(entry.date, 14));
+  const prior = weights.filter((entry) => !within(entry.date, 7) && within(entry.date, 14));
   const priorAvg = prior.length ? prior.reduce((sum, entry) => sum + entry.value, 0) / prior.length : null;
-  const workouts7 = safeArray(athlete.workoutLogs).filter((log) => isWithinDays(log.date, 7)).length;
+  const workouts7 = safeArray(athlete.workoutLogs).filter((log) => within(log.date, 7)).length;
   const checkIn = safeArray(athlete.weeklyCheckIns)[0];
   const days = athlete.updatedAt ? Math.floor((Date.now() - new Date(athlete.updatedAt)) / 86400000) : null;
   return {
@@ -574,7 +599,7 @@ function renderRoster() {
 }
 
 function renderAthleteVolume(athlete) {
-  const week = safeArray(athlete.volumeWeeks)[0];
+  const week = athleteVolumeWeek(athlete);
   if (!week?.totals) return '<p class="muted">No volume data in this check-in.</p>';
   const totals = Object.fromEntries(MUSCLE_GROUPS.map((group) => [group.key, Number(week.totals[group.key]) || 0]));
   const block = athlete.trainingBlock ? { focus: Array.isArray(athlete.trainingBlock.focus) ? athlete.trainingBlock.focus : [] } : null;
@@ -601,9 +626,9 @@ function renderAthleteDetail(athlete) {
     </div>
     <div class="grid two" style="margin-top:12px">
       <section class="card pad"><h2>Body weight</h2>${weights.length > 1 ? sparkline(weights) : '<p class="muted">Needs two weigh-ins.</p>'}</section>
-      <section class="card pad"><h2>Latest measurements</h2>${latestMeasurement ? `<p class="muted">${formatShortDate(latestMeasurement.date)}</p><div class="measurement-grid">${measurementDefinitions.filter(([key]) => latestMeasurement[key] !== null && latestMeasurement[key] !== undefined).map(([key, label]) => `<div class="stat card"><p class="value">${escapeHtml(latestMeasurement[key])}</p><p class="label">${escapeHtml(String(label).replace(/ %$/, ""))} ${key === "bodyFat" ? "%" : lengthLabel}</p></div>`).join("")}</div>` : '<p class="muted">No measurements yet.</p>'}</section>
+      <section class="card pad"><h2>Latest measurements</h2>${latestMeasurement ? `<p class="muted">${latestMeasurement.sinceDate ? `Most recent value of each, ${formatShortDate(latestMeasurement.sinceDate)} to ${formatShortDate(latestMeasurement.date)}` : formatShortDate(latestMeasurement.date)}</p><div class="measurement-grid">${measurementDefinitions.filter(([key]) => latestMeasurement[key] !== null && latestMeasurement[key] !== undefined).map(([key, label]) => `<div class="stat card"><p class="value">${escapeHtml(latestMeasurement[key])}</p><p class="label">${escapeHtml(String(label).replace(/ %$/, ""))} ${key === "bodyFat" ? "%" : lengthLabel}</p></div>`).join("")}</div>` : '<p class="muted">No measurements yet.</p>'}</section>
     </div>
-    <section class="card pad" style="margin-top:12px"><div class="card-head"><div><p class="eyebrow">Weekly volume</p><h2>Hard sets this week</h2></div>${athlete.trainingBlock ? `<span class="badge blue">${escapeHtml(athlete.trainingBlock.statusLine || athlete.trainingBlock.name || "")}</span>` : ""}</div><div class="volume-list">${renderAthleteVolume(athlete)}</div></section>
+    <section class="card pad" style="margin-top:12px"><div class="card-head"><div><p class="eyebrow">Weekly volume</p><h2>${athleteVolumeWeek(athlete)?.weekStart ? `Hard sets, week of ${escapeHtml(formatShortDate(athleteVolumeWeek(athlete).weekStart))}` : "Hard sets"}</h2></div>${athlete.trainingBlock ? `<span class="badge blue">${escapeHtml(athlete.trainingBlock.statusLine || athlete.trainingBlock.name || "")}</span>` : ""}</div><div class="volume-list">${renderAthleteVolume(athlete)}</div></section>
     ${safeArray(athlete.photos).length ? `<section class="card pad" style="margin-top:12px"><p class="eyebrow">Progress photos</p><div class="photo-strip">${safeArray(athlete.photos).map((photo) => `<figure class="photo-thumb">${photoImg(photo)}<figcaption>${escapeHtml(poseLabel(photo.pose))}<br />${formatShortDate(photo.date)}</figcaption></figure>`).join("")}</div></section>` : ""}
     <div class="grid two" style="margin-top:12px">
       <section class="card pad"><h2>Recent workouts</h2><div class="exercise-list">${safeArray(athlete.workoutLogs).slice(0, 8).map((log) => `<div class="exercise-row"><div><strong>${escapeHtml(log.title || "Workout")}</strong><p class="muted" style="margin:2px 0 0">${formatShortDate(log.date)} · ${plural(Number(log.setCount ?? workoutLogSets(log).length) || 0, "set")}</p></div></div>`).join("") || '<p class="muted">No workouts in range.</p>'}</div></section>

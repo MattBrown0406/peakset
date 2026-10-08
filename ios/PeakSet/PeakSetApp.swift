@@ -28,9 +28,26 @@ final class PeakSetAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificat
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // JavaScript plays the native bell while PeakSet is foregrounded.
-        // The local notification supplies the bell only when iOS suspends the app.
-        completionHandler([])
+        // JavaScript plays the bell while the page is on screen. A full-screen
+        // controller (the progress-photo camera) takes the web view out of the
+        // window, which pauses the page's timer, so the notification must ring
+        // itself or the rest ends silently.
+        DispatchQueue.main.async {
+            completionHandler(Self.webViewCoveredByFullScreenController() ? [.banner, .list, .sound] : [])
+        }
+    }
+
+    static func webViewCoveredByFullScreenController() -> Bool {
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }
+        var controller = window?.rootViewController?.presentedViewController
+        while let current = controller {
+            if current.modalPresentationStyle == .fullScreen { return true }
+            controller = current.presentedViewController
+        }
+        return false
     }
 }
 
@@ -55,6 +72,9 @@ struct PeakSetApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     PeakSetAudioSession.activate()
+                    // Recreate the workout's Lock Screen activity if iOS ended it
+                    // (8-hour limit) or it was swiped away; only possible in the foreground.
+                    PeakSetWatchBridge.shared.ensureLiveActivity()
                 }
         }
     }

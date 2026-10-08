@@ -41,11 +41,16 @@ final class PeakSetBackupService {
     private let downloadTimeout: TimeInterval = 30
     private let fileManager = FileManager.default
     private let keepCount = 30
-    /// Set once a restore from iCloud succeeded this launch; only then do
-    /// later list() calls keep copying photos that were still downloading.
-    /// Without it, opening the More tab on a fresh install would pull every
-    /// mirrored photo for an account the athlete has not restored.
-    private let restoredFromICloud = PeakSetAtomicFlag()
+    /// Set when a restore from iCloud succeeds and cleared once every mirrored
+    /// photo has been copied. Persisted so photos still downloading when the
+    /// app was suspended keep arriving on later launches; never set on a
+    /// fresh install that has not restored, so the More tab alone never pulls
+    /// an account's photos. UserDefaults is safe to use from any queue.
+    private static let photoRestorePendingKey = "massmethod.photoRestorePending"
+    private var photoRestorePending: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.photoRestorePendingKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.photoRestorePendingKey) }
+    }
 
     private init() {}
 
@@ -82,7 +87,10 @@ final class PeakSetBackupService {
                 self.prune(directory)
                 // Mirroring can copy every photo on a fresh iCloud account; it
                 // must not delay the "Backed up" status or later snapshots.
-                if location == .iCloud { self.photoQueue.async { self.mirrorPhotosToICloud() } }
+                if location == .iCloud {
+                    self.replayPendingMirrorDeletes()
+                    self.photoQueue.async { self.mirrorPhotosToICloud() }
+                }
                 completion(.success(location))
             } catch {
                 completion(.failure(error))
@@ -110,7 +118,7 @@ final class PeakSetBackupService {
             }
             completion(files.sorted { $0.date > $1.date })
             // Photos still downloading when a restore ran are copied as they land.
-            if self.restoredFromICloud.isSet {
+            if self.photoRestorePending {
                 self.photoQueue.async { self.restorePhotosFromICloud() }
             }
         }
@@ -137,7 +145,7 @@ final class PeakSetBackupService {
                 guard let text = String(data: data, encoding: .utf8) else { throw BackupError.invalidPayload }
                 completion(.success((text, date)))
                 if location == .iCloud {
-                    self.restoredFromICloud.set()
+                    self.photoRestorePending = true
                     self.photoQueue.async { self.restorePhotosFromICloud() }
                 }
             } catch {
@@ -205,19 +213,24 @@ final class PeakSetBackupService {
 
     private func restorePhotosFromICloud() {
         guard let cloudPhotos = iCloudDocuments()?.appendingPathComponent("ProgressPhotos", isDirectory: true) else { return }
+        queue.sync { self.replayPendingMirrorDeletes() }
         if let urls = try? fileManager.contentsOfDirectory(at: cloudPhotos, includingPropertiesForKeys: nil) {
             urls.forEach { try? fileManager.startDownloadingUbiquitousItem(at: $0) }
         }
-        copyMissingFiles(from: cloudPhotos, to: PeakSetPhotoStore.directory)
+        let stillDownloading = copyMissingFiles(from: cloudPhotos, to: PeakSetPhotoStore.directory)
+        if stillDownloading == 0 { photoRestorePending = false }
     }
 
-    /// Copies photos the destination lacks. Photos still downloading from
-    /// iCloud are requested and skipped (a coordinated read would block the
-    /// queue until they land, forever when offline); `list()` retries later.
-    /// Athletes' photos ("coach-") stay local.
-    private func copyMissingFiles(from source: URL, to destination: URL) {
-        guard let urls = try? fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) else { return }
+    /// Copies photos the destination lacks and returns how many were skipped
+    /// because they are still downloading from iCloud (a coordinated read
+    /// would block the queue until they land, forever when offline); `list()`
+    /// retries those on this and later launches. Athletes' photos ("coach-")
+    /// stay local.
+    @discardableResult
+    private func copyMissingFiles(from source: URL, to destination: URL) -> Int {
+        guard let urls = try? fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) else { return 0 }
         try? fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        var stillDownloading = 0
         for url in urls {
             guard let name = Self.realName(of: url), name.hasSuffix(".jpg"), !name.hasPrefix("coach-") else { continue }
             let target = destination.appendingPathComponent(name)
@@ -227,23 +240,52 @@ final class PeakSetBackupService {
             let sourcePlaceholder = source.appendingPathComponent(".\(name).icloud")
             if !Self.isDownloaded(realSource, placeholder: sourcePlaceholder) {
                 try? fileManager.startDownloadingUbiquitousItem(at: realSource)
+                stillDownloading += 1
                 continue
             }
             if let data = try? readCoordinated(realSource) {
                 try? data.write(to: target, options: .atomic)
             }
         }
+        return stillDownloading
     }
 
+    /// Mirror deletions that could not run yet (iCloud unavailable); replayed
+    /// on later snapshots and before photos are restored, so a deleted body
+    /// photo never lingers in iCloud Drive or comes back on restore.
+    private static let pendingMirrorDeletesKey = "massmethod.pendingMirrorDeletes"
+
     func deleteMirroredPhoto(named name: String) {
+        guard Self.realName(of: URL(fileURLWithPath: name)) == name, !name.contains("/") else { return }
         queue.async {
-            guard let url = self.iCloudDocuments()?.appendingPathComponent("ProgressPhotos", isDirectory: true).appendingPathComponent(name),
-                  Self.realName(of: url) == name else { return }
+            if !self.removeMirroredPhoto(named: name) {
+                let pending = UserDefaults.standard.stringArray(forKey: Self.pendingMirrorDeletesKey) ?? []
+                if !pending.contains(name) {
+                    UserDefaults.standard.set(Array((pending + [name]).suffix(500)), forKey: Self.pendingMirrorDeletesKey)
+                }
+            }
+        }
+    }
+
+    /// Returns false when iCloud is unavailable, so the deletion is retried.
+    @discardableResult
+    private func removeMirroredPhoto(named name: String) -> Bool {
+        guard let folder = iCloudDocuments()?.appendingPathComponent("ProgressPhotos", isDirectory: true) else { return false }
+        // An evicted copy exists only as its ".name.icloud" placeholder.
+        for url in [folder.appendingPathComponent(name), folder.appendingPathComponent(".\(name).icloud")] where fileManager.fileExists(atPath: url.path) {
             var coordinationError: NSError?
             NSFileCoordinator().coordinate(writingItemAt: url, options: .forDeleting, error: &coordinationError) { target in
                 try? self.fileManager.removeItem(at: target)
             }
         }
+        return true
+    }
+
+    private func replayPendingMirrorDeletes() {
+        let pending = UserDefaults.standard.stringArray(forKey: Self.pendingMirrorDeletesKey) ?? []
+        guard !pending.isEmpty else { return }
+        let remaining = pending.filter { !removeMirroredPhoto(named: $0) }
+        UserDefaults.standard.set(remaining, forKey: Self.pendingMirrorDeletesKey)
     }
 
     /// Maps ".name.ext.icloud" placeholders to "name.ext"; nil for other hidden files.
@@ -258,22 +300,6 @@ final class PeakSetBackupService {
     static func safeFilename(_ name: String) -> String {
         let cleaned = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: "..", with: "-")
         return cleaned.isEmpty ? "mass-method-backup.json" : cleaned
-    }
-}
-
-/// A set-once flag readable from any queue.
-final class PeakSetAtomicFlag {
-    private let lock = NSLock()
-    private var value = false
-
-    var isSet: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return value
-    }
-
-    func set() {
-        lock.lock(); defer { lock.unlock() }
-        value = true
     }
 }
 

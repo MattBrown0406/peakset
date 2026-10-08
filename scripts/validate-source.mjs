@@ -1151,11 +1151,15 @@ console.log("Audit round 8 checks passed.");
   // Verification follow-ups.
   assert(app.includes("    weeklyCheckIns: [],\n    prepLogs: [],\n    timer: { ...defaultState.timer }"), "freshDefaultState must not alias defaultState arrays");
   assert(toolkit.includes("const cutoff = Date.now() - Number(report.days) * 86400000;"), "Toolkit report cutoff must reuse the coerced day count");
-  assert(backupService.includes("if self.restoredFromICloud.isSet {"), "Backup list must not pull iCloud photos before a restore happened");
+  assert(backupService.includes("if self.photoRestorePending {"), "Backup list must not pull iCloud photos before a restore happened");
   assert(read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes("if let previous = lastScheduledRestEnd, previous != endsAt {"), "Watch must not dismiss a just-delivered alert on a same-rest snapshot");
   // Adversarial inputs: bounded plans, bounded depth, own-property lookups, O(1) name resolution.
-  assert(app.includes("const MAX_PLAN_EXERCISES = 30;") && toolkit.includes(".slice(0, MAX_PLAN_EXERCISES)") && read("coach.js").includes(".slice(0, MAX_PLAN_EXERCISES)"), "Plan exercise counts must be capped everywhere plans enter");
-  assert(read("coach.js").includes(".slice(0, 50).map((plan) => sanitizePlan(plan, from))"), "Imported programs must cap the number of plans");
+  // UI/import cap (40) is enforced where exercises are added; the load-time cap (150) sits above
+  // anything the UI can reach so a reload never truncates a real workout (round 15 regression).
+  assert(app.includes("const MAX_PLAN_EXERCISES = 40;") && app.includes("const MAX_STORED_PLAN_EXERCISES = 150;"), "Plan caps must separate the UI limit from the load-time safety net");
+  assert(!/slice\(0, MAX_PLAN_EXERCISES\)/.test(app) && !/slice\(0, MAX_PLAN_EXERCISES\)/.test(toolkit), "Load-time paths must use the stored-plan cap, not the UI cap");
+  assert(read("coach.js").includes(".slice(0, MAX_PLAN_EXERCISES)") && read("coach.js").includes("offered.slice(0, MAX_PROGRAM_PLANS)"), "Imported programs must be capped");
+  assert(toolkit.includes("if (builderDraft.length >= MAX_PLAN_EXERCISES)") && toolkit.includes("if (state.activeWorkout.exercises.length >= MAX_PLAN_EXERCISES)"), "UI add paths must stop at the exercise cap");
   assert(app.includes("function pruneDeepObjects(root, maxDepth = MAX_STATE_DEPTH)") && app.includes("pruneDeepObjects(parsed)") && read("settings.js").includes("...pruneDeepObjects(payload.state)"), "Loaded and restored state must be depth-pruned");
   assert(read("settings.js").includes("const stack = [rootValue];"), "dropOrigins must be iterative");
   assert(read("settings.js").includes("Object.hasOwn(incomingFileHandlers, format)"), "File dispatcher must not resolve formats through Object.prototype");
@@ -1163,15 +1167,15 @@ console.log("Audit round 8 checks passed.");
   assert(app.includes("}, Object.create(null));"), "PDF exercise grouping must use a null-prototype object");
   assert(app.includes("function exerciseIndexes()") && toolkit.includes("loggedNameIndex = new Map("), "Logged-set exercise resolution must use an index, not a library scan");
   assert(app.includes('next.workoutLogs = next.workoutLogs.map((log) => ("volume" in log ? { ...log, volume: finiteOrNull(log.volume) ?? 0 } : log));'), "Stored workout volume must be finite");
-  assert(toolkit.includes("function planRepsText(value)"), "Plan reps must be validated text");
+  assert(toolkit.includes("function planRepsText(value)") && !toolkit.includes("[0-9A-Za-z .\\-–]{1,20}"), "Plan reps must stay free text (round 15: '10/side' was rewritten to 8-12)");
   {
     // Runtime: a 5k-exercise program is capped and the session still renders; prototype-key names are safe.
     const r12 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
     const run12 = (code) => vm.runInContext(code, r12.context);
     run12("window.confirm = () => true; handleIncomingFileText(JSON.stringify({ format: 'mass-method-program', version: 1, from: 'X', plans: [{ title: 'Huge', exercises: Array.from({ length: 5000 }, () => ['barbell-bench', 10, '8', 90, 4]) }] }))");
-    assert.equal(run12("state.customPlans[0].exercises.length"), 30, "imported program capped at 30 exercises");
+    assert.equal(run12("state.customPlans[0].exercises.length"), 40, "imported program capped at 40 exercises");
     run12("startWorkout(state.customPlans[0].id)");
-    assert.equal(run12("state.activeWorkout.exercises.length"), 30, "started workout capped at 30 exercises");
+    assert.equal(run12("state.activeWorkout.exercises.length"), 40, "started workout keeps the 40 imported exercises");
     assert.ok(run12("renderContent().length") > 1000, "capped session renders");
     run12("cancelWorkout(); state.workoutLogs.unshift({ id: 'c', title: 'T', date: new Date().toISOString(), sets: [{ exercise: 'constructor', exerciseId: '', weight: '100', reps: '5' }] })");
     assert.ok(run12("buildCoachReportLines(7, '').some((line) => line.text.startsWith('constructor:'))"), "PDF groups a set named constructor");
@@ -1182,6 +1186,74 @@ console.log("Audit round 8 checks passed.");
     const r12b = makeContext(stored12);
     assert.ok(vm.runInContext("JSON.stringify(nativeBackupPayload()).length", r12b.context) > 0, "snapshot survives a deeply nested stored value");
     assert.ok(vm.runInContext("JSON.stringify(state.junk).length", r12b.context) < 400, "deeply nested stored values are pruned on load");
+  }
+  // Round 15: free-text reps survive save + reload; a live workout above the UI cap survives reload;
+  // the watch's "100." weight is accepted; an invalid watch value never wipes the phone's value.
+  {
+    const r15 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run15 = (code) => vm.runInContext(code, r15.context);
+    run15("window.confirm = () => true");
+    run15("builderDraft = ['10/side', '12, 10, 8', '8-10 (pause)', '10+10', '1:00'].map((reps) => ({ id: 'barbell-bench', sets: 3, reps, rest: 90, dropSets: 0, group: '', setType: 'standard' })); saveBuilderTemplate()");
+    const savedReps = run15("JSON.stringify(state.customPlans[0].exercises.map((row) => row[2]))");
+    assert.equal(savedReps, JSON.stringify(["10/side", "12, 10, 8", "8-10 (pause)", "10+10", "1:00"]), "builder reps are kept verbatim");
+    const reloaded15 = makeContext(JSON.parse(r15.storage.get("stageforge-v1")));
+    assert.equal(vm.runInContext("JSON.stringify(state.customPlans[0].exercises.map((row) => row[2]))", reloaded15.context), savedReps, "builder reps survive reload");
+    // A live workout beyond the UI cap (built by an older version) keeps every exercise and logged set on reload.
+    run15("startWorkout('chest-density'); const ids = exerciseLibrary.map((item) => item.id).filter((id) => !state.activeWorkout.exercises.some((exercise) => exercise.id === id)).slice(0, 40); ids.forEach((id) => state.activeWorkout.exercises.push({ id, originalId: id, name: exerciseById(id).name, repsOnly: false, targetSets: 1, targetDropSets: 0, targetReps: '8-12', rest: 90, group: '', defaultSetType: 'standard', sets: [{ set: 1, label: '1', dropSet: false, setType: 'standard', weight: '50', reps: '10', rir: '', done: true }] })); saveState()");
+    const liveCount = run15("state.activeWorkout.exercises.length");
+    assert.ok(liveCount > 40, "test workout exceeds the UI cap");
+    const reloadedLive = makeContext(JSON.parse(r15.storage.get("stageforge-v1")));
+    assert.equal(vm.runInContext("state.activeWorkout.exercises.length", reloadedLive.context), liveCount, "reload never truncates a live workout");
+    assert.equal(vm.runInContext("state.activeWorkout.exercises.at(-1).sets[0].done", reloadedLive.context), true, "logged set on the last exercise survives reload");
+    // Watch "100." is accepted; garbage keeps the phone's typed value.
+    run15("cancelWorkout(); startWorkout('chest-density'); updateSet(0, 0, 'weight', '100.004'); updateSet(0, 0, 'reps', '8')");
+    assert.equal(run15("handleWatchCommand({ action: 'completeSet', exIndex: 0, setIndex: 0, weight: '100.', reps: '8', commandId: 'w-100' })"), true, "watch weight '100.' completes the set");
+    assert.equal(run15("state.activeWorkout.exercises[0].sets[0].weight"), "100", "trailing dot is normalized");
+    run15("updateSet(0, 1, 'weight', '95'); updateSet(0, 1, 'reps', '8')");
+    run15("handleWatchCommand({ action: 'completeSet', exIndex: 0, setIndex: 1, weight: {}, reps: '8', commandId: 'w-bad' })");
+    assert.equal(run15("state.activeWorkout.exercises[0].sets[1].weight"), "95", "an invalid watch weight never wipes the phone's value");
+  }
+  assert(read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes('#"\\.?0+$"#'), "Watch weight formatting must not leave a trailing decimal point");
+  assert(backupService.includes("private static let photoRestorePendingKey") && !backupService.includes("PeakSetAtomicFlag"), "Pending iCloud photo restores must persist across launches");
+  // Round 15 domain logic: what the app tells the athlete.
+  {
+    const volumeJs = read("volume.js");
+    const coachJs = read("coach.js");
+    const watchJs15 = read("watch.js");
+    assert(volumeJs.includes("low = high = Math.round(high * 0.5);"), "Deload target must be half the last build week, not half the minimum");
+    assert(toolkit.includes("function progressionRirLimit()") && volumeJs.includes("progressionRirLimit = function blockProgressionRirLimit()"), "Progression must use the block's weekly RIR target");
+    assert(coachJs.includes("const anchor = Number.isFinite(Date.parse(athlete.updatedAt))") && coachJs.includes("function athleteVolumeWeek(athlete)"), "Coach stats must anchor at the check-in and show a week with training");
+    assert(app.includes('<p class="label">Workouts, last 7 days</p>') && app.includes('<p class="label">Measurement check-ins</p>') && app.includes("addReportSection(lines, `Summary (last ${days} days)`);"), "Stat labels must match what they count");
+    assert(app.includes("That weigh-in is already saved.") && toolkit.includes("workout.savedTemplateId"), "Double taps must not duplicate weigh-ins or templates");
+    assert(watchJs15.includes("const order = set?.dropSet ? [previousSet, lastDone] : [lastDone, previousSet];"), "Watch drop sets must be suggested from previous drops");
+    assert(read("health.js").includes("const monthAgo = [...series].reverse().find((point) => ageDays(point) >= 21 && ageDays(point) <= 35);"), "Body composition must compare against a reading about four weeks old");
+    assert(app.includes("const checklist = stageChecklist({ ...timeline, phase: timeline.goalDateRaw && timeline.phase === \"prep\" ? \"prep\" : chosenPhase });"), "Checklist must follow the athlete's chosen phase");
+    const r16 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run16 = (code) => vm.runInContext(code, r16.context);
+    assert.equal(run16("estimateOneRepMax(315, 1)"), 315, "a single's estimated 1RM is the weight lifted");
+    assert.equal(run16("estimateOneRepMax(400, 40)"), 0, "sets above 30 reps are not 1RM tests");
+    assert.equal(run16("estimatedOneRepMax(225, 10)"), run16("estimateOneRepMax(225, 10)"), "Library and History use one 1RM estimate");
+    assert.equal(run16("nextLoadableWeight('flat-db-press', 60)"), 65, "dumbbell progression jumps to the next 5 lb dumbbell");
+    run16("setUnits('metric')");
+    assert.equal(run16("nextLoadableWeight('barbell-bench', 124.74)"), 126.25, "kg progression adds one step and lands on a loadable 1.25 kg weight");
+    assert.equal(run16("nextLoadableWeight('barbell-bench', 100)"), 101.25, "on-grid kg weights add exactly one step");
+  }
+  // Round 15 native: camera rests ring, denied notifications explained, Health de-dup, Live Activity at workout start.
+  {
+    const appSwift = read("ios/PeakSet/PeakSetApp.swift");
+    const servicesSwift = read("ios/PeakSet/PeakSetNativeServices.swift");
+    const bridgeSwift = read("ios/PeakSet/PeakSetWatchBridge.swift");
+    const liveSwift = read("ios/PeakSet/PeakSetLiveActivity.swift");
+    assert(appSwift.includes("completionHandler(Self.webViewCoveredByFullScreenController() ? [.banner, .list, .sound] : [])"), "A rest ending under the full-screen camera must still ring");
+    assert(servicesSwift.includes("self.onAuthorizationDenied?()") && toolkit.includes("window.handleNativeTimerAuth = handleNativeTimerAuth;"), "Denied notifications must be reported to the athlete");
+    assert(servicesSwift.includes("metadata[HKMetadataKeySyncIdentifier]") && toolkit.includes("id: latestWeight?.id || null"), "Send Weight must replace, not duplicate, Health samples");
+    assert(servicesSwift.includes("(error as? HKError)?.code == .errorNoData"), "No step data must read as zero steps");
+    assert(liveSwift.includes("nonisolated func showReady(") && bridgeSwift.includes("if started { ensureLiveActivity() }") && appSwift.includes("PeakSetWatchBridge.shared.ensureLiveActivity()"), "The Lock Screen activity must start with the workout");
+    assert(bridgeSwift.includes("private let acknowledgedKey") && liveSwift.includes("if let target, abs(state.endsAt.timeIntervalSince(target)) > 5 { continue }"), "Late watch commands must not move or cancel a newer rest");
+    assert(bridgeSwift.includes("guard Thread.isMainThread else {\n            DispatchQueue.main.async { self.flushSnapshot() }"), "Snapshot flushes must be serialized");
+    assert(backupService.includes("private static let pendingMirrorDeletesKey") && backupService.includes('folder.appendingPathComponent(".\\(name).icloud")'), "Deleted photos must be removed from the iCloud mirror, including evicted copies");
+    assert(swiftWebView.includes("PeakSetIncomingFiles.shared.detach()\n        PeakSetWatchBridge.shared.detach()") && swiftWebView.includes("private var pendingPhotoReplies"), "Native replies must survive a page reload");
+    assert(read("ios/MassMethodWatch/WatchWorkoutView.swift").includes("WatchWorkoutModel.maxReps : WatchWorkoutModel.maxWeight"), "Watch crown range must match the clamps");
   }
   console.log("Audit round 12 checks passed.");
 }

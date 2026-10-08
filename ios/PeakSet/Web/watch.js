@@ -25,13 +25,18 @@ function firstNumber(text, fallback) {
 
 function suggestedSetValues(exercise, setIndex) {
   const set = exercise.sets[setIndex];
-  const doneSets = exercise.sets.filter((item) => item.done);
-  const lastDone = doneSets.at(-1);
+  // Working sets and drop sets are suggested from their own kind: a drop must
+  // not be pre-filled with the working weight.
+  const sameKind = (item) => Boolean(item.dropSet) === Boolean(set?.dropSet);
+  const lastDone = exercise.sets.filter((item) => item.done && sameKind(item)).at(-1);
+  const ordinal = exercise.sets.slice(0, setIndex).filter(sameKind).length;
   const previous = typeof lastExercisePerformance === "function" ? lastExercisePerformance(exercise.id) : null;
-  const previousSet = previous?.sets?.filter((item) => Boolean(item.dropSet) === Boolean(set?.dropSet))?.[Math.min(setIndex, (previous?.sets?.length || 1) - 1)];
+  const previousKind = (previous?.sets || []).filter(sameKind);
+  const previousSet = previousKind[Math.min(ordinal, previousKind.length - 1)];
+  const order = set?.dropSet ? [previousSet, lastDone] : [lastDone, previousSet];
   return {
-    weight: String(set?.weight || lastDone?.weight || previousSet?.weight || ""),
-    reps: String(set?.reps || lastDone?.reps || previousSet?.reps || firstNumber(exercise.targetReps, "8"))
+    weight: String(set?.weight || order[0]?.weight || order[1]?.weight || ""),
+    reps: String(set?.reps || order[0]?.reps || order[1]?.reps || firstNumber(exercise.targetReps, "8"))
   };
 }
 
@@ -205,10 +210,16 @@ function applyWatchCommand(command) {
     }
     const set = exercise?.sets?.[setIndex];
     if (!set || set.done) return false;
-    // The watch sends plain numbers; anything else is dropped before it is stored.
-    const numericText = (value) => { const text = String(value ?? "").trim(); return /^\d{1,6}(\.\d{1,3})?$/.test(text) ? text : ""; };
-    if (!isRepsOnlyExercise(exercise)) updateSet(exIndex, setIndex, "weight", numericText(command.weight));
-    updateSet(exIndex, setIndex, "reps", numericText(command.reps));
+    // The watch sends plain numbers (older builds can send "100."); anything
+    // else is ignored rather than written over the value already on the phone.
+    const numericText = (value) => {
+      const text = String(value ?? "").trim();
+      return /^\d{1,6}(\.\d{0,3})?$/.test(text) ? text.replace(/\.$/, "") : null;
+    };
+    const weight = numericText(command.weight);
+    const reps = numericText(command.reps);
+    if (!isRepsOnlyExercise(exercise) && weight !== null) updateSet(exIndex, setIndex, "weight", weight);
+    if (reps !== null) updateSet(exIndex, setIndex, "reps", reps);
     // startTimer replaces the timer object, so identity tells whether this
     // completion started a new rest (start times can match to the millisecond).
     const timerObjectBefore = state.timer;

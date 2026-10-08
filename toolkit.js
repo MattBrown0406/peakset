@@ -103,7 +103,7 @@ function toolkitMigrateState() {
     id: safeId.test(String(plan.id)) ? plan.id : `custom-${crypto.randomUUID()}`,
     // Every row goes through normalizePlanExercise so a restored array row
     // with an object in the reps slot cannot render "[object Object] x 8".
-    exercises: (Array.isArray(plan?.exercises) ? plan.exercises : []).slice(0, MAX_PLAN_EXERCISES).map((draft) => {
+    exercises: (Array.isArray(plan?.exercises) ? plan.exercises : []).slice(0, MAX_STORED_PLAN_EXERCISES).map((draft) => {
       const spec = normalizePlanExercise(draft);
       return [spec.id, spec.sets, spec.reps, spec.rest, spec.dropSets, { group: spec.group, setType: spec.setType }];
     })
@@ -145,10 +145,11 @@ function clampDropSetCount(value) {
   return Math.max(0, Math.min(4, Math.trunc(Number(value)) || 0));
 }
 
-// Reps are display text ("8-12", "20 sec", "12 each"); anything else is noise.
+// Reps are free display text the athlete types ("10/side", "8-10 (pause)",
+// "1:00"); every render escapes it. Only non-text values fall back.
 function planRepsText(value) {
-  const text = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
-  return /^[0-9A-Za-z .\-–]{1,20}$/.test(text) ? text : "8-12";
+  const text = typeof value === "number" && Number.isFinite(value) ? String(value) : typeof value === "string" ? value.trim().slice(0, 40) : "";
+  return text || "8-12";
 }
 
 function normalizePlanExercise(spec) {
@@ -320,15 +321,32 @@ function lastExercisePerformance(id) {
 }
 
 function estimatedOneRepMax(weight, reps) {
-  const load = Number(weight) || 0;
-  const count = Number(reps) || 0;
-  if (!load || !count) return 0;
-  return load * (1 + Math.min(count, 30) / 30);
+  return estimateOneRepMax(weight, reps);
 }
 
 function targetRepCeiling(target) {
   const matches = String(target || "").match(/\d+/g);
   return matches?.length ? Number(matches[matches.length - 1]) : null;
+}
+
+// Highest RIR that still counts as "at target" for adding load. volume.js
+// replaces this with the active block's weekly target, so week 1 at 3 RIR
+// progresses instead of contradicting the block.
+function progressionRirLimit() {
+  return 2;
+}
+
+// Next loadable weight: dumbbells jump 5 lb / 2 kg; plates 2.5 lb (5 for legs)
+// or 1.25 kg (2.5 for legs). Rounds from the logged weight, which may be a
+// converted value such as 124.74 kg.
+function nextLoadableWeight(exerciseId, bestWeight) {
+  const library = exerciseById(exerciseId);
+  const legs = library.muscle === "legs";
+  const dumbbell = /dumbbell/i.test(String(library.equipment || ""));
+  const step = dumbbell ? (isMetric() ? 2 : 5) : isMetric() ? (legs ? 2.5 : 1.25) : (legs ? 5 : 2.5);
+  let next = Math.round((bestWeight + step) / step) * step;
+  if (next <= bestWeight) next += step;
+  return next;
 }
 
 function progressionSuggestion(exercise) {
@@ -344,17 +362,20 @@ function progressionSuggestion(exercise) {
     const bestReps = Math.max(...workingAny.map((set) => Number(set.reps)));
     return `Bodyweight sets. Beat ${bestReps} reps on your best set, then add load or slow the tempo.`;
   }
-  const working = previous.sets.filter((set) => !set.dropSet && Number(set.weight) > 0 && Number(set.reps) > 0);
-  if (!working.length) return "Repeat the movement and establish working-set performance.";
-  const rirOnTarget = (rir) => rir === "" || rir == null || rir === "failure" || Number(rir) <= 2;
+  const loaded = previous.sets.filter((set) => !set.dropSet && Number(set.weight) > 0 && Number(set.reps) > 0);
+  if (!loaded.length) return "Repeat the movement and establish working-set performance.";
+  // Top/back-off schemes progress on the top set; back-offs are lighter by design.
+  const tops = loaded.filter((set) => set.setType === "top");
+  const working = tops.length ? tops : loaded.filter((set) => set.setType !== "backoff").length ? loaded.filter((set) => set.setType !== "backoff") : loaded;
+  const rirLimit = progressionRirLimit();
+  const rirOnTarget = (rir) => rir === "" || rir == null || rir === "failure" || Number(rir) <= rirLimit;
   const allAtTop = working.every((set) => Number(set.reps) >= ceiling && rirOnTarget(set.rir));
   const bestWeight = Math.max(...working.map((set) => Number(set.weight)));
+  const which = tops.length ? "top sets" : "working sets";
   if (allAtTop) {
-    const legs = exerciseById(exercise.id).muscle === "legs";
-    const increment = isMetric() ? (legs ? 2.5 : 1.25) : (legs ? 5 : 2.5);
-    return `All working sets reached ${ceiling}+ reps. Try ${formatWeight(bestWeight + increment, 2)} ${weightUnit()} next time if form and RIR stay on target.`;
+    return `All ${which} reached ${ceiling}+ reps. Try ${formatWeight(nextLoadableWeight(exercise.id, bestWeight), 2)} ${weightUnit()} next time if form and RIR stay on target.`;
   }
-  return `Keep ${formatWeight(bestWeight, 2)} ${weightUnit()} and add reps until every working set reaches ${ceiling} with 0-2 RIR.`;
+  return `Keep ${formatWeight(bestWeight, 2)} ${weightUnit()} and add reps until every ${which.slice(0, -1)} reaches ${ceiling} with 0-${rirLimit} RIR.`;
 }
 
 function renderLastPerformance(id) {
@@ -383,7 +404,7 @@ function renderExerciseHistoryPanel(id) {
       <div class="card-head"><div><p class="eyebrow">Exercise history</p><h2>${escapeHtml(exercise.name)}</h2></div><button class="ghost-btn" onclick="closeExerciseHistory()">Close</button></div>
       <div class="grid three">
         <div class="stat card"><p class="value">${bestWeight || "--"}</p><p class="label">Best weight</p></div>
-        <div class="stat card"><p class="value">${bestE1rm ? Math.round(bestE1rm) : "--"}</p><p class="label">Estimated 1RM</p></div>
+        <div class="stat card"><p class="value">${bestE1rm ? formatWeight(bestE1rm, 1) : "--"}</p><p class="label">Estimated 1RM</p></div>
         <div class="stat card"><p class="value">${sets.length}</p><p class="label">Logged sets</p></div>
       </div>
       ${e1rmValues.length > 1 ? `<div style="margin-top:12px">${sparkline(e1rmValues)}</div>` : ""}
@@ -497,6 +518,7 @@ function addToolkitBuilderExercise() {
   const draft = state.builderFormDraft || defaultBuilderFormDraft();
   const id = draft.exerciseId;
   if (!id || !exerciseLibrary.some((exercise) => exercise.id === id && exerciseMatchesEquipmentProfile(exercise))) return toast("Choose an exercise available in this equipment profile.");
+  if (builderDraft.length >= MAX_PLAN_EXERCISES) return toast(`A workout can hold up to ${MAX_PLAN_EXERCISES} exercises.`);
   builderDraft.push({
     id,
     sets: Number(draft.sets) || 3,
@@ -519,6 +541,7 @@ function moveBuilderExercise(index, direction) {
 }
 
 function duplicateBuilderExercise(index) {
+  if (builderDraft.length >= MAX_PLAN_EXERCISES) return toast(`A workout can hold up to ${MAX_PLAN_EXERCISES} exercises.`);
   builderDraft.splice(index + 1, 0, { ...normalizePlanExercise(builderDraft[index]) });
   saveState();
   render();
@@ -660,7 +683,7 @@ beginWorkoutFromPlan = function beginToolkitWorkout(plan) {
     toast("Finish or cancel your current workout before starting another.");
     return false;
   }
-  const specs = (Array.isArray(plan?.exercises) ? plan.exercises : []).map(normalizePlanExercise).filter((spec) => exerciseLibrary.some((item) => item.id === spec.id)).slice(0, MAX_PLAN_EXERCISES);
+  const specs = (Array.isArray(plan?.exercises) ? plan.exercises : []).map(normalizePlanExercise).filter((spec) => exerciseLibrary.some((item) => item.id === spec.id)).slice(0, MAX_STORED_PLAN_EXERCISES);
   const planIds = new Set(specs.map((spec) => spec.id));
   const usedIds = new Set();
   const quickLog = String(plan?.id || "").startsWith("quick-");
@@ -755,6 +778,7 @@ function addLiveExercise() {
   const id = document.getElementById("liveExerciseAdd")?.value;
   if (!id || !state.activeWorkout) return;
   if (!liveExerciseCandidates().some((item) => item.id === id)) return toast("That exercise is already in this workout or unavailable here.");
+  if (state.activeWorkout.exercises.length >= MAX_PLAN_EXERCISES) return toast(`A workout can hold up to ${MAX_PLAN_EXERCISES} exercises.`);
   const exercise = exerciseById(id);
   const spec = { id, sets: 3, reps: "8-12", rest: DEFAULT_REST_SECONDS, dropSets: 0, group: "", setType: "standard" };
   state.activeWorkout.exercises.push({ id, originalId: id, name: exercise.name, repsOnly: exercise.muscle === "abs", targetSets: 3, targetDropSets: 0, targetReps: "8-12", rest: DEFAULT_REST_SECONDS, group: "", defaultSetType: "standard", sets: toolkitSetRows(spec) });
@@ -795,8 +819,11 @@ function adjustLiveSets(exIndex, delta) {
 function saveActiveWorkoutAsTemplate() {
   const workout = state.activeWorkout;
   if (!workout) return;
+  // One template per live workout; a second tap must not add a copy.
+  if (workout.savedTemplateId && state.customPlans.some((plan) => plan.id === workout.savedTemplateId)) return toast("This workout is already saved as a template.");
+  workout.savedTemplateId = `custom-${Date.now()}`;
   state.customPlans.unshift({
-    id: `custom-${Date.now()}`,
+    id: workout.savedTemplateId,
     title: `${workout.title} Template`,
     muscle: exerciseById(workout.exercises[0].id).muscle,
     phase: workout.phase || state.phase,
@@ -1031,13 +1058,23 @@ function weeklyAverageWeight() {
   return values.length ? values.reduce((sum,value) => sum + value,0) / values.length : null;
 }
 
+// Native tells the page when notifications are off: locked-phone rests would
+// end silently, so say so once per launch.
+let notificationsOffWarned = false;
+function handleNativeTimerAuth(payload) {
+  if (payload?.granted !== false || notificationsOffWarned) return;
+  notificationsOffWarned = true;
+  toast("Notifications are off, so the rest bell can't ring while your phone is locked. Turn them on in Settings › Mass Method › Notifications.");
+}
+window.handleNativeTimerAuth = handleNativeTimerAuth;
+
 function requestHealthKit(action = "authorize") {
   const bridge = window.webkit?.messageHandlers?.peaksetHealthKit;
   if (!bridge) return toast("HealthKit is available in the iOS app.");
   // Readings imported from Apple Health are never sent back as duplicates.
   const latestWeight = state.weightLogs.find((entry) => !String(entry.id || "").startsWith("hk-"));
   if (action === "syncWeight" && !(Number(latestWeight?.bodyweight) > 0)) return toast("Log a body weight before sending it to Apple Health.");
-  bridge.postMessage({ action, weight: latestWeight?.bodyweight || null, unit: weightUnit(), date: latestWeight?.date || null });
+  bridge.postMessage({ action, weight: latestWeight?.bodyweight || null, unit: weightUnit(), date: latestWeight?.date || null, id: latestWeight?.id || null });
 }
 
 function handleNativeHealthKit(payload) {
@@ -1072,7 +1109,7 @@ renderProgress = function renderToolkitProgress() {
   const average = weeklyAverageWeight();
   return `
     <div class="compact-page-header"><p class="eyebrow">Progress command center</p><h1>Training, physique, recovery, and prep in one check-in.</h1></div>
-    <div class="grid three"><article class="card stat"><p class="value">${average ? average.toFixed(1) : "--"}</p><p class="label">7-day average weight</p></article><article class="card stat"><p class="value">${prep?.steps?.toLocaleString() || "--"}</p><p class="label">Latest steps</p></article><article class="card stat"><p class="value">${checkIn?.recovery || "--"}</p><p class="label">Latest recovery / 5</p></article></div>
+    <div class="grid three"><article class="card stat"><p class="value">${average ? average.toFixed(1) : "--"}</p><p class="label">7-day average weight</p></article><article class="card stat"><p class="value">${state.prepLogs.find((entry) => Number(entry.steps) > 0)?.steps?.toLocaleString() || "--"}</p><p class="label">Latest steps</p></article><article class="card stat"><p class="value">${checkIn?.recovery || "--"}</p><p class="label">Latest recovery / 5</p></article></div>
     <div class="grid two progress-grid" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Frequent log</p><h2>Body Weight</h2><div class="grid two"><div class="field"><label>Scale weight</label><input id="logWeight" type="number" step="0.1" value="${latestManualWeight?.bodyweight || ""}" /></div><div class="field"><label>Note</label><input id="logWeightNote" placeholder="Morning fasted..." /></div></div><button class="primary-btn" onclick="saveWeight()">Save Weight</button><div class="actions" style="margin-top:10px"><button class="secondary-btn" onclick="requestHealthKit('authorize')">Connect Apple Health</button><button class="secondary-btn" onclick="requestHealthKit('readSteps')">Import Steps</button><button class="secondary-btn" onclick="requestHealthKit('syncWeight')">Send Weight</button></div><p class="muted">${escapeHtml(state.healthKitStatus)}</p></section><section class="card pad"><h2>Body Weight Trend</h2>${weights.length > 1 ? sparkline(weights) : '<div class="empty"><p class="muted">Add two weigh-ins.</p></div>'}</section></div>
     <div class="grid two progress-grid" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Physique check-in</p><h2>Expanded Measurements</h2><div class="measurement-grid">${measurementFields("measure")}</div><button class="primary-btn" onclick="saveMeasurement()">Save Measurements</button></section><section class="card pad"><div class="card-head"><h2>Measurement Trend</h2><select onchange="setMeasurementTrend(this.value)">${measurementDefinitions.map(([key,label]) => `<option value="${key}" ${key === trendKey ? "selected" : ""}>${label}</option>`).join("")}</select></div>${trendValues.length > 1 ? sparkline(trendValues) : '<div class="empty"><p class="muted">Add two measurements for this marker.</p></div>'}${latestMeasurement ? `<div class="measurement-grid" style="margin-top:12px">${measurementDefinitions.map(([key,label]) => `<div class="stat card"><p class="value">${latestMeasurementValue(key) ?? "--"}</p><p class="label">${label}</p></div>`).join("")}</div>` : ""}</section></div>
     <div class="grid two" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Weekly check-in</p><h2>Recovery and readiness</h2><div class="grid three">${[["checkSleep","Sleep","0.5"],["checkEnergy","Energy / 5","1"],["checkHunger","Hunger / 5","1"],["checkDigestion","Digestion / 5","1"],["checkRecovery","Recovery / 5","1"]].map(([id,label,step]) => `<div class="field"><label>${label}</label><input id="${id}" type="number" min="1" max="${id === "checkSleep" ? 24 : 5}" step="${step}" /></div>`).join("")}</div><div class="field"><label>Notes</label><textarea id="checkNotes" rows="3" placeholder="Sleep, joints, appetite, stress..."></textarea></div><button class="primary-btn" onclick="saveWeeklyCheckIn()">Save Weekly Check-In</button></section><section class="card pad"><p class="eyebrow">Contest-prep adherence</p><h2>Cardio, Steps, and Posing</h2><div class="grid two"><div class="field"><label>Cardio type</label><input id="prepCardioType" placeholder="Incline treadmill" /></div><div class="field"><label>Minutes</label><input id="prepCardioMinutes" type="number" min="0" /></div><div class="field"><label>Steps</label><input id="prepSteps" type="number" min="0" /></div><div class="field"><label>Posing minutes</label><input id="prepPosing" type="number" min="0" /></div></div><div class="field"><label>Notes</label><input id="prepNotes" placeholder="Coach-prescribed work and adherence..." /></div><button class="primary-btn" onclick="savePrepLog()">Save Prep Activity</button></section></div>

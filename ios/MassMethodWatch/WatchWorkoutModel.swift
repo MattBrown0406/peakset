@@ -416,7 +416,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
 
     static func format(_ value: Double) -> String {
         let safe = clampWeight(value)
-        return safe.rounded() == safe ? String(Int(safe)) : String(format: "%.2f", safe).replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
+        return safe.rounded() == safe ? String(Int(safe)) : String(format: "%.2f", safe).replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
     }
 
     static func formatReps(_ value: Double) -> String {

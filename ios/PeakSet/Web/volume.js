@@ -200,7 +200,9 @@ function groupWeeklyTarget(group, info = blockWeekInfo(), block = state.training
   let high = group.high * scale;
   if (info?.status === "active") {
     if (info.deload) {
-      low = high = Math.round(group.min * 0.5);
+      // Half of the last build week's target (which equals `high`), matching
+      // the halved plan the app prescribes; group.min halved read "Over target".
+      low = high = Math.round(high * 0.5);
     } else {
       const span = Math.max(1, block.accumulationWeeks - 1);
       const target = low + ((high - low) * info.weekIndex) / span;
@@ -498,6 +500,11 @@ renderSession = function renderSessionWithBlock() {
   const info = blockWeekInfo();
   if (!state.activeWorkout || info?.status !== "active") return html;
   return `<div class="block-banner ${info.deload ? "deload" : ""}">${escapeHtml(renderBlockStatusLine(info))}</div>${html}`;
+};
+
+progressionRirLimit = function blockProgressionRirLimit() {
+  const info = blockWeekInfo();
+  return info?.status === "active" && !info.deload && Number.isFinite(info.targetRir) ? Math.max(2, info.targetRir) : 2;
 };
 
 const baseProgressionForVolume = progressionSuggestion;

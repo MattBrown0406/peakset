@@ -47,6 +47,10 @@ struct PeakSetWebView: UIViewRepresentable {
         }
         uiView.stopLoading()
         uiView.navigationDelegate = nil
+        // Queue opened files and watch commands until a new page attaches.
+        PeakSetIncomingFiles.shared.detach()
+        PeakSetWatchBridge.shared.detach()
+        PeakSetTimerService.shared.onAuthorizationDenied = nil
         coordinator.webView = nil
     }
 
@@ -138,6 +142,14 @@ struct PeakSetWebView: UIViewRepresentable {
                     if applied { acknowledge() }
                 }
             }
+            PeakSetTimerService.shared.onAuthorizationDenied = { [weak self] in
+                self?.callJavaScript("handleNativeTimerAuth", argument: ["granted": false])
+            }
+            // A photo saved while the page was reloading (content process killed
+            // under camera memory pressure) would otherwise be an orphan file.
+            let queuedPhotoReplies = pendingPhotoReplies
+            pendingPhotoReplies.removeAll()
+            queuedPhotoReplies.forEach(reportPhoto)
             #if DEBUG
             // Simulator smoke tests: `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='...' xcrun simctl launch ...`
             if let script = ProcessInfo.processInfo.environment["MASSMETHOD_DEBUG_JS"], !script.isEmpty {
@@ -197,11 +209,21 @@ struct PeakSetWebView: UIViewRepresentable {
             webView.reload()
         }
 
+        /// "saved" replies that could not reach the page; replayed on the next load.
+        private var pendingPhotoReplies: [[String: Any]] = []
+
+        private func reportPhoto(_ result: [String: Any]) {
+            callJavaScript("handleNativePhoto", argument: result) { [weak self] delivered in
+                guard !delivered, (result["status"] as? String) == "saved" else { return }
+                self?.pendingPhotoReplies.append(result)
+            }
+        }
+
         private func handlePhoto(_ body: Any) {
             guard let payload = body as? [String: Any], let action = payload["action"] as? String else { return }
             let pose = payload["pose"] as? String ?? ""
             let report: ([String: Any]) -> Void = { [weak self] result in
-                self?.callJavaScript("handleNativePhoto", argument: result)
+                DispatchQueue.main.async { self?.reportPhoto(result) }
             }
             switch action {
             case "capture", "library":
@@ -357,7 +379,7 @@ struct PeakSetWebView: UIViewRepresentable {
                     return
                 }
                 let kilograms = (payload["unit"] as? String) == "kg"
-                service.saveWeight(value: weight, kilograms: kilograms, date: date) { [weak self] result in
+                service.saveWeight(value: weight, kilograms: kilograms, date: date, syncID: payload["id"] as? String) { [weak self] result in
                     self?.sendHealthKitResult(action: action, result.map { value -> [String: Any] in ["status": "weightSaved", "message": value] })
                 }
             case "saveWorkout":

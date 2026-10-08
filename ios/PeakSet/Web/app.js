@@ -5,7 +5,11 @@ const DEFAULT_REST_SECONDS = 180;
 const LOGBOOK_RANGES = [7, 14, 30];
 // A plan or live workout from an imported program/backup must stay renderable:
 // 50k exercises froze the session view and persisted across launches.
-const MAX_PLAN_EXERCISES = 30;
+// What the builder, live workout, and coach imports allow.
+const MAX_PLAN_EXERCISES = 40;
+// Load-time safety net only: above anything the UI can reach (the library has
+// ~120 distinct exercises), so it never truncates a real workout or template.
+const MAX_STORED_PLAN_EXERCISES = 150;
 const MAX_PLAN_SETS = 14;
 const MAX_STATE_DEPTH = 16;
 
@@ -922,7 +926,7 @@ function sanitizeStoredState(next) {
   const workout = next.activeWorkout;
   if (workout !== null && workout !== undefined) {
     const exercises = isObject(workout) && Array.isArray(workout.exercises)
-      ? workout.exercises.filter((exercise) => isObject(exercise) && Array.isArray(exercise.sets) && exerciseLibrary.some((item) => item.id === exercise.id)).slice(0, MAX_PLAN_EXERCISES).map((exercise) => ({
+      ? workout.exercises.filter((exercise) => isObject(exercise) && Array.isArray(exercise.sets) && exerciseLibrary.some((item) => item.id === exercise.id)).slice(0, MAX_STORED_PLAN_EXERCISES).map((exercise) => ({
           ...exercise,
           name: String(exercise.name ?? exerciseById(exercise.id).name),
           targetSets: Math.max(1, Math.min(12, Math.trunc(finiteOrNull(exercise.targetSets) ?? 3))),
@@ -1490,6 +1494,15 @@ function normalizedExerciseName(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+// One estimate everywhere (History tab, Library panel, sparklines): a
+// single is the weight actually lifted, and sets above 30 reps are not used.
+function estimateOneRepMax(weight, reps) {
+  const load = Number(weight);
+  const count = Number(reps);
+  if (!Number.isFinite(load) || !Number.isFinite(count) || load <= 0 || count <= 0 || count > 30) return 0;
+  return count === 1 ? load : load * (1 + count / 30);
+}
+
 let exerciseIdIndex = null;
 let exerciseNameIndex = null;
 
@@ -1546,9 +1559,7 @@ function exerciseHistoryData(exerciseId) {
         const repsOnly = Boolean(set.repsOnly) || exercise.muscle === "abs";
         // Reps-only (abs) work tracks total reps instead of load x reps.
         const volume = repsOnly ? reps || 0 : weight !== null && reps !== null ? weight * reps : 0;
-        const estimatedOneRepMax = weight !== null && reps !== null && reps <= 30
-          ? weight * (1 + reps / 30)
-          : 0;
+        const estimatedOneRepMax = weight !== null && reps !== null ? estimateOneRepMax(weight, reps) : 0;
         return {
           weight,
           reps,
@@ -1724,7 +1735,7 @@ function measurementRows(entry) {
 }
 
 function coachReportData(days) {
-  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.round(Number(days)) : logbookDays();
+  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.max(1, Math.round(Number(days))) : logbookDays();
   const workouts = state.workoutLogs.filter((log) => isWithinDays(log.date, days));
   const weights = state.weightLogs.filter((log) => isWithinDays(log.date, days));
   const measurements = state.measurements.filter((log) => isWithinDays(log.date, days));
@@ -1766,7 +1777,7 @@ function addReportSection(lines, title) {
 }
 
 function buildCoachReportLines(days, coachNote = "") {
-  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.round(Number(days)) : logbookDays();
+  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.max(1, Math.round(Number(days))) : logbookDays();
   const report = coachReportData(days);
   const profile = state.profile || {};
   const lines = [
@@ -1781,7 +1792,7 @@ function buildCoachReportLines(days, coachNote = "") {
     lines.push({ text: coachNote, size: 10 });
   }
 
-  addReportSection(lines, "Weekly Summary");
+  addReportSection(lines, `Summary (last ${days} days)`);
   lines.push({ text: `Workouts: ${report.workouts.length}`, size: 10 });
   lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString()} ${weightUnit()}`, size: 10 });
   lines.push({ text: `Body weight logs: ${report.weights.length}`, size: 10 });
@@ -2305,7 +2316,11 @@ function saveStageGoal() {
 function renderStageTimeline() {
   const timeline = getStageTimeline();
   const trend = weightTrendSummary();
-  const checklist = stageChecklist(timeline);
+  // Without a show date the timeline's phase is only a placeholder, so the
+  // checklist follows the phase the athlete picked; within 16 weeks of a show
+  // it is contest prep whatever the picker says.
+  const chosenPhase = ["offseason", "bulking", "prep"].includes(state.phase) ? state.phase : timeline.phase;
+  const checklist = stageChecklist({ ...timeline, phase: timeline.goalDateRaw && timeline.phase === "prep" ? "prep" : chosenPhase });
   const profile = state.profile || {};
   return `
     <section class="card pad stage-timeline">
@@ -2388,11 +2403,11 @@ function renderToday() {
     <div class="grid today-stats">
       <article class="card stat">
         <p class="value">${s.workouts}</p>
-        <p class="label">Workouts this week</p>
+        <p class="label">Workouts, last 7 days</p>
       </article>
       <article class="card stat">
         <p class="value">${Math.round(s.weeklyVolume).toLocaleString()}</p>
-        <p class="label">Weekly volume ${weightUnit()}</p>
+        <p class="label">Volume ${weightUnit()}, last 7 days</p>
       </article>
       <article class="card stat">
         <p class="value">${formatWeight(s.lastWeight?.bodyweight || profile.bodyweight)}</p>
@@ -2785,6 +2800,10 @@ function exerciseHasProgress(exercise) {
 
 function addExerciseToActiveWorkout() {
   if (!state.activeWorkout) return false;
+  if (state.activeWorkout.exercises.length >= MAX_PLAN_EXERCISES) {
+    toast(`A workout can hold up to ${MAX_PLAN_EXERCISES} exercises.`);
+    return false;
+  }
   const id = document.getElementById("activeExerciseToAdd")?.value;
   const exercise = exerciseLibrary.find((item) => item.id === id);
   if (!exercise) return false;
@@ -3379,7 +3398,7 @@ function renderLogbook() {
       </article>
       <article class="card stat">
         <p class="value">${report.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).length}</p>
-        <p class="label">Check-ins</p>
+        <p class="label">Measurement check-ins</p>
       </article>
     </div>
     <section class="card pad" style="margin-top: 16px;">
@@ -3431,6 +3450,11 @@ function saveWeight() {
   }
   if (!isPlausibleBodyweight(bodyweight)) {
     toast(bodyweightRangeMessage());
+    return;
+  }
+  const latest = state.weightLogs[0];
+  if (latest && Number(latest.bodyweight) === bodyweight && Date.now() - Date.parse(latest.date) < 60000) {
+    toast("That weigh-in is already saved.");
     return;
   }
   const entry = {

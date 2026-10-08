@@ -80,7 +80,7 @@ private struct SetEntryView: View {
                         } minus: {
                             model.weight = max(0, model.weight - model.weightStep)
                         } plus: {
-                            model.weight += model.weightStep
+                            model.weight = min(WatchWorkoutModel.maxWeight, model.weight + model.weightStep)
                         }
                     }
                     ValueRow(label: "reps", value: WatchWorkoutModel.formatReps(model.reps), selected: editingReps || model.exercise?.repsOnly == true) {
@@ -88,7 +88,7 @@ private struct SetEntryView: View {
                     } minus: {
                         model.reps = max(1, model.reps - 1)
                     } plus: {
-                        model.reps += 1
+                        model.reps = min(WatchWorkoutModel.maxReps, model.reps + 1)
                     }
                     Button(action: model.completeSet) {
                         Text("Complete Set")
@@ -107,7 +107,7 @@ private struct SetEntryView: View {
         .digitalCrownRotation(
             editingReps || model.exercise?.repsOnly == true ? $model.reps : $model.weight,
             from: editingReps || model.exercise?.repsOnly == true ? 1 : 0,
-            through: editingReps || model.exercise?.repsOnly == true ? 100 : 1500,
+            through: editingReps || model.exercise?.repsOnly == true ? WatchWorkoutModel.maxReps : WatchWorkoutModel.maxWeight,
             by: editingReps || model.exercise?.repsOnly == true ? 1 : model.weightStep,
             sensitivity: .low
         )
