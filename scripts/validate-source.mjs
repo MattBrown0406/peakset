@@ -1506,6 +1506,20 @@ console.log("Audit round 8 checks passed.");
       const sk = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, total: 90, running: true, fullscreen: false, startedAt: Date.now(), endsAt: Date.now() + 86400000 } });
       assert.ok(vm.runInContext("state.timer.left", sk.context) <= 90, "a rest saved before the clock moved back stays within its length");
     }
+    // Round 23: a "Drop set" typed working row is a drop; finished picks give way; undo cancels its rest.
+    {
+      const d = makeContext({ profile: { bodyweight: 200 } });
+      const runD = (code) => vm.runInContext(code, d.context);
+      runD("window.confirm = () => true; window.scrollTo = () => {}; state.workoutLogs = [{ id: 'b1', title: 'Bench', date: new Date(Date.now() - 2 * 86400000).toISOString(), sets: [1, 2, 3].map((n) => ({ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '225', reps: '12', rir: '1', setType: 'standard', label: String(n), targetReps: '8-12' })).concat([{ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '165', reps: '7', rir: '', setType: 'drop', label: '4', targetReps: '8-12' }]) }]");
+      assert.ok(runD("progressionSuggestion({ id: 'barbell-bench', name: 'Barbell Bench Press', targetReps: '8-12', sets: [] })").includes("Try "), "a working row typed as a drop set doesn't block progression");
+      assert.equal(runD("setHardSetValue({ setType: 'drop' })"), 0.5, "a drop-typed row counts as half a hard set");
+      runD("chooseTodayWorkout('chest-density'); state.workoutLogs.unshift({ id: 'today1', title: planTemplates.find((plan) => plan.id === 'chest-density').title, date: new Date().toISOString(), sets: [] })");
+      assert.notEqual(runD("todaysSelectedPlan().id"), "chest-density", "Today moves on after the picked workout is finished");
+      runD("startWorkout('back-thickness'); const ex23 = state.activeWorkout.exercises[0]; ex23.sets[0].weight = '100'; ex23.sets[0].reps = '8'; completeSet(0, 0)");
+      assert.equal(runD("state.timer.running"), true, "completing a set starts its rest");
+      runD("completeSet(0, 0)");
+      assert.equal(runD("state.timer.running"), false, "undoing that set cancels its rest");
+    }
     console.log("Audit round 19 checks passed.");
   }
   }

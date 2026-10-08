@@ -1686,10 +1686,17 @@ function todayPreviewPlan(plan) {
   return plan;
 }
 
+// Titles of workouts finished today (local day).
+function finishedTodayTitles() {
+  const today = new Date().toDateString();
+  return new Set((state.workoutLogs || []).filter((log) => Number.isFinite(Date.parse(log?.date)) && new Date(log.date).toDateString() === today).map((log) => log.title));
+}
+
 function todaysSelectedPlan() {
   const pickedToday = state.todayPlanId && state.todayPlanDate === new Date().toDateString();
   const selected = pickedToday ? allPlans().find((plan) => plan.id === state.todayPlanId) : null;
-  return selected || todaysRecommendedPlan();
+  // A picked workout that has been finished today gives way to the next one.
+  return (selected && !finishedTodayTitles().has(selected.title) ? selected : null) || todaysRecommendedPlan();
 }
 
 function todayWorkoutSelect() {

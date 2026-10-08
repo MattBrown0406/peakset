@@ -361,12 +361,14 @@ function progressionSuggestion(exercise) {
     return bestReps ? `Reps-only movement. Beat ${bestReps} reps on your best set, or slow the tempo.` : "Reps-only movement. Log reps to track progression.";
   }
   const ceiling = targetRepCeiling(exercise.targetReps || previous.targetReps || "8-12") || 12;
-  const workingAny = previous.sets.filter((set) => !set.dropSet && Number(set.reps) > 0);
+  // A row whose set type is "Drop set" is a drop even without the D-row flag.
+  const isDrop = (set) => set.dropSet || set.setType === "drop";
+  const workingAny = previous.sets.filter((set) => !isDrop(set) && Number(set.reps) > 0);
   if (workingAny.length && workingAny.every((set) => !(Number(set.weight) > 0))) {
     const bestReps = Math.max(...workingAny.map((set) => Number(set.reps)));
     return `Bodyweight sets. Beat ${bestReps} reps on your best set, then add load or slow the tempo.`;
   }
-  const loaded = previous.sets.filter((set) => !set.dropSet && Number(set.weight) > 0 && Number(set.reps) > 0);
+  const loaded = previous.sets.filter((set) => !isDrop(set) && Number(set.weight) > 0 && Number(set.reps) > 0);
   if (!loaded.length) return "Repeat the movement and establish working-set performance.";
   // Top/back-off schemes progress on the top set; back-offs are lighter by design.
   const tops = loaded.filter((set) => set.setType === "top");
@@ -407,7 +409,7 @@ function renderExerciseHistoryPanel(id) {
     <section class="card pad toolkit-history">
       <div class="card-head"><div><p class="eyebrow">Exercise history</p><h2>${escapeHtml(exercise.name)}</h2></div><button class="ghost-btn" onclick="closeExerciseHistory()">Close</button></div>
       <div class="grid three">
-        <div class="stat card"><p class="value">${bestWeight || "--"}</p><p class="label">Best weight</p></div>
+        <div class="stat card"><p class="value">${bestWeight ? formatWeight(bestWeight, 2) : "--"}</p><p class="label">Best weight (${weightUnit()})</p></div>
         <div class="stat card"><p class="value">${bestE1rm ? formatWeight(bestE1rm, 1) : "--"}</p><p class="label">Estimated 1RM</p></div>
         <div class="stat card"><p class="value">${sets.length}</p><p class="label">Logged sets</p></div>
       </div>
@@ -707,7 +709,8 @@ const baseTodaysRecommendedPlan = todaysRecommendedPlan;
 todaysRecommendedPlan = function scheduledRecommendedPlan() {
   const day = new Date().toLocaleDateString("en-US", { weekday: "long" });
   const scheduled = state.customPlans.find((plan) => plan.scheduleDay === day);
-  if (scheduled) return scheduled;
+  // Once today's scheduled workout is done, Today moves on to the rotation.
+  if (scheduled && !finishedTodayTitles().has(scheduled.title)) return scheduled;
   // Don't recommend today the muscles tomorrow's scheduled template trains.
   // Calendar day, not +24 h: on the short spring-forward day +24 h lands on
   // the day after tomorrow.
@@ -957,9 +960,14 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
   if (set.done) {
     state.activeWorkout.lastExerciseIndex = exIndex;
     state.activeWorkout.lastSetAt = Date.now();
+    state.activeWorkout.lastSetKey = `${exIndex}-${setIndex}`;
+  } else {
+    // Undoing the set that started the running rest cancels that rest.
+    if (state.activeWorkout.lastSetKey === `${exIndex}-${setIndex}` && state.timer.running && state.timer.exerciseIndex === exIndex) stopTimer();
+    if (state.activeWorkout.lastSetKey === `${exIndex}-${setIndex}`) state.activeWorkout.lastSetKey = null;
+    // Undoing a mis-tap on an untouched exercise lets the watch move on.
+    if (state.activeWorkout.lastExerciseIndex === exIndex && !exercise.sets.some((item) => item.done)) state.activeWorkout.lastExerciseIndex = null;
   }
-  // Undoing a mis-tap on an untouched exercise lets the watch move on.
-  else if (state.activeWorkout.lastExerciseIndex === exIndex && !exercise.sets.some((item) => item.done)) state.activeWorkout.lastExerciseIndex = null;
   saveState();
   if (set.done) {
     const group = exercise.group;

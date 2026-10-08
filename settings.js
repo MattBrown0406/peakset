@@ -348,11 +348,13 @@ function refreshNativeBackups() {
 
 // One restore at a time: an iCloud download can take up to 30 s.
 let restoreInProgress = false;
+let restoringBackupIndex = -1;
 function restoreNativeBackup(index) {
   const backup = nativeBackups[index];
   const bridge = nativeBackupBridge();
   if (!backup || !bridge || restoreInProgress) return;
   restoreInProgress = true;
+  restoringBackupIndex = index;
   if (state.view === "more" || onboardingRestoreOpen) render();
   bridge.postMessage({ action: "restore", name: backup.name, location: backup.location });
   toast(String(backup.location || "").startsWith("iCloud") ? "Restoring… iCloud may take up to 30 seconds to download the backup." : "Restoring…");
@@ -425,8 +427,8 @@ function renderRestoreCard() {
   const native = Boolean(nativeBackupBridge());
   const list = nativeBackups.slice(0, 10).map((backup, index) => `
     <div class="exercise-row">
-      <div><strong>${formatShortDate(backup.date)}${Number.isFinite(Date.parse(backup.date)) ? `, ${new Date(backup.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}</strong><p class="muted" style="margin:2px 0 0">${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))}\u00a0KB</p></div>
-      <button class="secondary-btn" onclick="restoreNativeBackup(${index})" ${restoreInProgress ? "disabled" : ""}>${restoreInProgress ? "Restoring…" : "Restore"}</button>
+      <div><strong>${formatShortDate(backup.date)}</strong><p class="muted" style="margin:2px 0 0">${Number.isFinite(Date.parse(backup.date)) ? `${new Date(backup.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ` : ""}${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))}\u00a0KB</p></div>
+      <button class="secondary-btn" onclick="restoreNativeBackup(${index})" ${restoreInProgress ? "disabled" : ""}>${restoreInProgress && restoringBackupIndex === index ? "Restoring…" : "Restore"}</button>
     </div>
   `).join("");
   let status = "";
@@ -449,8 +451,8 @@ function renderBackupCard() {
   const native = Boolean(nativeBackupBridge());
   const list = nativeBackups.slice(0, 10).map((backup, index) => `
     <div class="exercise-row">
-      <div><strong>${formatShortDate(backup.date)}${Number.isFinite(Date.parse(backup.date)) ? `, ${new Date(backup.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}</strong><p class="muted" style="margin:2px 0 0">${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))}\u00a0KB</p></div>
-      <button class="secondary-btn" onclick="restoreNativeBackup(${index})" ${restoreInProgress ? "disabled" : ""}>${restoreInProgress ? "Restoring…" : "Restore"}</button>
+      <div><strong>${formatShortDate(backup.date)}</strong><p class="muted" style="margin:2px 0 0">${Number.isFinite(Date.parse(backup.date)) ? `${new Date(backup.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ` : ""}${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))}\u00a0KB</p></div>
+      <button class="secondary-btn" onclick="restoreNativeBackup(${index})" ${restoreInProgress ? "disabled" : ""}>${restoreInProgress && restoringBackupIndex === index ? "Restoring…" : "Restore"}</button>
     </div>
   `).join("");
   return `
