@@ -19,6 +19,8 @@ final class PeakSetLiveActivityManager {
         let nextSetLabel: String
         let completedSets: Int
         let totalSets: Int
+        /// The page sent the rest's real start (keep it as is).
+        var startedAtFromPage = false
     }
 
     nonisolated func show(_ rest: Rest) {
@@ -113,7 +115,7 @@ final class PeakSetLiveActivityManager {
         let existing = Activity<RestTimerAttributes>.activities.first(where: { $0.attributes.workoutTitle == rest.workoutTitle && ($0.activityState == .active || $0.activityState == .stale) })
         let sameRest = existing.map { abs($0.content.state.endsAt.timeIntervalSince(rest.endsAt)) < 1 } ?? false
         let state = RestTimerAttributes.ContentState(
-            startedAt: sameRest ? (existing?.content.state.startedAt ?? rest.startedAt) : rest.startedAt,
+            startedAt: sameRest && !rest.startedAtFromPage ? (existing?.content.state.startedAt ?? rest.startedAt) : rest.startedAt,
             endsAt: rest.endsAt,
             exerciseName: rest.exerciseName,
             nextSetLabel: rest.nextSetLabel,

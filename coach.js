@@ -330,7 +330,8 @@ function mergeById(existing, incoming, limitDays = COACH_HISTORY_DAYS) {
   // athlete's phone may run a few minutes fast).
   return [...byId.values()]
     .filter((entry) => isWithinDays(entry.date, limitDays) || (Date.parse(entry.date) > Date.now() && Date.parse(entry.date) - Date.now() < 86400000))
-    .sort((a, b) => new Date(b.date) - new Date(a.date));
+    // On the same date the "latest-…" summary (every metric) comes first.
+    .sort((a, b) => new Date(b.date) - new Date(a.date) || Number(String(b.id || "").startsWith("latest-")) - Number(String(a.id || "").startsWith("latest-")));
 }
 
 async function importCoachPackage(pkg) {
@@ -551,7 +552,9 @@ function importProgram(program) {
   const offeredBlock = program?.block && typeof program.block === "object" ? program.block : null;
   // The same block re-opened (same file again) must not replace the running
   // block or re-queue it.
-  const blockKey = offeredBlock ? JSON.stringify([from, offeredBlock.name, offeredBlock.accumulationWeeks, offeredBlock.focus, offeredBlock.start]) : "";
+  // The send time makes each sent program unique; a coach sending the next
+  // block with the same settings is a new block.
+  const blockKey = offeredBlock ? JSON.stringify([from, String(program?.createdAt || ""), offeredBlock.name, offeredBlock.accumulationWeeks, offeredBlock.focus, offeredBlock.start]) : "";
   const block = offeredBlock && ![state.trainingBlock?.sourceKey, state.pendingTrainingBlock?.sourceKey].includes(blockKey) ? offeredBlock : null;
   const message = String(program?.message || "").slice(0, 2000);
   if (!plans.length && !updates.length && !block) {

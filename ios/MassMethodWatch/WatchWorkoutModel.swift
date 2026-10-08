@@ -12,6 +12,9 @@ struct WatchSnapshot: Codable, Equatable {
         var reps: String
         var done: Bool
         let drop: Bool
+        /// The phone's pre-fill for this set; nil from older iPhone builds.
+        var suggestedWeight: String? = nil
+        var suggestedReps: String? = nil
     }
 
     struct Exercise: Codable, Equatable {
@@ -195,7 +198,9 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         snapshot = current
         let (restFollows, partner) = Self.supersetNext(in: current, exerciseIndex: exerciseIndex, setIndex: set.index)
         let restEnds = completedAt.addingTimeInterval(max(15, exercise.rest ?? 120))
-        if restFollows {
+        // No rest after the workout's last set (the phone skips it too).
+        let anyOpen = current.exercises.contains { $0.sets.contains { !$0.done } }
+        if restFollows && anyOpen {
             localRest = (completedAt, restEnds)
             localRestStartedOnWatch = true
         }
@@ -229,7 +234,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             "reps": repsText,
             "completedAt": completedAt.timeIntervalSince1970 * 1000,
             // Lets a locked iPhone show this rest on the Lock Screen.
-            "restEndsAt": restFollows ? restEnds.timeIntervalSince1970 * 1000 : 0,
+            "restEndsAt": restFollows && anyOpen ? restEnds.timeIntervalSince1970 * 1000 : 0,
             "workoutTitle": current.title,
             "exerciseName": upcomingSet == nil ? "Workout complete" : (upcoming?.name ?? exercise.name),
             "nextSetLabel": upcomingSet.map { "Set \($0.label) of \(upcoming?.sets.count ?? 0)" } ?? "",
@@ -336,13 +341,14 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         guard next != snapshot else { return }
         let previousSet = nextSet?.index
         let previousExercise = selectedExercise
-        let previousValues = nextSet.map { ($0.weight, $0.reps) }
+        let previousValues = nextSet.map { [$0.weight, $0.reps, $0.suggestedWeight ?? "", $0.suggestedReps ?? ""] }
         let previousUnit = snapshot?.unit
         snapshot = next
         if followCurrent || !next.exercises.indices.contains(selectedExercise) {
             selectedExercise = next.exercises.indices.contains(next.currentExercise) ? next.currentExercise : 0
         }
-        let valuesChanged = nextSet.map { ($0.weight, $0.reps) }.map { $0 != (previousValues?.0 ?? "", previousValues?.1 ?? "") } ?? false
+        // Typed values or the phone's suggestion for the target set changed.
+        let valuesChanged = nextSet.map { [$0.weight, $0.reps, $0.suggestedWeight ?? "", $0.suggestedReps ?? ""] != (previousValues ?? ["", "", "", ""]) } ?? false
         // Reload when the target set moved, or when the phone typed new values
         // and the athlete has not started editing on the watch.
         // A unit switch on the phone makes any draft number meaningless.
@@ -360,8 +366,17 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         // The phone's number inputs accept anything ("1e400", 20 digits); an
         // unclamped value would trap in Int() and crash the watch on every
         // launch until the phone edited that set.
-        weight = Self.clampWeight(Double(set?.weight.isEmpty == false ? set!.weight : exercise.suggestedWeight) ?? 0)
-        reps = Self.clampReps(Double(set?.reps.isEmpty == false ? set!.reps : exercise.suggestedReps) ?? 8)
+        // Same rule as the phone: a working set follows the working set just
+        // done (on this watch too, while the iPhone is locked); a drop follows
+        // last session's matching drop, never the working weight.
+        let lastDone = set.flatMap { target in exercise.sets.last { $0.done && $0.drop == target.drop } }
+        let candidates: [(String?, String?)] = set?.drop == true
+            ? [(set?.suggestedWeight, set?.suggestedReps), (lastDone?.weight, lastDone?.reps)]
+            : [(lastDone?.weight, lastDone?.reps), (set?.suggestedWeight, set?.suggestedReps)]
+        let pickedWeight = set?.weight.isEmpty == false ? set!.weight : (candidates.compactMap { $0.0 }.first { !$0.isEmpty } ?? exercise.suggestedWeight)
+        let pickedReps = set?.reps.isEmpty == false ? set!.reps : (candidates.compactMap { $0.1 }.first { !$0.isEmpty } ?? exercise.suggestedReps)
+        weight = Self.clampWeight(Double(pickedWeight) ?? 0)
+        reps = Self.clampReps(Double(pickedReps) ?? 8)
         loadingDraft = false
         draftEdited = false
     }

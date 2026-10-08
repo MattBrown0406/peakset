@@ -209,7 +209,13 @@ final class PeakSetBackupService {
         }
         let stamp: (URL) -> String = { url in
             let name = Self.realName(of: url) ?? url.lastPathComponent
-            guard let range = name.range(of: #"\d{4}-\d{2}-\d{2}(T\d{2}-\d{2}-\d{2})?"#, options: .regularExpression) else { return "" }
+            guard let range = name.range(of: #"\d{4}-\d{2}-\d{2}(T\d{2}-\d{2}-\d{2})?"#, options: .regularExpression) else {
+                // A file without a date in its name sorts by its modification date.
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
+                return formatter.string(from: modified(url))
+            }
             let found = String(name[range])
             return found.count == 10 ? found + "T00-00-00" : found
         }

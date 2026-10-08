@@ -346,7 +346,8 @@ struct PeakSetWebView: UIViewRepresentable {
                 // The rest's real start keeps the Lock Screen bar in step with
                 // the app after +15 s or a watch catch-up.
                 let startedAtMs = (payload["startedAt"] as? NSNumber)?.doubleValue
-                let startedAt = startedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }.flatMap { $0 < endsAt && $0 <= Date() ? $0 : nil } ?? Date()
+                let pageStart = startedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }.flatMap { $0 < endsAt && $0 <= Date().addingTimeInterval(1) ? $0 : nil }
+                let startedAt = pageStart ?? Date()
                 PeakSetLiveActivityManager.shared.show(.init(
                     startedAt: startedAt,
                     endsAt: endsAt,
@@ -354,7 +355,8 @@ struct PeakSetWebView: UIViewRepresentable {
                     exerciseName: payload["exerciseName"] as? String ?? "Next set",
                     nextSetLabel: payload["nextSetLabel"] as? String ?? "",
                     completedSets: (payload["completedSets"] as? NSNumber)?.intValue ?? 0,
-                    totalSets: (payload["totalSets"] as? NSNumber)?.intValue ?? 0
+                    totalSets: (payload["totalSets"] as? NSNumber)?.intValue ?? 0,
+                    startedAtFromPage: pageStart != nil
                 ))
             } else {
                 PeakSetLiveActivityManager.shared.end()

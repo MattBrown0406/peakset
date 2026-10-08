@@ -97,14 +97,21 @@ function buildWatchSnapshot() {
       repsOnly: isRepsOnlyExercise(exercise),
       suggestedWeight: suggestion.weight,
       suggestedReps: suggestion.reps,
-      sets: exercise.sets.map((set, setIndex) => ({
-        index: setIndex,
-        label: String(set.label || set.set),
-        weight: String(set.weight ?? ""),
-        reps: String(set.reps ?? ""),
-        done: Boolean(set.done),
-        drop: Boolean(set.dropSet)
-      }))
+      sets: exercise.sets.map((set, setIndex) => {
+        // Each open set carries its own suggestion (drops from last session's
+        // matching drop), so the watch can pre-fill every set correctly even
+        // while the iPhone is locked.
+        const own = set.done ? null : suggestedSetValues(exercise, setIndex);
+        return {
+          index: setIndex,
+          label: String(set.label || set.set),
+          weight: String(set.weight ?? ""),
+          reps: String(set.reps ?? ""),
+          done: Boolean(set.done),
+          drop: Boolean(set.dropSet),
+          ...(own ? { suggestedWeight: String(own.weight ?? ""), suggestedReps: String(own.reps ?? "") } : {})
+        };
+      })
     };
   });
   const allSets = workout.exercises.flatMap((exercise) => exercise.sets);

@@ -1576,6 +1576,22 @@ console.log("Audit round 8 checks passed.");
       vm.runInContext(`handleIncomingFileText(${prog27})`, pb.context);
       assert.equal(vm.runInContext("state.trainingBlock.id", pb.context) + "|" + (asks - before27), blockId + "|0", "re-opening the same program doesn't replace or re-queue its block");
     }
+    // Round 28: per-set watch suggestions; a new block with the same settings is queued; latest summary first.
+    {
+      const ws = makeContext({ profile: { bodyweight: 200 }, workoutLogs: [{ id: 'prev', title: 'Bench', date: new Date(Date.now() - 3 * 86400000).toISOString(), sets: [1, 2, 3].map((n) => ({ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '100', reps: '10', label: String(n) })).concat([{ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '60', reps: '10', label: 'D1', dropSet: true }]) }] });
+      const runWs = (code) => vm.runInContext(code, ws.context);
+      runWs("window.confirm = () => true; startWorkout('chest-density'); state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'barbell-bench', name: 'Barbell Bench Press', sets: [{ set: 1, label: '1', weight: '105', reps: '8', done: true }, { set: 2, label: '2', weight: '', reps: '', done: false }, { set: 3, label: 'D1', weight: '', reps: '', done: false, dropSet: true }] }");
+      const snap = JSON.parse(runWs("JSON.stringify(buildWatchSnapshot())"));
+      const sets28 = snap.exercises[0].sets;
+      assert.equal(sets28[1].suggestedWeight + "|" + sets28[2].suggestedWeight, "105|60", "each open set carries its own watch pre-fill (working follows today's set; drop follows last drop)");
+      assert.ok(read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes("let lastDone = set.flatMap { target in exercise.sets.last { $0.done && $0.drop == target.drop } }"), "the watch pre-fills from the set just done, and drops from their own history");
+      const nb = makeContext({ profile: { bodyweight: 200 } });
+      const blockProg = (createdAt) => JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", createdAt, block: { name: "Coach Kim block", accumulationWeeks: 4, focus: [], start: "next" }, plans: [] }));
+      vm.runInContext(`window.confirm = () => true; handleIncomingFileText(${blockProg("2026-10-01T00:00:00.000Z")})`, nb.context);
+      vm.runInContext(`state.trainingBlock = state.pendingTrainingBlock || state.trainingBlock; state.pendingTrainingBlock = null; handleIncomingFileText(${blockProg("2026-11-05T00:00:00.000Z")})`, nb.context);
+      assert.ok(vm.runInContext("Boolean(state.pendingTrainingBlock) || (state.trainingBlock && state.trainingBlock.sourceKey.includes('2026-11-05'))", nb.context), "the coach's next block with the same settings is accepted");
+      assert.equal(vm.runInContext("mergeById([{ id: 'm-good', date: '2026-10-01T00:00:00.000Z' }], [{ id: 'latest-2026-10-01T00:00:00.000Z', date: '2026-10-01T00:00:00.000Z' }], 100000)[0].id", nb.context), "latest-2026-10-01T00:00:00.000Z", "the latest summary sorts before a tape entry with the same date");
+    }
     console.log("Audit round 19 checks passed.");
   }
   }

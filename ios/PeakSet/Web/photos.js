@@ -75,6 +75,13 @@ function photoImg(photo, className = "", extra = "") {
 // file, still downloading from iCloud, or deleted) shows a labelled tile
 // instead of a broken image.
 let photoSnapshotTimer = null;
+// A pending photo backup runs before the app may be suspended or killed.
+document.addEventListener?.("visibilitychange", () => {
+  if (!document.hidden || !photoSnapshotTimer) return;
+  clearTimeout(photoSnapshotTimer);
+  photoSnapshotTimer = null;
+  if (typeof requestAutomaticSnapshot === "function") requestAutomaticSnapshot("photo", true);
+});
 
 function photoMissing(img, force = false) {
   if (!img || img.dataset.missing) return;
@@ -107,6 +114,7 @@ function addPhotoRecord(record) {
   // One backup after a photo session, not one per pose.
   clearTimeout(photoSnapshotTimer);
   photoSnapshotTimer = setTimeout(() => {
+    photoSnapshotTimer = null;
     if (typeof requestAutomaticSnapshot === "function") requestAutomaticSnapshot("photo", true);
   }, 5000);
 }
