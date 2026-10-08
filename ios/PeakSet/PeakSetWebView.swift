@@ -290,8 +290,13 @@ struct PeakSetWebView: UIViewRepresentable {
                     case .success(let (json, date)):
                         self?.callJavaScript("handleNativeBackup", argument: ["status": "restore", "json": json, "location": location.rawValue, "date": ISO8601DateFormatter().string(from: date)])
                     case .failure(let error):
-                        self?.callJavaScript("handleNativeBackup", argument: ["status": "error", "message": error.localizedDescription])
+                        self?.callJavaScript("handleNativeBackup", argument: ["status": "error", "kind": "restore", "message": error.localizedDescription])
                     }
+                }
+            case "restorePhotos":
+                service.requestPhotoRestore { [weak self] copied in
+                    guard copied > 0 else { return }
+                    self?.callJavaScript("handleNativeBackup", argument: ["status": "photosRestored", "count": copied])
                 }
             default:
                 break

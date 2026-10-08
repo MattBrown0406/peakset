@@ -1626,6 +1626,11 @@ function todaysRecommendedPlan(avoidMuscles = [], planFits = null) {
   return forMuscle[0] || fallback;
 }
 
+// What Start will actually load (volume.js halves sets in a deload week).
+function todayPreviewPlan(plan) {
+  return plan;
+}
+
 function todaysSelectedPlan() {
   const pickedToday = state.todayPlanId && state.todayPlanDate === new Date().toDateString();
   const selected = pickedToday ? allPlans().find((plan) => plan.id === state.todayPlanId) : null;
@@ -2637,7 +2642,7 @@ function renderToday() {
           ${todayWorkoutSelect()}
         </div>
         <div class="exercise-list">
-          ${knownPlanExercises(plan).map(([id, sets, reps]) => `
+          ${knownPlanExercises(todayPreviewPlan(plan)).map(([id, sets, reps]) => `
             <div class="exercise-row">
               <strong>${escapeHtml(exerciseById(id).name)}</strong>
               <span class="badge">${escapeHtml(sets)} x ${escapeHtml(reps)}</span>

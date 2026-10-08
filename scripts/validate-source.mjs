@@ -1459,6 +1459,20 @@ console.log("Audit round 8 checks passed.");
       assert.equal(asked, before, "a dismissed note is not offered again as new");
       assert.equal(JSON.parse(JSON.stringify(await vm.runInContext("buildCoachPackage(14)", athlete20.context))).deleted.length, 0, "check-ins don't list entries the athlete still has as deleted");
     }
+    // Round 20 simulations: restore errors are visible; file restores bring photos back; deload preview.
+    {
+      const nb = makeContext({ profile: { bodyweight: 200 }, backupStatus: { message: "Backed up to iCloud.", at: new Date().toISOString() } });
+      const runNb = (code) => vm.runInContext(code, nb.context);
+      runNb("var posts20 = []; var toasts20 = []; window.webkit = { messageHandlers: { peaksetBackup: { postMessage(m) { posts20.push(m); } } } }; window.location = { reload() {} }; toast = (m) => toasts20.push(m)");
+      runNb("handleNativeBackup({ status: 'error', kind: 'restore', message: 'The backup is still downloading.' })");
+      assert.ok(runNb("toasts20.some((m) => m.startsWith('Restore failed'))") && runNb("state.backupStatus.message") === "Backed up to iCloud.", "a failed restore is shown and leaves the backup status alone");
+      runNb("restoreBackupPayload({ format: BACKUP_FORMAT, state: { profile: { bodyweight: 200 }, photos: [{ id: 'p1', pose: 'front-relaxed', date: new Date().toISOString(), storage: 'native' }] } })");
+      assert.ok(runNb("posts20.some((m) => m.action === 'restorePhotos')"), "restoring a backup file asks iOS to bring the photos back from iCloud Drive");
+      assert.ok(read("photos.js").includes('onerror="photoMissing(this)"') && read("ios/PeakSet/PeakSetWebView.swift").includes('case "restorePhotos":'), "missing photo files show a placeholder, and native handles restorePhotos");
+      const dl = makeContext({ profile: { bodyweight: 200 } });
+      vm.runInContext("state.trainingBlock = { id: 'b', name: 'B', startDate: dateKey(addDays(startOfWeek(), -21)), accumulationWeeks: 3, deload: true, focus: [], createdAt: new Date().toISOString() }", dl.context);
+      assert.equal(vm.runInContext("blockWeekInfo().deload && todayPreviewPlan(planTemplates.find((plan) => plan.id === 'chest-density')).exercises[0][1] === Math.ceil(normalizePlanExercise(planTemplates.find((plan) => plan.id === 'chest-density').exercises[0]).sets / 2)", dl.context), true, "Today shows the halved deload sets that Start will load");
+    }
     console.log("Audit round 19 checks passed.");
   }
   }

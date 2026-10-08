@@ -211,6 +211,22 @@ final class PeakSetBackupService {
         copyMissingFiles(from: PeakSetPhotoStore.directory, to: cloudPhotos)
     }
 
+    /// A backup restored from a file (not from the iCloud list) still needs
+    /// its photo files copied back from the iCloud Drive mirror. Reports how
+    /// many photo files arrived.
+    func requestPhotoRestore(completion: @escaping (Int) -> Void) {
+        photoRestorePending = true
+        photoQueue.async {
+            let before = self.localPhotoCount()
+            self.restorePhotosFromICloud()
+            completion(max(0, self.localPhotoCount() - before))
+        }
+    }
+
+    private func localPhotoCount() -> Int {
+        ((try? fileManager.contentsOfDirectory(atPath: PeakSetPhotoStore.directory.path)) ?? []).filter { $0.hasSuffix(".jpg") }.count
+    }
+
     private func restorePhotosFromICloud() {
         guard let cloudPhotos = iCloudDocuments()?.appendingPathComponent("ProgressPhotos", isDirectory: true) else { return }
         queue.sync { self.replayPendingMirrorDeletes() }

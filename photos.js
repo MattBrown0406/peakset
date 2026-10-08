@@ -68,7 +68,18 @@ function photoSrc(photo) {
 function photoImg(photo, className = "", extra = "") {
   if (!photo) return "";
   const alt = `${poseLabel(photo.pose)}, ${formatShortDate(photo.date)}`;
-  return `<img class="${className}" data-photo-id="${escapeHtml(photo.id)}" src="${escapeHtml(photoSrc(photo))}" alt="${escapeHtml(alt)}" loading="lazy" ${extra} />`;
+  return `<img class="${className}" data-photo-id="${escapeHtml(photo.id)}" src="${escapeHtml(photoSrc(photo))}" alt="${escapeHtml(alt)}" loading="lazy" onerror="photoMissing(this)" ${extra} />`;
+}
+
+// A photo record whose file is not on this iPhone (restored from a backup
+// file, still downloading from iCloud, or deleted) shows a labelled tile
+// instead of a broken image.
+function photoMissing(img) {
+  if (!img || img.dataset.missing) return;
+  img.dataset.missing = "1";
+  img.classList.add("photo-missing");
+  img.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400"><rect width="300" height="400" fill="#16213a"/><text x="150" y="190" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">Photo not on</text><text x="150" y="222" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">this iPhone yet</text></svg>')}`;
+  img.alt = `${img.alt}: photo not on this iPhone yet`;
 }
 
 function setPhotoPose(pose) {

@@ -478,6 +478,11 @@ function deloadPlan(plan) {
   };
 }
 
+todayPreviewPlan = function todayPreviewWithDeload(plan) {
+  const exempt = String(plan?.id || "").startsWith("quick-") || plan?.adHoc;
+  return blockWeekInfo()?.deload && !exempt ? deloadPlan(plan) : plan;
+};
+
 const baseBeginWorkoutForVolume = beginWorkoutFromPlan;
 beginWorkoutFromPlan = function beginWorkoutWithBlock(plan) {
   const info = blockWeekInfo();

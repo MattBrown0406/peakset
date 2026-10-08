@@ -379,7 +379,7 @@ function progressionSuggestion(exercise) {
   if (allAtTop) {
     return `All ${which} reached ${ceiling}+ reps. Try ${formatWeight(nextLoadableWeight(exercise.id, bestWeight), 2)} ${weightUnit()} next time if form and RIR stay on target.`;
   }
-  return `Keep ${formatWeight(bestWeight, 2)} ${weightUnit()} and add reps until every ${which.slice(0, -1)} reaches ${ceiling} with 0-${rirLimit} RIR.`;
+  return `Keep ${formatWeight(bestWeight, 1)} ${weightUnit()} and add reps until every ${which.slice(0, -1)} reaches ${ceiling} with 0-${rirLimit} RIR.`;
 }
 
 function renderLastPerformance(id) {

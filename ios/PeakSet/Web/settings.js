@@ -238,7 +238,7 @@ function isBackupPayload(payload) {
 function backupSummary(payloadState) {
   const logs = Array.isArray(payloadState.workoutLogs) ? payloadState.workoutLogs.length : 0;
   const weights = Array.isArray(payloadState.weightLogs) ? payloadState.weightLogs.length : 0;
-  return `${logs} workouts and ${weights} weigh-ins`;
+  return `${logs} workout${logs === 1 ? "" : "s"} and ${weights} weigh-in${weights === 1 ? "" : "s"}`;
 }
 
 function restoreBackupPayload(payload, sourceLabel = "this backup") {
@@ -266,6 +266,11 @@ function restoreBackupPayload(payload, sourceLabel = "this backup") {
     Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-before-restore-`)).forEach((key) => localStorage.removeItem(key));
     restoringState = true;
     localStorage.setItem(STORE_KEY, serializeForStorage(restored));
+    // A backup file holds photo records, not images; ask iOS to copy the
+    // images back from the iCloud Drive mirror (no-op when there are none).
+    if (native && Array.isArray(restored.photos) && restored.photos.some((photo) => photo?.storage === "native")) {
+      try { nativeBackupBridge().postMessage({ action: "restorePhotos" }); } catch {}
+    }
   } catch {
     restoringState = false;
     toast("Could not write the backup to this device's storage.");
@@ -342,6 +347,7 @@ function restoreNativeBackup(index) {
   const bridge = nativeBackupBridge();
   if (!backup || !bridge) return;
   bridge.postMessage({ action: "restore", name: backup.name, location: backup.location });
+  toast(backup.location === "iCloud" ? "Restoring… iCloud may take up to 30 seconds to download the backup." : "Restoring…");
 }
 
 function handleNativeBackup(payload) {
@@ -358,6 +364,14 @@ function handleNativeBackup(payload) {
     let parsed = null;
     try { parsed = JSON.parse(payload.json || ""); } catch {}
     restoreBackupPayload(parsed, `the ${payload.location || "saved"} backup from ${formatShortDate(payload.date)}`);
+  } else if (payload.status === "photosRestored") {
+    // Photo files copied back from iCloud Drive after a restore.
+    if (["photos", "progress", "today"].includes(state.view)) render();
+  } else if (payload.status === "error" && payload.kind === "restore") {
+    // A failed restore must be visible wherever it was started (the new
+    // phone's onboarding screen too) and must not replace the backup status.
+    toast(typeof payload.message === "string" && payload.message ? `Restore failed: ${payload.message}` : "That backup could not be restored. Try again in a moment.");
+    if (state.view === "more" || onboardingRestoreOpen) render();
   } else if (payload.status === "error") {
     state.backupStatus = { ...state.backupStatus, message: typeof payload.message === "string" && payload.message ? payload.message : "Automatic backup failed." };
     saveState();
@@ -423,7 +437,7 @@ function renderBackupCard() {
       ${(() => {
         const used = storageUsedFraction();
         if (used < 0.5) return "";
-        return `<div class="signal-card ${used >= 0.8 ? "warning-note" : ""}" style="margin-top:12px"><strong>On-device storage ${Math.round(used * 100)}% full</strong><p class="muted" style="margin:4px 0 8px">Export a backup, then archive history older than a year to make room. The backup file keeps everything.</p><button class="secondary-btn" onclick="archiveOldHistory()" ${Date.now() - lastBackupExportAt > 30 * 60000 ? "disabled" : ""}>Archive History Older Than a Year</button></div>`;
+        return `<div class="signal-card ${used >= 0.8 ? "warning-note" : ""}" style="margin-top:12px"><strong>On-device storage ${Math.round(used * 100)}% full</strong><p class="muted" style="margin:4px 0 8px">Export a backup, then archive history older than a year to make room. The backup file keeps every entry; photos stay in iCloud Drive.</p><button class="secondary-btn" onclick="archiveOldHistory()" ${Date.now() - lastBackupExportAt > 30 * 60000 ? "disabled" : ""}>Archive History Older Than a Year</button></div>`;
       })()}
     </section>
   `;
