@@ -109,8 +109,11 @@ final class PeakSetLiveActivityManager {
             #endif
             return
         }
+        // Same rest, new details (a superset's next set): keep the bar where it was.
+        let existing = Activity<RestTimerAttributes>.activities.first(where: { $0.attributes.workoutTitle == rest.workoutTitle && ($0.activityState == .active || $0.activityState == .stale) })
+        let sameRest = existing.map { abs($0.content.state.endsAt.timeIntervalSince(rest.endsAt)) < 1 } ?? false
         let state = RestTimerAttributes.ContentState(
-            startedAt: rest.startedAt,
+            startedAt: sameRest ? (existing?.content.state.startedAt ?? rest.startedAt) : rest.startedAt,
             endsAt: rest.endsAt,
             exerciseName: rest.exerciseName,
             nextSetLabel: rest.nextSetLabel,

@@ -343,8 +343,12 @@ struct PeakSetWebView: UIViewRepresentable {
             if payload["liveActivity"] as? Bool == true,
                let endsAtMs {
                 let endsAt = Date(timeIntervalSince1970: endsAtMs / 1000)
+                // The rest's real start keeps the Lock Screen bar in step with
+                // the app after +15 s or a watch catch-up.
+                let startedAtMs = (payload["startedAt"] as? NSNumber)?.doubleValue
+                let startedAt = startedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }.flatMap { $0 < endsAt && $0 <= Date() ? $0 : nil } ?? Date()
                 PeakSetLiveActivityManager.shared.show(.init(
-                    startedAt: Date(),
+                    startedAt: startedAt,
                     endsAt: endsAt,
                     workoutTitle: payload["workoutTitle"] as? String ?? "Mass Method",
                     exerciseName: payload["exerciseName"] as? String ?? "Next set",

@@ -74,6 +74,8 @@ function photoImg(photo, className = "", extra = "") {
 // A photo record whose file is not on this iPhone (restored from a backup
 // file, still downloading from iCloud, or deleted) shows a labelled tile
 // instead of a broken image.
+let photoSnapshotTimer = null;
+
 function photoMissing(img, force = false) {
   if (!img || img.dataset.missing) return;
   // A browser-stored photo renders with an empty src until its file is read.
@@ -102,7 +104,11 @@ function addPhotoRecord(record) {
   toast(`${poseLabel(record.pose)} photo saved.`);
   render();
   // Photos are weekly, high-value records: back up now, not tomorrow.
-  if (typeof requestAutomaticSnapshot === "function") requestAutomaticSnapshot("photo", true);
+  // One backup after a photo session, not one per pose.
+  clearTimeout(photoSnapshotTimer);
+  photoSnapshotTimer = setTimeout(() => {
+    if (typeof requestAutomaticSnapshot === "function") requestAutomaticSnapshot("photo", true);
+  }, 5000);
 }
 
 function capturePhoto(source = "camera") {

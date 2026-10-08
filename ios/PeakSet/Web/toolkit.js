@@ -1006,6 +1006,8 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
       state.activeWorkout.lastSetKey = null;
       state.activeWorkout.restBeforeLastSet = null;
     }
+    // A rest that keeps running now has a different next set.
+    else refreshRestLiveActivity();
     // Undoing a mis-tap on an untouched exercise lets the watch move on.
     if (state.activeWorkout.lastExerciseIndex === exIndex && !exercise.sets.some((item) => item.done)) state.activeWorkout.lastExerciseIndex = null;
   }
@@ -1030,7 +1032,7 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
     else {
       toast(`Complete the remaining ${group} exercise before resting.`);
       // The Lock Screen shows the next set: refresh it for the running rest.
-      if (state.timer.running && window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: timerTotalSeconds(), endsAt: state.timer.endsAt, ...(typeof restTimerContext === "function" ? restTimerContext() : {}) });
+      refreshRestLiveActivity();
     }
     render();
     if (!fromWatch && state.view === "session") {
@@ -1053,6 +1055,13 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
   }
   render();
 };
+
+// The Lock Screen shows the next set; resend it for the rest that is still
+// running (its end and start are unchanged, so the bar keeps its place).
+function refreshRestLiveActivity() {
+  if (!state.timer.running || !(Number(state.timer.endsAt) > Date.now()) || !window.webkit?.messageHandlers?.peaksetTimer) return;
+  window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: timerTotalSeconds(), endsAt: state.timer.endsAt, startedAt: state.timer.startedAt, ...(typeof restTimerContext === "function" ? restTimerContext() : {}) });
+}
 
 finishWorkout = function finishToolkitWorkout() {
   const workout = state.activeWorkout;
@@ -1171,7 +1180,7 @@ const baseStartTimer = startTimer;
 startTimer = function startNativeBackedTimer(seconds = state.timer.seconds, fullscreen = false, exerciseIndex = state.timer.exerciseIndex ?? null, persistRest = true) {
   baseStartTimer(seconds, fullscreen, exerciseIndex, persistRest);
   // restTimerContext (watch.js) adds the Live Activity details when loaded.
-  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: timerTotalSeconds(), endsAt: state.timer.endsAt, ...(typeof restTimerContext === "function" ? restTimerContext() : {}) });
+  if (window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: timerTotalSeconds(), endsAt: state.timer.endsAt, startedAt: state.timer.startedAt, ...(typeof restTimerContext === "function" ? restTimerContext() : {}) });
 };
 
 const baseStopTimer = stopTimer;

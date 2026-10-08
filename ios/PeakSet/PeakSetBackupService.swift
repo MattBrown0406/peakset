@@ -196,18 +196,38 @@ final class PeakSetBackupService {
         guard let urls = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
         // Offloaded iCloud backups appear as ".name.json.icloud" stand-ins and
         // still count toward the limit (deleting the stand-in deletes the file).
-        // Date each backup through its logical name, as list() does: a stand-in
-        // reports its own (recent) date, which would sort old backups first
-        // and prune the newest real ones.
-        let backupDate: (URL) -> Date = { url in
+        // Order by the date in the filename ("…-backup-2026-10-07-…",
+        // "…-before-restore-2026-10-07T12-34-56-…"): an offloaded iCloud
+        // stand-in reports its own recent modification date, which would sort
+        // old backups first and prune the newest real ones. The modification
+        // date (read through the logical name, as list() does) breaks ties.
+        let modified: (URL) -> Date = { url in
             let logical = Self.realName(of: url).map { directory.appendingPathComponent($0) } ?? url
             return (try? logical.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
                 ?? (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
                 ?? .distantPast
         }
-        let sorted = urls.filter { Self.realName(of: $0)?.hasSuffix(".json") == true }.sorted { backupDate($0) > backupDate($1) }
+        let stamp: (URL) -> String = { url in
+            let name = Self.realName(of: url) ?? url.lastPathComponent
+            guard let range = name.range(of: #"\d{4}-\d{2}-\d{2}(T\d{2}-\d{2}-\d{2})?"#, options: .regularExpression) else { return "" }
+            let found = String(name[range])
+            return found.count == 10 ? found + "T00-00-00" : found
+        }
+        // A real file and its stand-in are one backup.
+        var seen = Set<String>()
+        let unique = urls.filter { url in
+            guard let name = Self.realName(of: url), name.hasSuffix(".json") else { return false }
+            return seen.insert(name).inserted
+        }
+        let sorted = unique.sorted {
+            let lhs = stamp($0), rhs = stamp($1)
+            return lhs != rhs ? lhs > rhs : modified($0) > modified($1)
+        }
         for url in sorted.dropFirst(keepCount) {
-            try? fileManager.removeItem(at: url)
+            guard let name = Self.realName(of: url) else { continue }
+            // Remove the backup whether it is local, offloaded, or both.
+            try? fileManager.removeItem(at: directory.appendingPathComponent(name))
+            try? fileManager.removeItem(at: directory.appendingPathComponent(".\(name).icloud"))
         }
     }
 
