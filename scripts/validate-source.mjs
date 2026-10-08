@@ -1374,6 +1374,64 @@ console.log("Audit round 8 checks passed.");
     const firstId = run19("state.customPlans[0].id");
     run19(`handleIncomingFileText(${JSON.stringify(program("6-8"))})`);
     assert.equal(run19("state.customPlans.length + '|' + state.customPlans[0].exercises[0][2] + '|' + (state.customPlans[0].id === '" + firstId + "')"), "1|6-8|true", "an edited, re-sent template updates in place");
+    // Round 19: weekly re-sends carry messages and schedule changes; legacy coach templates match.
+    const program19 = (extra = {}, plan = {}) => JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", ...extra, plans: [{ id: "custom-coach-1", title: "Push A", muscle: "chest", phase: "offseason", rest: 120, note: "x", scheduleDay: "Monday", exercises: [["barbell-bench", 3, "6-8", 120, 0, {}]], ...plan }] });
+    run19(`handleIncomingFileText(${JSON.stringify(program19({ message: "Week 2: push the top sets." }))})`);
+    assert.equal(run19("state.customPlans.length + '|' + (state.coachMessage && state.coachMessage.message)"), "1|Week 2: push the top sets.", "a re-send with only a new message still delivers it");
+    run19(`handleIncomingFileText(${JSON.stringify(program19({}, { scheduleDay: "Tuesday" }))})`);
+    assert.equal(run19("state.customPlans.length + '|' + state.customPlans[0].scheduleDay"), "1|Tuesday", "a schedule-only change arrives");
+    run19("state.customPlans.push({ id: 'coach-legacy', title: 'Pull B', muscle: 'back', phase: 'offseason', rest: 120, note: '', scheduleDay: '', fromCoach: 'Coach Kim', exercises: [['lat-pulldown', 3, '10', 90, 0, {}]] })");
+    run19(`handleIncomingFileText(${JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", plans: [{ id: "custom-coach-2", title: "Pull B", muscle: "back", phase: "offseason", rest: 120, note: "", exercises: [["lat-pulldown", 3, "10", 90, 0, {}]] }] }))})`);
+    assert.equal(run19("state.customPlans.filter((plan) => plan.title === 'Pull B').length + '|' + state.customPlans.find((plan) => plan.title === 'Pull B').sourceId"), "1|custom-coach-2", "coach templates from before source ids are matched, not duplicated");
+    assert.ok(run19("renderToday()").includes("1 updated workout in Plans"), "the coach note says a workout was updated, not added");
+    // Editing a template to or from Road Gym changes its phase.
+    run19("state.customPlans = []; builderDraft = [{ id: 'incline-db-press', sets: 3, reps: '12', rest: 60, dropSets: 0, group: '', setType: 'standard' }]; state.builderFormDraft.title = 'Hotel'; state.builderFormDraft.muscle = 'chest'; saveBuilderTemplate()");
+    const hotelId = run19("state.customPlans[0].id");
+    run19(`editCustomPlan('${hotelId}'); state.builderFormDraft.muscle = 'travel'; saveBuilderTemplate()`);
+    assert.equal(run19("state.customPlans[0].phase"), "travel", "a template edited to Road Gym becomes a Road Gym template");
+    run19(`editCustomPlan('${hotelId}'); state.builderFormDraft.muscle = 'chest'; saveBuilderTemplate()`);
+    assert.notEqual(run19("state.customPlans[0].phase"), "travel", "a template edited away from Road Gym leaves the travel phase");
+    // Removing an exercise keeps the open Edit panel on its own card.
+    run19("startWorkout('chest-density'); openExerciseOptions = 2; removeLiveExercise(0)");
+    assert.equal(run19("openExerciseOptions"), 1, "the open Edit panel follows its exercise after a removal");
+    run19("state.activeWorkout.exercises[0].sets[0].weight = '100'; state.activeWorkout.exercises[0].sets[0].reps = '8'; window.confirm = () => false; openExerciseOptions = 2; removeLiveExercise(0); window.confirm = () => true");
+    assert.equal(run19("openExerciseOptions"), 2, "a cancelled removal leaves the panel alone");
+    run19("cancelWorkout()");
+    // Road Gym: Today recommends a plan the profile can run.
+    run19("state.customPlans = []; state.workoutLogs = []; state.phase = 'offseason'; state.activeEquipmentProfileId = 'road-gym'");
+    assert.ok(run19("(() => { const profile = activeEquipmentProfile(); return todaysRecommendedPlan().exercises.every(([id]) => exerciseMatchesEquipmentProfile(exerciseById(id), profile)); })()"), "Today's pick fits the active equipment profile");
+    run19("state.activeEquipmentProfileId = 'all-equipment'");
+    // Overnight workouts are logged when the sets were done.
+    run19("startWorkout('chest-density'); const ex19 = state.activeWorkout.exercises[0]; ex19.sets[0].weight = '100'; ex19.sets[0].reps = '8'; completeSet(0, 0); stopTimer(); state.activeWorkout.startedAt = new Date(Date.now() - 20 * 3600000).toISOString(); state.activeWorkout.lastSetAt = Date.now() - 19 * 3600000; finishWorkout()");
+    assert.ok(Math.abs(run19("Date.parse(state.workoutLogs[0].date)") - (Date.now() - 19 * 3600000)) < 5 * 60000, "a workout finished the next morning is dated by its last set");
+    // Archiving keeps the start weigh-in.
+    run19("state.profile.createdAt = new Date(Date.now() - 500 * 86400000).toISOString(); state.weightLogs = [{ id: 'now', date: new Date().toISOString(), bodyweight: 205 }, { id: 'mid', date: new Date(Date.now() - 400 * 86400000).toISOString(), bodyweight: 202 }, { id: 'start', date: new Date(Date.now() - 499 * 86400000).toISOString(), bodyweight: 195, note: 'Starting profile' }]; lastBackupExportAt = Date.now(); archiveOldHistory()");
+    assert.equal(run19("state.weightLogs.map((entry) => entry.id).join(',') + '|' + stats().weightDelta"), "now,start|10.0", "archiving keeps the start weigh-in and the change from start");
+  // Round 19: a day-old rest screen is not shown again; coach copies never resurrect deletions.
+  {
+    const stale = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, running: true, fullscreen: true, startedAt: Date.now() - 86400000 - 90000, endsAt: Date.now() - 86400000 } });
+    assert.equal(vm.runInContext("state.timer.fullscreen", stale.context), false, "a rest that ended a day ago doesn't reopen its overlay");
+    const recent = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, running: true, fullscreen: true, startedAt: Date.now() - 120000, endsAt: Date.now() - 30000 } });
+    assert.equal(vm.runInContext("state.timer.fullscreen", recent.context), true, "a rest that just ended still shows Rest complete");
+    const day = 86400000;
+    const base19 = { ...pkg, rangeDays: 14, weightLogs: [], weeklyCheckIns: [], prepLogs: [], photos: [] };
+    const keepLog = { id: "keep-1", title: "Kept", date: new Date(Date.now() - 2 * day).toISOString(), sets: [] };
+    const goneLog = { id: "gone-19", title: "Mistake", date: new Date(Date.now() - 6 * day).toISOString(), sets: [] };
+    const older = { ...base19, generatedAt: new Date(Date.now() - 5 * day).toISOString(), workoutLogs: [goneLog], deleted: [] };
+    const newerPkg = { ...base19, generatedAt: new Date().toISOString(), workoutLogs: [keepLog], deleted: [{ kind: "workout", id: "gone-19" }] };
+    const coachA = makeContext({ profile: { bodyweight: 210 }, coach: { enabled: true, name: "Kim", athletes: {} } });
+    await vm.runInContext(`importCoachPackage(${JSON.stringify({ ...newerPkg, deleted: [] })})`, coachA.context);
+    await vm.runInContext(`importCoachPackage(${JSON.stringify(older)})`, coachA.context);
+    assert.equal(vm.runInContext("coachAthletes()[0].workoutLogs.map((log) => log.id).join(',')", coachA.context), "keep-1", "an older check-in opened after a newer one doesn't bring back a deleted workout");
+    const coachB = makeContext({ profile: { bodyweight: 210 }, coach: { enabled: true, name: "Kim", athletes: {} } });
+    await vm.runInContext(`importCoachPackage(${JSON.stringify(older)})`, coachB.context);
+    await vm.runInContext(`importCoachPackage(${JSON.stringify(newerPkg)})`, coachB.context);
+    await vm.runInContext(`importCoachPackage(${JSON.stringify(older)})`, coachB.context);
+    assert.equal(vm.runInContext("coachAthletes()[0].workoutLogs.map((log) => log.id).join(',')", coachB.context), "keep-1", "re-opening an old check-in doesn't bring back a deleted workout");
+    const reload = makeContext(JSON.parse(coachB.storage.get("stageforge-v1")));
+    assert.equal(vm.runInContext("coachAthletes()[0].deleted.length", reload.context), 1, "the coach keeps the athlete's deletions across reloads");
+    console.log("Audit round 19 checks passed.");
+  }
   }
   // Round 17 App Store readiness.
   assert(read("settings.js").includes("<h2>Privacy policy</h2>"), "A privacy policy must be reachable in the app (5.1.1)");

@@ -610,7 +610,7 @@ function saveBuilderTemplate() {
     // The form doesn't show phase, plan-level rest or equipment profile; keep
     // the template's own (a coach's prep template stays a prep template).
     const existing = state.customPlans[editingIndex];
-    state.customPlans[editingIndex] = { ...existing, ...plan, id: existing.id, phase: existing.phase ?? plan.phase, rest: existing.rest ?? plan.rest, equipmentProfileId: existing.equipmentProfileId ?? plan.equipmentProfileId };
+    state.customPlans[editingIndex] = { ...existing, ...plan, id: existing.id, phase: plan.muscle === "travel" ? "travel" : existing.phase === "travel" ? plan.phase : (existing.phase ?? plan.phase), rest: existing.rest ?? plan.rest, equipmentProfileId: existing.equipmentProfileId ?? plan.equipmentProfileId };
   } else {
     state.customPlans.unshift(plan);
   }
@@ -709,10 +709,23 @@ todaysRecommendedPlan = function scheduledRecommendedPlan() {
   const scheduled = state.customPlans.find((plan) => plan.scheduleDay === day);
   if (scheduled) return scheduled;
   // Don't recommend today the muscles tomorrow's scheduled template trains.
-  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString("en-US", { weekday: "long" });
+  // Calendar day, not +24 h: on the short spring-forward day +24 h lands on
+  // the day after tomorrow.
+  const tomorrowDate = new Date();
+  tomorrowDate.setHours(12, 0, 0, 0);
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = tomorrowDate.toLocaleDateString("en-US", { weekday: "long" });
   const next = state.customPlans.find((plan) => plan.scheduleDay === tomorrow);
-  const avoid = next ? [...new Set([next.muscle, ...(next.exercises || []).map((row) => exerciseById(Array.isArray(row) ? row[0] : row?.id).muscle)])] : [];
-  return baseTodaysRecommendedPlan(avoid);
+  const nextMuscles = (next?.exercises || []).map((row) => exerciseLibrary.find((item) => item.id === (Array.isArray(row) ? row[0] : row?.id))?.muscle).filter(Boolean);
+  const avoid = next ? [...new Set([next.muscle, ...nextMuscles])] : [];
+  const profile = activeEquipmentProfile();
+  const planFits = profile?.equipment?.length
+    ? (plan) => (plan.exercises || []).every((row) => {
+      const exercise = exerciseLibrary.find((item) => item.id === (Array.isArray(row) ? row[0] : row?.id));
+      return !exercise || exerciseMatchesEquipmentProfile(exercise, profile);
+    })
+    : null;
+  return baseTodaysRecommendedPlan(avoid, planFits);
 };
 
 function toolkitSetRows(spec) {
@@ -838,12 +851,15 @@ function addLiveExercise() {
 
 function removeLiveExercise(index) {
   // app.js protects entered sets and keeps the rest timer attached correctly.
+  // The open "Edit exercise" panel must follow its card before the re-render:
+  // a <details open> rendered for the old index fires its own toggle event,
+  // which would reopen the wrong card.
   const count = state.activeWorkout?.exercises?.length;
+  const before = openExerciseOptions;
+  if (openExerciseOptions === index) openExerciseOptions = null;
+  else if (openExerciseOptions !== null && openExerciseOptions > index) openExerciseOptions -= 1;
   const result = removeActiveWorkoutExercise(index);
-  if (state.activeWorkout?.exercises?.length !== count) {
-    if (openExerciseOptions === index) openExerciseOptions = null;
-    else if (openExerciseOptions !== null && openExerciseOptions > index) openExerciseOptions -= 1;
-  }
+  if (state.activeWorkout?.exercises?.length === count) openExerciseOptions = before;
   return result;
 }
 
@@ -938,7 +954,10 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
   set.done = !set.done;
   // Where the athlete is working: the watch returns here after a rest even
   // when exercises are done out of order.
-  if (set.done) state.activeWorkout.lastExerciseIndex = exIndex;
+  if (set.done) {
+    state.activeWorkout.lastExerciseIndex = exIndex;
+    state.activeWorkout.lastSetAt = Date.now();
+  }
   // Undoing a mis-tap on an untouched exercise lets the watch move on.
   else if (state.activeWorkout.lastExerciseIndex === exIndex && !exercise.sets.some((item) => item.done)) state.activeWorkout.lastExerciseIndex = null;
   saveState();
@@ -998,7 +1017,10 @@ finishWorkout = function finishToolkitWorkout() {
     ...(set._unitOrigin?.weight ? { _unitOrigin: { weight: set._unitOrigin.weight } } : {})
   })));
   if (!sets.length) return toast("Complete at least one set before saving.");
-  const endedAt = new Date().toISOString();
+  // A workout left open overnight and finished the next day belongs to the
+  // day it was trained, with its real length (Apple Health, weekly volume).
+  const lastSetAt = Number(workout.lastSetAt);
+  const endedAt = new Date(Number.isFinite(lastSetAt) && Date.now() - lastSetAt > 3 * 3600000 && lastSetAt >= (Date.parse(workout.startedAt) || 0) ? lastSetAt + 60000 : Date.now()).toISOString();
   const log = { id: workout.id, title: workout.title, phase: workout.phase, date: endedAt, startedAt: workout.startedAt, sets, volume: sets.reduce((sum, set) => sum + (Number(set.weight) || 0) * (Number(set.reps) || 0), 0) };
   state.workoutLogs.unshift(log);
   if (state.healthKitEnabled && window.webkit?.messageHandlers?.peaksetHealthKit) window.webkit.messageHandlers.peaksetHealthKit.postMessage({ action: "saveWorkout", id: workout.id, title: workout.title, startedAt: workout.startedAt, endedAt });

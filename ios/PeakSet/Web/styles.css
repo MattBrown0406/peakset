@@ -1891,6 +1891,11 @@ img {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
 }
 
+.exercise-row:has(> span + strong + .compact-btn) > span,
+.exercise-row:has(> span + strong + .compact-btn) > strong {
+  overflow-wrap: anywhere;
+}
+
 .exercise-row:has(> span + strong + .compact-btn) > strong {
   white-space: normal;
   text-align: right;

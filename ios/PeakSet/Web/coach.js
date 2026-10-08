@@ -42,6 +42,7 @@ function coachMigrateState() {
     athlete.volumeWeeks = objects(athlete.volumeWeeks).map((week) => ({ ...week, totals: Object.fromEntries(Object.entries(week.totals && typeof week.totals === "object" ? week.totals : {}).map(([key, value]) => [key, finiteOrNull(value) ?? 0])) }));
     athlete.photos = objects(athlete.photos).filter((photo) => /^[A-Za-z0-9-]+$/.test(String(photo.id || "")));
     athlete.packages = objects(athlete.packages);
+    athlete.deleted = objects(athlete.deleted).filter((item) => typeof item.kind === "string" && typeof item.id === "string").slice(-300);
     if (athlete.trainingBlock && typeof athlete.trainingBlock !== "object") athlete.trainingBlock = null;
   });
   if (state.coachMessage && typeof state.coachMessage !== "object") state.coachMessage = null;
@@ -371,13 +372,31 @@ async function importCoachPackage(pkg) {
     // Same strict cutoff the athlete's report used to fill the package.
     return Number.isFinite(time) && time > rangeStart && time <= generatedTime;
   };
-  // Explicit deletions from the athlete (older check-ins included).
+  // Explicit deletions from the athlete. The coach keeps every one it has
+  // seen, so an older check-in opened later (or opened again) cannot bring a
+  // deleted entry back.
   const deletedByKind = {};
-  safeArray(pkg.deleted).slice(-300).forEach((item) => {
+  const deletedList = [];
+  const seenDeleted = new Set();
+  // An entry a newer check-in contains again (an Apple Health reading that
+  // returned after a hand-logged one was deleted) is no longer deleted.
+  const listKinds = { weight: pkg.weightLogs, workout: pkg.workoutLogs, checkIn: pkg.weeklyCheckIns, prep: pkg.prepLogs };
+  const presentAgain = (kind, id) => newer && safeArray(listKinds[kind]).some((entry) => entry.id === id);
+  [...safeArray(existing.deleted).filter((item) => !presentAgain(item.kind, item.id)), ...safeArray(pkg.deleted).slice(-300)].forEach((item) => {
     const kind = ["weight", "workout", "checkIn", "prep"].includes(item?.kind) ? item.kind : null;
     const id = typeof item?.id === "string" ? item.id.slice(0, 80) : "";
-    if (kind && id) (deletedByKind[kind] ||= new Set()).add(id);
+    if (!kind || !id || seenDeleted.has(`${kind}:${id}`)) return;
+    seenDeleted.add(`${kind}:${id}`);
+    deletedList.push({ kind, id });
+    (deletedByKind[kind] ||= new Set()).add(id);
   });
+  // Date ranges already covered by newer check-ins: an entry from an older
+  // file that falls inside one but is missing here was deleted on the phone.
+  const coveredByNewer = safeArray(existing.packages).map((item) => {
+    const end = Date.parse(item.generatedAt);
+    const days = cleanNumber(item.rangeDays, 1, 366);
+    return Number.isFinite(end) && end > generatedTime && days ? [end - days * 86400000, end] : null;
+  }).filter(Boolean);
   const kindOf = { weightLogs: "weight", workoutLogs: "workout", weeklyCheckIns: "checkIn", prepLogs: "prep" };
   const pruneMissing = (list, incoming, apply = true, key = "") => {
     const tombstones = deletedByKind[kindOf[key]];
@@ -385,6 +404,17 @@ async function importCoachPackage(pkg) {
     if (!newer || !apply || !Number.isFinite(rangeStart) || rangeStart >= generatedTime) return kept;
     const ids = new Set(safeArray(incoming).map((entry) => entry?.id));
     return kept.filter((entry) => !withinRange(entry) || ids.has(entry.id));
+  };
+  const keepIncoming = (incoming, list, key) => {
+    const tombstones = deletedByKind[kindOf[key]];
+    const have = new Set(safeArray(list).map((entry) => entry?.id));
+    return incoming.filter((entry) => {
+      if (tombstones?.has(entry?.id)) return false;
+      // The roster already holds a newer copy of this entry.
+      if (have.has(entry?.id)) return newer;
+      const time = Date.parse(entry?.date);
+      return !(Number.isFinite(time) && coveredByNewer.some(([start, end]) => time > start && time <= end));
+    });
   };
   const photos = [...storedPhotos, ...safeArray(existing.photos)].sort((a, b) => new Date(b.date) - new Date(a.date));
   const athlete = {
@@ -394,17 +424,18 @@ async function importCoachPackage(pkg) {
     name: newer ? cleanText(pkg.athlete.name, 60) || existing.name || "" : existing.name,
     profile: newer ? profile : existing.profile,
     updatedAt: newer ? generatedAt : existing.updatedAt,
-    weightLogs: mergeById(pruneMissing(existing.weightLogs, pkg.weightLogs, incomingUnitsMatch, "weightLogs"), incomingUnitsMatch ? cleanList(pkg.weightLogs, CLEAN.weight) : []),
+    weightLogs: mergeById(pruneMissing(existing.weightLogs, pkg.weightLogs, incomingUnitsMatch, "weightLogs"), incomingUnitsMatch ? keepIncoming(cleanList(pkg.weightLogs, CLEAN.weight), existing.weightLogs, "weightLogs") : []),
     measurements: mergeById(existing.measurements, incomingUnitsMatch ? cleanList(pkg.measurements, CLEAN.measurement) : [], 365).slice(0, 30),
     // Exercise summaries are shown for the newest workouts only; dropping
     // them from older entries keeps a full roster inside the storage budget.
-    workoutLogs: mergeById(pruneMissing(existing.workoutLogs, pkg.workoutLogs, true, "workoutLogs"), cleanList(pkg.workoutLogs, CLEAN.workout)).slice(0, 60).map((log, index) => (index < 15 ? log : (({ exercises, ...rest }) => rest)(log))),
-    weeklyCheckIns: mergeById(pruneMissing(existing.weeklyCheckIns, pkg.weeklyCheckIns, true, "weeklyCheckIns"), cleanList(pkg.weeklyCheckIns, CLEAN.checkIn)).slice(0, 40),
-    prepLogs: mergeById(pruneMissing(existing.prepLogs, pkg.prepLogs, true, "prepLogs"), cleanList(pkg.prepLogs, CLEAN.prep)).slice(0, 120),
+    workoutLogs: mergeById(pruneMissing(existing.workoutLogs, pkg.workoutLogs, true, "workoutLogs"), keepIncoming(cleanList(pkg.workoutLogs, CLEAN.workout), existing.workoutLogs, "workoutLogs")).slice(0, 60).map((log, index) => (index < 15 ? log : (({ exercises, ...rest }) => rest)(log))),
+    weeklyCheckIns: mergeById(pruneMissing(existing.weeklyCheckIns, pkg.weeklyCheckIns, true, "weeklyCheckIns"), keepIncoming(cleanList(pkg.weeklyCheckIns, CLEAN.checkIn), existing.weeklyCheckIns, "weeklyCheckIns")).slice(0, 40),
+    prepLogs: mergeById(pruneMissing(existing.prepLogs, pkg.prepLogs, true, "prepLogs"), keepIncoming(cleanList(pkg.prepLogs, CLEAN.prep), existing.prepLogs, "prepLogs")).slice(0, 120),
     volumeWeeks: newer ? cleanVolumeWeeks(pkg.volumeWeeks) : safeArray(existing.volumeWeeks),
     trainingBlock: newer ? cleanTrainingBlock(pkg.trainingBlock) : existing.trainingBlock,
     lastNote: newer ? cleanText(pkg.note, 2000) : existing.lastNote,
     photos: photos.slice(0, COACH_PHOTOS_PER_ATHLETE),
+    deleted: deletedList.slice(-300),
     packages: [{ generatedAt, rangeDays: cleanNumber(pkg.rangeDays, 1, 366) }, ...safeArray(existing.packages)].slice(0, 30)
   };
   const previous = athleteById(athleteId);
@@ -471,17 +502,35 @@ function importProgram(program) {
   // A template this coach already sent (same source id) is updated in place
   // when the coach changed it, and skipped when it is identical, so opening a
   // program twice never duplicates and an edited, re-sent template arrives.
-  const contentKey = (plan) => JSON.stringify([plan.title, plan.muscle, plan.phase, plan.rest, plan.note, plan.exercises]);
+  // The coach's schedule counts only when the coach set one; otherwise the
+  // athlete's own schedule stays and is not a "change".
+  const contentKey = (plan, scheduleDay = plan.scheduleDay) => JSON.stringify([plan.title, plan.muscle, plan.phase, plan.rest, plan.note, scheduleDay || "", plan.exercises]);
   const sanitized = offered.slice(0, MAX_PROGRAM_PLANS).map((plan) => sanitizePlan(plan, from)).filter(Boolean);
   const plans = [];
   const updates = [];
+  const claimed = new Set();
   sanitized.forEach((plan) => {
-    const existingIndex = plan.sourceId ? state.customPlans.findIndex((item) => item.fromCoach === plan.fromCoach && item.sourceId === plan.sourceId) : -1;
-    if (existingIndex === -1) plans.push(plan);
-    else if (contentKey(state.customPlans[existingIndex]) !== contentKey(plan)) updates.push({ existingIndex, plan });
+    let existingIndex = plan.sourceId ? state.customPlans.findIndex((item, index) => !claimed.has(index) && item.fromCoach === plan.fromCoach && item.sourceId === plan.sourceId) : -1;
+    // Coach workouts imported before source ids existed: match by title once.
+    if (existingIndex === -1) existingIndex = state.customPlans.findIndex((item, index) => !claimed.has(index) && item.fromCoach === plan.fromCoach && !item.sourceId && item.title === plan.title);
+    if (existingIndex === -1) return plans.push(plan);
+    claimed.add(existingIndex);
+    const existing = state.customPlans[existingIndex];
+    if (contentKey(existing) !== contentKey(plan, plan.scheduleDay || existing.scheduleDay)) updates.push({ existingIndex, plan });
+    else if (!existing.sourceId && plan.sourceId) existing.sourceId = plan.sourceId;
   });
   const block = program?.block && typeof program.block === "object" ? program.block : null;
+  const message = String(program?.message || "").slice(0, 2000);
   if (!plans.length && !updates.length && !block) {
+    // A weekly re-send often only carries a new note from the coach.
+    const current = state.coachMessage;
+    if (sanitized.length && message.trim() && !(current && current.from === from && current.message === message)) {
+      if (!window.confirm(`You already have every workout in this program. Show the new message from ${from}?`)) return false;
+      state.coachMessage = { from, message, receivedAt: new Date().toISOString(), planCount: 0 };
+      saveState();
+      setView("plans");
+      return true;
+    }
     toast(sanitized.length ? "You already have every workout in this program." : "That program has no workouts this app can load.");
     return false;
   }
@@ -514,7 +563,7 @@ function importProgram(program) {
       state.pendingTrainingBlock = null;
     }
   }
-  state.coachMessage = { from, message: String(program.message || "").slice(0, 2000), receivedAt: new Date().toISOString(), planCount: plans.length + updates.length };
+  state.coachMessage = { from, message, receivedAt: new Date().toISOString(), planCount: plans.length + updates.length, newCount: plans.length, updatedCount: updates.length };
   saveState();
   toast(`Program from ${from} added to Plans.`);
   setView("plans");
@@ -764,8 +813,19 @@ renderToday = function renderTodayWithCoach() {
   const html = baseRenderTodayForCoach();
   const message = state.coachMessage;
   if (!message) return html;
-  return `<section class="card pad coach-note-card" style="margin-bottom:12px"><div class="card-head"><div><p class="eyebrow">From ${escapeHtml(message.from)}</p><h2>${message.planCount ? `${message.planCount} new workout${message.planCount === 1 ? "" : "s"} in Plans` : "New program"}</h2></div><button class="ghost-btn" onclick="dismissCoachMessage()">Dismiss</button></div>${message.message ? `<p>${escapeHtml(message.message)}</p>` : ""}</section>${html}`;
+  return `<section class="card pad coach-note-card" style="margin-bottom:12px"><div class="card-head"><div><p class="eyebrow">From ${escapeHtml(message.from)}</p><h2>${coachMessageHeading(message)}</h2></div><button class="ghost-btn" onclick="dismissCoachMessage()">Dismiss</button></div>${message.message ? `<p>${escapeHtml(message.message)}</p>` : ""}</section>${html}`;
 };
+
+function coachMessageHeading(message) {
+  const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  const fresh = Number(message.newCount);
+  const updated = Number(message.updatedCount);
+  if (Number.isFinite(fresh) && Number.isFinite(updated) && fresh + updated > 0) {
+    return [fresh ? `${plural(fresh, "new workout")}` : "", updated ? `${plural(updated, "updated workout")}` : ""].filter(Boolean).join(" and ") + " in Plans";
+  }
+  if (message.planCount) return `${plural(message.planCount, "new workout")} in Plans`;
+  return message.message ? "New message" : "New program";
+}
 
 const baseRenderPlanCardForCoach = renderPlanCard;
 renderPlanCard = function renderPlanCardWithCoach(plan) {

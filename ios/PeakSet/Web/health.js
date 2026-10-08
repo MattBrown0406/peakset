@@ -134,6 +134,9 @@ function applyHealthBodySamples(samples) {
       const existing = state.weightLogs.find((entry) => entry.id === hkId);
       if (!existing) {
         state.weightLogs.push(next);
+        // The day's Health reading is back (the hand-logged one was deleted),
+        // so the coach should show it again.
+        if (Array.isArray(state.deletedLogs)) state.deletedLogs = state.deletedLogs.filter((item) => !(item.kind === "weight" && item.id === hkId));
         changed += 1;
       } else if (JSON.stringify(existing) !== JSON.stringify({ ...existing, ...next })) {
         Object.assign(existing, next);

@@ -217,7 +217,9 @@ function archiveOldHistory() {
   if (Date.now() - lastBackupExportAt > 30 * 60000) return toast("Export a backup first, so archived history stays in that file.");
   const cutoff = Date.now() - 365 * 86400000;
   // Apple Health readings are not in exported backups; leave them in place.
-  const isOld = (entry) => Number.isFinite(Date.parse(entry?.date)) && Date.parse(entry.date) < cutoff && !String(entry?.id || "").startsWith("hk-") && entry?.cardioType !== "HealthKit";
+  // The start weigh-in stays so "change from start" does not move.
+  const startId = startingWeighIn()?.id;
+  const isOld = (entry) => !(startId && entry?.id === startId) && Number.isFinite(Date.parse(entry?.date)) && Date.parse(entry.date) < cutoff && !String(entry?.id || "").startsWith("hk-") && entry?.cardioType !== "HealthKit";
   const keys = ["workoutLogs", "weightLogs", "measurements", "weeklyCheckIns", "prepLogs"];
   const counts = Object.fromEntries(keys.map((key) => [key, (state[key] || []).filter(isOld).length]));
   const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
@@ -313,11 +315,16 @@ function nativeBackupBridge() {
   return window.webkit?.messageHandlers?.peaksetBackup || null;
 }
 
+let lastSnapshotAttemptAt = 0;
 function requestAutomaticSnapshot(reason = "scheduled", force = false) {
   const bridge = nativeBackupBridge();
   if (!bridge || !state.profile) return false;
   const last = Date.parse(state.backupStatus?.at || "");
   if (!force && Number.isFinite(last) && Date.now() - last < SNAPSHOT_INTERVAL_MS) return false;
+  // After a failed backup (iCloud full or signed out), every app switch would
+  // serialize and send the whole logbook again; retry at most every 15 min.
+  if (!force && Date.now() - lastSnapshotAttemptAt < 15 * 60000) return false;
+  lastSnapshotAttemptAt = Date.now();
   // The athlete id keeps a fresh install (new id until it restores) from
   // overwriting another install's backup for the same day in iCloud Drive.
   bridge.postMessage({ action: "snapshot", reason, filename: `mass-method-backup-${todayStamp()}-${String(state.athleteId || "device").slice(0, 8)}.json`, json: JSON.stringify(nativeBackupPayload()) });

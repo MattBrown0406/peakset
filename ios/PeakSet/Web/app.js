@@ -882,7 +882,9 @@ function loadState() {
         running: false,
         startedAt: null,
         endsAt: null,
-        fullscreen: Boolean(savedTimer.running && savedTimer.fullscreen),
+        // A rest that ended while the app was closed shows "Rest complete"
+        // only if it ended recently, not a day-old overlay on the next visit.
+        fullscreen: Boolean(savedTimer.running && savedTimer.fullscreen && Number.isFinite(endsAt) && Date.now() - endsAt < 10 * 60000),
         exerciseIndex: Number.isInteger(savedTimer.exerciseIndex) ? savedTimer.exerciseIndex : null
       };
     }
@@ -961,7 +963,7 @@ function sanitizeStoredState(next) {
   if (next.coachMessage !== null && next.coachMessage !== undefined) {
     const message = next.coachMessage;
     next.coachMessage = isObject(message)
-      ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), receivedAt: String(message.receivedAt ?? "") }
+      ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), ...(Number.isFinite(message.newCount) && Number.isFinite(message.updatedCount) ? { newCount: Math.max(0, Math.min(100, Math.trunc(message.newCount))), updatedCount: Math.max(0, Math.min(100, Math.trunc(message.updatedCount))) } : {}), receivedAt: String(message.receivedAt ?? "") }
       : null;
   }
   next.deletedLogs = (Array.isArray(next.deletedLogs) ? next.deletedLogs : []).filter((item) => isObject(item) && typeof item.id === "string" && typeof item.kind === "string").slice(-300);
@@ -1572,17 +1574,38 @@ function muscleLabel(muscle) {
 // Rotate through the phase's body-part plans: suggest the muscle group trained
 // least recently (never trained counts as oldest), and never the plan just
 // finished. A fixed plan per phase had a new athlete training chest every day.
-function todaysRecommendedPlan(avoidMuscles = []) {
+function todaysRecommendedPlan(avoidMuscles = [], planFits = null) {
   const phase = ["prep", "bulking"].includes(state.phase) ? state.phase : "offseason";
   const fullRotation = ["chest", "back", "legs", "shoulders", "arms"];
   // Tomorrow's scheduled template already covers its muscles.
   const rotation = fullRotation.filter((muscle) => !avoidMuscles.includes(muscle)).length ? fullRotation.filter((muscle) => !avoidMuscles.includes(muscle)) : fullRotation;
-  const candidates = planTemplates.filter((plan) => plan.phase === phase && rotation.includes(plan.muscle) && !plan.id.startsWith("weak-point"));
-  const fallback = planTemplates.find((plan) => plan.id === (phase === "prep" ? "prep-upper-pump" : phase === "bulking" ? "back-width" : "chest-density"));
-  if (!candidates.length) return fallback;
-  const lastTrained = Object.fromEntries(rotation.map((muscle) => [muscle, -Infinity]));
-  const lastByTitle = {};
   const { byId } = exerciseIndexes();
+  // Road Gym templates are tagged "travel"; rank them by the muscle most of
+  // their exercises train.
+  const planMuscle = (plan) => {
+    if (fullRotation.includes(plan.muscle)) return plan.muscle;
+    const counts = {};
+    (plan.exercises || []).forEach((row) => {
+      const muscle = byId.get(Array.isArray(row) ? row[0] : row?.id)?.muscle;
+      if (muscle) counts[muscle] = (counts[muscle] || 0) + 1;
+    });
+    return Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || plan.muscle;
+  };
+  let candidates = planTemplates.filter((plan) => plan.phase === phase && rotation.includes(plan.muscle) && !plan.id.startsWith("weak-point"));
+  let fallback = planTemplates.find((plan) => plan.id === (phase === "prep" ? "prep-upper-pump" : phase === "bulking" ? "back-width" : "chest-density"));
+  // A limited equipment profile (Road Gym) gets plans it can actually run.
+  if (typeof planFits === "function") {
+    const fitting = candidates.filter(planFits);
+    const travel = planTemplates.filter((plan) => plan.phase === "travel" && planFits(plan));
+    if (fitting.length) candidates = fitting;
+    else if (travel.length) {
+      candidates = travel.filter((plan) => rotation.includes(planMuscle(plan))).length ? travel.filter((plan) => rotation.includes(planMuscle(plan))) : travel;
+      fallback = travel[0];
+    }
+  }
+  if (!candidates.length) return fallback;
+  const lastTrained = Object.fromEntries([...new Set([...rotation, ...candidates.map(planMuscle)])].map((muscle) => [muscle, -Infinity]));
+  const lastByTitle = {};
   (state.workoutLogs || []).forEach((log) => {
     const time = Date.parse(log?.date);
     if (!Number.isFinite(time)) return;
@@ -1591,9 +1614,10 @@ function todaysRecommendedPlan(avoidMuscles = []) {
       if (muscle in lastTrained) lastTrained[muscle] = Math.max(lastTrained[muscle], time);
     });
   });
-  const muscle = rotation.filter((item) => candidates.some((plan) => plan.muscle === item)).sort((a, b) => lastTrained[a] - lastTrained[b] || rotation.indexOf(a) - rotation.indexOf(b))[0];
+  const order = (muscle) => (rotation.includes(muscle) ? rotation.indexOf(muscle) : rotation.length);
+  const muscle = [...new Set(candidates.map(planMuscle))].sort((a, b) => lastTrained[a] - lastTrained[b] || order(a) - order(b))[0];
   // Within the muscle group, the plan done least recently (each plan gets its turn).
-  const forMuscle = candidates.filter((plan) => plan.muscle === muscle).sort((a, b) => (lastByTitle[a.title] ?? -Infinity) - (lastByTitle[b.title] ?? -Infinity));
+  const forMuscle = candidates.filter((plan) => planMuscle(plan) === muscle).sort((a, b) => (lastByTitle[a.title] ?? -Infinity) - (lastByTitle[b.title] ?? -Infinity));
   return forMuscle[0] || fallback;
 }
 
@@ -1630,13 +1654,18 @@ function totalVolume(log) {
   return (log.sets || []).reduce((sum, set) => sum + ((Number(set.weight) || 0) * (Number(set.reps) || 0)), 0);
 }
 
-function stats() {
-  const lastWeight = state.weightLogs[0];
+// The weigh-in "change from start" is measured from (archiving keeps it).
+function startingWeighIn() {
   const startedAt = Date.parse(state.profile?.createdAt || "");
   const sinceStart = Number.isFinite(startedAt)
     ? state.weightLogs.filter((entry) => Date.parse(entry.date) >= startedAt - 86400000)
     : state.weightLogs;
-  const firstWeight = sinceStart[sinceStart.length - 1] || state.weightLogs[state.weightLogs.length - 1];
+  return sinceStart[sinceStart.length - 1] || state.weightLogs[state.weightLogs.length - 1];
+}
+
+function stats() {
+  const lastWeight = state.weightLogs[0];
+  const firstWeight = startingWeighIn();
   const lastSeven = state.workoutLogs.filter((log) => Date.now() - new Date(log.date).getTime() < 7 * 86400000);
   const weeklyVolume = lastSeven.reduce((sum, log) => sum + (Number(log.volume) || totalVolume(log)), 0);
   const weightDelta = lastWeight && firstWeight
