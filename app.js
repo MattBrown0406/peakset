@@ -1595,18 +1595,20 @@ function todaysRecommendedPlan(avoidMuscles = [], planFits = null) {
   };
   let candidates = planTemplates.filter((plan) => plan.phase === phase && rotation.includes(plan.muscle) && !plan.id.startsWith("weak-point"));
   let fallback = planTemplates.find((plan) => plan.id === (phase === "prep" ? "prep-upper-pump" : phase === "bulking" ? "back-width" : "chest-density"));
-  // A limited equipment profile (Road Gym) gets plans it can actually run.
+  // A limited equipment profile (Road Gym, garage) gets, for each muscle, a
+  // phase plan it can run, else a Road Gym template for that muscle, else the
+  // usual plans (exercises can be swapped), so the rotation never sticks.
   if (typeof planFits === "function") {
-    const fitting = candidates.filter(planFits);
     const travel = planTemplates.filter((plan) => plan.phase === "travel" && planFits(plan));
-    // Muscles no phase plan can cover with this equipment get a Road Gym
-    // template, so the rotation still reaches every muscle group.
-    const covered = new Set(fitting.map(planMuscle));
-    const travelForRotation = travel.filter((plan) => rotation.includes(planMuscle(plan)) && !covered.has(planMuscle(plan)));
-    const merged = [...fitting, ...travelForRotation];
-    if (merged.length) candidates = merged;
-    else if (travel.length) candidates = travel;
-    if (!fitting.length && travel.length) fallback = travel[0];
+    const perMuscle = rotation.flatMap((muscle) => {
+      const phasePlans = candidates.filter((plan) => plan.muscle === muscle);
+      const fitting = phasePlans.filter(planFits);
+      if (fitting.length) return fitting;
+      const travelFitting = travel.filter((plan) => planMuscle(plan) === muscle);
+      return travelFitting.length ? travelFitting : phasePlans;
+    });
+    if (perMuscle.length) candidates = perMuscle;
+    if (!candidates.some(planFits) && travel.length) fallback = travel[0];
   }
   if (!candidates.length) return fallback;
   const lastTrained = Object.fromEntries([...new Set([...rotation, ...candidates.map(planMuscle)])].map((muscle) => [muscle, -Infinity]));
@@ -2597,7 +2599,7 @@ function renderToday() {
           `).join("")}
         </div>
         <div class="actions">
-          <button class="primary-btn" onclick="startWorkout('${plan.id}')">Start ${escapeHtml(plan.title.length > 32 ? `${plan.title.slice(0, 31).trimEnd()}…` : plan.title)}</button>
+          <button class="primary-btn" onclick="startWorkout('${plan.id}')">Start ${escapeHtml(Array.from(plan.title).length > 32 ? `${Array.from(plan.title).slice(0, 31).join("").trimEnd()}…` : plan.title)}</button>
           <button class="secondary-btn" onclick="startWorkout('road-gym-full')">Start Road Gym</button>
           <button class="secondary-btn" onclick="setView('plans')">Browse Plans</button>
         </div>
@@ -3641,7 +3643,7 @@ function renderLogbook() {
             </div>
             ${isSafeRowId(log.id) ? `<button class="ghost-btn danger compact-btn" aria-label="Delete ${escapeHtml(log.title)} from ${formatShortDate(log.date)}" onclick="deleteLogEntry('workout','${log.id}')">Delete workout</button>` : ""}
             <p class="muted">${plural((log.sets || []).length, "set")}, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume</p>
-            <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}${(log.sets || []).length > 4 ? ` <span class="muted">+${(log.sets || []).length - 4} more sets</span>` : ""}</p>
+            <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}${(log.sets || []).length > 4 ? ` <span class="muted">+${(log.sets || []).length - 4} more ${(log.sets || []).length === 5 ? "set" : "sets"}</span>` : ""}</p>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No workouts logged in this range.</p></div>'}
       </div>

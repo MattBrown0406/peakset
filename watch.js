@@ -236,7 +236,10 @@ function applyWatchCommand(command) {
     completeSet(exIndex, setIndex);
     // Date the set by when it was done on the watch, not when it arrived.
     const doneAt = Number(command.completedAt);
-    if (state.activeWorkout?.exercises?.[exIndex]?.sets?.[setIndex]?.done && Number.isFinite(doneAt) && doneAt <= Date.now()) state.activeWorkout.lastSetAt = Math.max(lastSetBefore, doneAt);
+    if (state.activeWorkout?.exercises?.[exIndex]?.sets?.[setIndex]?.done && Number.isFinite(doneAt) && doneAt <= Date.now()) {
+      state.activeWorkout.lastSetAt = Math.max(lastSetBefore, doneAt);
+      saveState();
+    }
     const startedNewRest = state.timer !== timerObjectBefore && state.timer.running && state.timer.exerciseIndex === exIndex;
     const completedAt = Number(command.completedAt);
     // A set that arrives late must not replace a rest started by a newer set.

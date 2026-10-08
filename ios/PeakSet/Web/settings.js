@@ -268,7 +268,7 @@ function restoreBackupPayload(payload, sourceLabel = "this backup") {
     localStorage.setItem(STORE_KEY, serializeForStorage(restored));
     // A backup file holds photo records, not images; ask iOS to copy the
     // images back from the iCloud Drive mirror (no-op when there are none).
-    if (native && Array.isArray(restored.photos) && restored.photos.some((photo) => photo?.storage === "native")) {
+    if (native && Array.isArray(restored.progressPhotos) && restored.progressPhotos.some((photo) => photo?.storage === "native")) {
       try { nativeBackupBridge().postMessage({ action: "restorePhotos" }); } catch {}
     }
   } catch {

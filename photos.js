@@ -76,6 +76,8 @@ function photoImg(photo, className = "", extra = "") {
 // instead of a broken image.
 function photoMissing(img) {
   if (!img || img.dataset.missing) return;
+  // A browser-stored photo renders with an empty src until its file is read.
+  if (!img.getAttribute("src")) return;
   img.dataset.missing = "1";
   img.classList.add("photo-missing");
   img.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400"><rect width="300" height="400" fill="#16213a"/><text x="150" y="190" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">Photo not on</text><text x="150" y="222" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">this iPhone yet</text></svg>')}`;

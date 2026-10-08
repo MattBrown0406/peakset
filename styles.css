@@ -1922,8 +1922,39 @@ img {
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
-.exercise-row > span.row-date {
+.row-date {
   white-space: nowrap;
+}
+
+/* Small phones (iPhone SE 1st gen, zoomed display): give text the width. */
+@media (max-width: 359px) {
+  .exercise-row:has(> .mini-actions) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .exercise-row:has(> .mini-actions) > .mini-actions {
+    justify-content: flex-start;
+  }
+
+  .exercise-row:has(> span + strong + .compact-btn) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .exercise-row:has(> span + strong + .compact-btn) > span {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .exercise-row:has(> span + strong + .compact-btn) > strong {
+    grid-column: 1;
+    grid-row: 2;
+    text-align: left;
+  }
+
+  .exercise-row:has(> span + strong + .compact-btn) > .compact-btn {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
 }
 
 .exercise-row:has(> span + strong + .compact-btn) > span,

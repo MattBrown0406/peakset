@@ -1466,12 +1466,30 @@ console.log("Audit round 8 checks passed.");
       runNb("var posts20 = []; var toasts20 = []; window.webkit = { messageHandlers: { peaksetBackup: { postMessage(m) { posts20.push(m); } } } }; window.location = { reload() {} }; toast = (m) => toasts20.push(m)");
       runNb("handleNativeBackup({ status: 'error', kind: 'restore', message: 'The backup is still downloading.' })");
       assert.ok(runNb("toasts20.some((m) => m.startsWith('Restore failed'))") && runNb("state.backupStatus.message") === "Backed up to iCloud.", "a failed restore is shown and leaves the backup status alone");
-      runNb("restoreBackupPayload({ format: BACKUP_FORMAT, state: { profile: { bodyweight: 200 }, photos: [{ id: 'p1', pose: 'front-relaxed', date: new Date().toISOString(), storage: 'native' }] } })");
+      runNb("restoreBackupPayload({ format: BACKUP_FORMAT, state: { profile: { bodyweight: 200 }, progressPhotos: [{ id: 'p1', pose: 'front-relaxed', date: new Date().toISOString(), storage: 'native' }] } })");
       assert.ok(runNb("posts20.some((m) => m.action === 'restorePhotos')"), "restoring a backup file asks iOS to bring the photos back from iCloud Drive");
       assert.ok(read("photos.js").includes('onerror="photoMissing(this)"') && read("ios/PeakSet/PeakSetWebView.swift").includes('case "restorePhotos":'), "missing photo files show a placeholder, and native handles restorePhotos");
       const dl = makeContext({ profile: { bodyweight: 200 } });
       vm.runInContext("state.trainingBlock = { id: 'b', name: 'B', startDate: dateKey(addDays(startOfWeek(), -21)), accumulationWeeks: 3, deload: true, focus: [], createdAt: new Date().toISOString() }", dl.context);
       assert.equal(vm.runInContext("blockWeekInfo().deload && todayPreviewPlan(planTemplates.find((plan) => plan.id === 'chest-density')).exercises[0][1] === Math.ceil(normalizePlanExercise(planTemplates.find((plan) => plan.id === 'chest-density').exercises[0]).sets / 2)", dl.context), true, "Today shows the halved deload sets that Start will load");
+    }
+    // Round 21: garage profiles rotate; quarter-step loads stay exact; legacy matching is order-independent.
+    {
+      const g = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+      const runG = (code) => vm.runInContext(code, g.context);
+      runG("state.equipmentProfiles.push({ id: 'garage', name: 'Garage', equipment: ['Barbell', 'Dumbbells', 'Bench', 'Rack', 'Plates', 'Pull-up bar', 'Bodyweight'] }); state.activeEquipmentProfileId = 'garage'; state.workoutLogs = []; state.phase = 'offseason'");
+      const garageSeen = new Set();
+      for (let i = 0; i < 10; i += 1) {
+        garageSeen.add(runG(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'g-${i}', title: plan.title, date: new Date(Date.now() - (20 - ${i}) * 86400000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); return plan.muscle; })()`));
+      }
+      assert.ok(garageSeen.size >= 4, `a garage profile rotates muscles (saw ${[...garageSeen].join(", ")})`);
+      assert.ok(read("toolkit.js").includes("Number.isInteger(Math.round(bestWeight * 400) / 100) ? 2 : 1"), "progression copy keeps quarter-step loads like 61.25 exact");
+      const lg = makeContext({ profile: { bodyweight: 200 } });
+      const runLg = (code) => vm.runInContext(code, lg.context);
+      runLg("window.confirm = () => true; state.customPlans = [{ id: 'mon', title: 'Push', muscle: 'chest', phase: 'offseason', rest: 120, note: 'From Coach Kim', scheduleDay: 'Monday', fromCoach: 'Coach Kim', exercises: [['barbell-bench', 4, '8', 120, 0, { group: '', setType: 'standard' }]] }, { id: 'thu', title: 'Push', muscle: 'chest', phase: 'offseason', rest: 120, note: 'From Coach Kim', scheduleDay: 'Thursday', fromCoach: 'Coach Kim', exercises: [['barbell-bench', 3, '8', 120, 0, { group: '', setType: 'standard' }]] }]");
+      const legacyPlan = (id, sets, day) => ({ id, title: "Push", muscle: "chest", phase: "offseason", rest: 120, note: "", scheduleDay: day, exercises: [["barbell-bench", sets, "8", 120, 0, {}]] });
+      runLg(`handleIncomingFileText(${JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", plans: [legacyPlan("c-thu", 5, "Thursday"), legacyPlan("c-mon", 4, "Monday")] }))})`);
+      assert.equal(runLg("state.customPlans.map((plan) => plan.id + ':' + plan.exercises[0][1]).join(',')"), "mon:4,thu:5", "an unchanged legacy template keeps its slot when another same-titled one changes");
     }
     console.log("Audit round 19 checks passed.");
   }

@@ -515,16 +515,24 @@ function importProgram(program) {
   const plans = [];
   const updates = [];
   const claimed = new Set();
-  sanitized.forEach((plan) => {
-    let existingIndex = plan.sourceId ? state.customPlans.findIndex((item, index) => !claimed.has(index) && item.fromCoach === plan.fromCoach && item.sourceId === plan.sourceId) : -1;
-    // Coach workouts imported before source ids existed: match by title once.
-    if (existingIndex === -1) {
-      const legacy = (item, index) => !claimed.has(index) && item.fromCoach === plan.fromCoach && !item.sourceId && item.title === plan.title;
-      existingIndex = state.customPlans.findIndex((item, index) => legacy(item, index) && contentKey(item) === contentKey(plan, plan.scheduleDay || item.scheduleDay));
-      if (existingIndex === -1) existingIndex = state.customPlans.findIndex(legacy);
+  const matchFor = new Map();
+  const claim = (plan, predicate) => {
+    if (matchFor.has(plan)) return;
+    const index = state.customPlans.findIndex((item, itemIndex) => !claimed.has(itemIndex) && item.fromCoach === plan.fromCoach && predicate(item));
+    if (index !== -1) {
+      claimed.add(index);
+      matchFor.set(plan, index);
     }
-    if (existingIndex === -1) return plans.push(plan);
-    claimed.add(existingIndex);
+  };
+  // Same source id first; then coach workouts imported before source ids
+  // existed, by title — identical ones before changed ones, so two
+  // same-titled templates never swap contents.
+  sanitized.forEach((plan) => plan.sourceId && claim(plan, (item) => item.sourceId === plan.sourceId));
+  sanitized.forEach((plan) => claim(plan, (item) => !item.sourceId && item.title === plan.title && contentKey(item) === contentKey(plan, plan.scheduleDay || item.scheduleDay)));
+  sanitized.forEach((plan) => claim(plan, (item) => !item.sourceId && item.title === plan.title));
+  sanitized.forEach((plan) => {
+    if (!matchFor.has(plan)) return plans.push(plan);
+    const existingIndex = matchFor.get(plan);
     const existing = state.customPlans[existingIndex];
     if (contentKey(existing) !== contentKey(plan, plan.scheduleDay || existing.scheduleDay)) updates.push({ existingIndex, plan });
     else if (!existing.sourceId && plan.sourceId) existing.sourceId = plan.sourceId;
