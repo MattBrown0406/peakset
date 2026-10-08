@@ -23,6 +23,8 @@ function firstNumber(text, fallback) {
   return match ? match[0] : fallback;
 }
 
+// Filled while a watch snapshot is built: one history lookup per exercise.
+let watchPerformanceCache = null;
 function suggestedSetValues(exercise, setIndex) {
   const set = exercise.sets[setIndex];
   // Working sets and drop sets are suggested from their own kind: a drop must
@@ -30,7 +32,11 @@ function suggestedSetValues(exercise, setIndex) {
   const sameKind = (item) => Boolean(item.dropSet) === Boolean(set?.dropSet);
   const lastDone = exercise.sets.filter((item) => item.done && sameKind(item)).at(-1);
   const ordinal = exercise.sets.slice(0, setIndex).filter(sameKind).length;
-  const previous = typeof lastExercisePerformance === "function" ? lastExercisePerformance(exercise.id) : null;
+  let previous = watchPerformanceCache?.get(exercise.id);
+  if (previous === undefined) {
+    previous = typeof lastExercisePerformance === "function" ? lastExercisePerformance(exercise.id) : null;
+    watchPerformanceCache?.set(exercise.id, previous);
+  }
   const previousKind = (previous?.sets || []).filter(sameKind);
   const previousSet = previousKind[Math.min(ordinal, previousKind.length - 1)];
   // A first-ever drop set has no drop history: start from the working weight.
@@ -67,6 +73,15 @@ function currentWatchExerciseIndex(workout) {
 }
 
 function buildWatchSnapshot() {
+  watchPerformanceCache = new Map();
+  try {
+    return buildWatchSnapshotUncached();
+  } finally {
+    watchPerformanceCache = null;
+  }
+}
+
+function buildWatchSnapshotUncached() {
   const workout = state.activeWorkout;
   const info = typeof blockWeekInfo === "function" ? blockWeekInfo() : null;
   const blockLine = info?.status === "active" ? (info.deload ? "Deload" : `${info.targetRir} RIR`) : "";
@@ -264,8 +279,15 @@ function applyWatchCommand(command) {
     // caught up.
     if (set.done && startedNewRest && Number.isFinite(completedAt) && Date.now() - completedAt > 3000) {
       const remaining = Math.ceil((completedAt + (Number(exercise.rest) || DEFAULT_REST_SECONDS) * 1000 - Date.now()) / 1000);
-      if (remaining > 0) startTimer(remaining, state.view === "session", exIndex, false);
-      else stopTimer();
+      if (remaining > 0) {
+        startTimer(remaining, state.view === "session", exIndex, false);
+        // Keep the real start so the Lock Screen bar shows the time passed.
+        const rest = Number(exercise.rest) || DEFAULT_REST_SECONDS;
+        state.timer.startedAt = completedAt;
+        state.timer.total = Math.max(remaining, rest);
+        if (typeof refreshRestLiveActivity === "function") refreshRestLiveActivity();
+        saveState();
+      } else stopTimer();
     }
     return Boolean(set.done);
   }

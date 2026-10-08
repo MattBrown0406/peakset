@@ -831,11 +831,15 @@ function liveExerciseCandidates(currentId = null) {
   const current = currentId ? exerciseById(currentId) : null;
   const existing = new Set((state.activeWorkout?.exercises || []).map((item) => item.id));
   const travel = state.activeWorkout?.phase === "travel";
-  return exerciseLibrary.filter((item) =>
+  const matches = exerciseLibrary.filter((item) =>
     !existing.has(item.id)
     && (!travel || item.hotel)
     && exerciseMatchesEquipmentProfile(item)
     && (!current || item.muscle === current.muscle));
+  // Substitutes for the same target (hamstrings for a leg curl) come first.
+  if (!current || typeof exerciseMuscleGroup !== "function") return matches;
+  const target = exerciseMuscleGroup(current);
+  return [...matches.filter((item) => exerciseMuscleGroup(item) === target), ...matches.filter((item) => exerciseMuscleGroup(item) !== target)];
 }
 
 function substituteActiveExercise(exIndex, id) {
@@ -865,7 +869,8 @@ function substituteActiveExercise(exIndex, id) {
 
 function addLiveExercise() {
   const id = document.getElementById("liveExerciseAdd")?.value;
-  if (!id || !state.activeWorkout) return;
+  if (!state.activeWorkout) return;
+  if (!id) return toast("Choose an exercise to add first.");
   if (!liveExerciseCandidates().some((item) => item.id === id)) return toast("That exercise is already in this workout or unavailable here.");
   if (state.activeWorkout.exercises.length >= MAX_PLAN_EXERCISES) return toast(`A workout can hold up to ${MAX_PLAN_EXERCISES} exercises.`);
   const exercise = exerciseById(id);

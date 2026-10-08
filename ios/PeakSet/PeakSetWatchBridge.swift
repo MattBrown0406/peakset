@@ -192,7 +192,17 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
             PeakSetLiveActivityManager.shared.settle()
         case "completeSet":
             let endsAtMs = (command["restEndsAt"] as? NSNumber)?.doubleValue ?? 0
-            guard endsAtMs > 0 else { return }
+            guard endsAtMs > 0 else {
+                // The watch logged the workout's last set: no rest alert or
+                // countdown should outlive it.
+                let done = (command["completedSets"] as? NSNumber)?.intValue ?? 0
+                let total = (command["totalSets"] as? NSNumber)?.intValue ?? 0
+                if total > 0 && done >= total {
+                    PeakSetTimerService.shared.cancel()
+                    PeakSetLiveActivityManager.shared.settle()
+                }
+                return
+            }
             let endsAt = Date(timeIntervalSince1970: endsAtMs / 1000)
             guard endsAt > Date() else { return }
             // This rest replaces any phone rest still pending, so its

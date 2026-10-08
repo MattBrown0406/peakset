@@ -228,6 +228,7 @@ p {
 
 h1 {
   max-width: 820px;
+  overflow-wrap: anywhere;
   margin-bottom: 8px;
   font-size: clamp(30px, 10vw, 42px);
   line-height: 1;

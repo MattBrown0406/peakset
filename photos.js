@@ -75,9 +75,11 @@ function photoImg(photo, className = "", extra = "") {
 // file, still downloading from iCloud, or deleted) shows a labelled tile
 // instead of a broken image.
 let photoSnapshotTimer = null;
+// The full-screen camera hides the page too; that is not the app leaving.
+let nativeCaptureOpen = false;
 // A pending photo backup runs before the app may be suspended or killed.
 document.addEventListener?.("visibilitychange", () => {
-  if (!document.hidden || !photoSnapshotTimer) return;
+  if (!document.hidden || !photoSnapshotTimer || nativeCaptureOpen) return;
   clearTimeout(photoSnapshotTimer);
   photoSnapshotTimer = null;
   if (typeof requestAutomaticSnapshot === "function") requestAutomaticSnapshot("photo", true);
@@ -124,6 +126,7 @@ function capturePhoto(source = "camera") {
   const bridge = nativePhotoBridge();
   if (bridge) {
     const ghost = latestPhotoForPose(pose);
+    nativeCaptureOpen = true;
     bridge.postMessage({ action: source === "library" ? "library" : "capture", pose, poseLabel: poseLabel(pose), ghostId: ghost?.storage === "native" ? ghost.id : "" });
     return;
   }
@@ -132,6 +135,8 @@ function capturePhoto(source = "camera") {
 
 function handleNativePhoto(payload) {
   if (!payload || typeof payload !== "object") return;
+  // Any reply (saved, cancelled, error) means the camera or picker closed.
+  if (payload.status !== "thumbnail") nativeCaptureOpen = false;
   if (payload.status === "saved" && /^[A-Za-z0-9-]+$/.test(String(payload.id || ""))) {
     addPhotoRecord({ id: payload.id, pose: PHOTO_POSES.some(([key]) => key === payload.pose) ? payload.pose : state.photoPose, date: payload.date || new Date().toISOString(), storage: "native" });
   } else if (payload.status === "imported") {

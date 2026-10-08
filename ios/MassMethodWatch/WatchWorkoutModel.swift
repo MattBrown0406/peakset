@@ -200,7 +200,11 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         let restEnds = completedAt.addingTimeInterval(max(15, exercise.rest ?? 120))
         // No rest after the workout's last set (the phone skips it too).
         let anyOpen = current.exercises.contains { $0.sets.contains { !$0.done } }
-        if restFollows && anyOpen {
+        if !anyOpen {
+            // Workout done: no rest screen or alert from an earlier rest.
+            localRest = nil
+            restSkippedAt = completedAt
+        } else if restFollows {
             localRest = (completedAt, restEnds)
             localRestStartedOnWatch = true
         }
@@ -370,8 +374,10 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         // done (on this watch too, while the iPhone is locked); a drop follows
         // last session's matching drop, never the working weight.
         let lastDone = set.flatMap { target in exercise.sets.last { $0.done && $0.drop == target.drop } }
+        // A first-ever drop starts from today's working weight.
+        let lastWorking = exercise.sets.last { $0.done && !$0.drop }
         let candidates: [(String?, String?)] = set?.drop == true
-            ? [(set?.suggestedWeight, set?.suggestedReps), (lastDone?.weight, lastDone?.reps)]
+            ? [(set?.suggestedWeight, set?.suggestedReps), (lastDone?.weight, lastDone?.reps), (lastWorking?.weight, lastWorking?.reps)]
             : [(lastDone?.weight, lastDone?.reps), (set?.suggestedWeight, set?.suggestedReps)]
         let pickedWeight = set?.weight.isEmpty == false ? set!.weight : (candidates.compactMap { $0.0 }.first { !$0.isEmpty } ?? exercise.suggestedWeight)
         let pickedReps = set?.reps.isEmpty == false ? set!.reps : (candidates.compactMap { $0.1 }.first { !$0.isEmpty } ?? exercise.suggestedReps)

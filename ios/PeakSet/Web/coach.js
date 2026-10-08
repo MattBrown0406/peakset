@@ -468,6 +468,8 @@ async function importCoachPackage(pkg) {
   }
   // Only now that the import is kept, drop photo files beyond the cap.
   photos.slice(COACH_PHOTOS_PER_ATHLETE).forEach(deletePhotoFile);
+  // A program drafted for another athlete must not carry over.
+  if (state.coach.selectedAthleteId !== athleteId) coachProgramDraft = { planIds: [], message: "", blockWeeks: 0, focus: [] };
   state.coach.selectedAthleteId = athleteId;
   state.view = "coach";
   saveState();
