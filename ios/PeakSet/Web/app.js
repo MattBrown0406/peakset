@@ -8,6 +8,7 @@ const STORAGE_LIMIT_BYTES = 5 * 1024 * 1024;
 let pendingSaveTimer = null;
 let storageWarningShown = false;
 let storageWarningShownAt = 0;
+let storageWarningInterval = 30000;
 let lastSaveSucceeded = true;
 let lastStoredBytes = 0;
 let storageNearlyFullWarned = false;
@@ -870,7 +871,8 @@ function loadState() {
     if (savedTimer.running && Number.isFinite(endsAt) && endsAt > Date.now()) {
       const total = Math.max(1, Math.round(Number(savedTimer.total)) || seconds);
       // A device clock set backwards must not turn a 90 s rest into hours.
-      const clampedEnd = Math.min(endsAt, Date.now() + total * 1000);
+      const savedLeft = Number(savedTimer.left);
+      const clampedEnd = Math.min(endsAt, Date.now() + (Number.isFinite(savedLeft) && savedLeft > 0 ? Math.max(savedLeft, total) : total) * 1000);
       next.timer = {
         seconds,
         total,
@@ -1019,6 +1021,8 @@ function saveState() {
     localStorage.setItem(STORE_KEY, serialized);
     lastStoredBytes = serialized.length;
     storageWarningShown = false;
+    storageWarningInterval = 30000;
+    if (!lastSaveSucceeded) clearStorageAlert();
     lastSaveSucceeded = true;
     if (lastStoredBytes > STORAGE_LIMIT_BYTES * 0.8 && !storageNearlyFullWarned) {
       storageNearlyFullWarned = true;
@@ -1030,7 +1034,10 @@ function saveState() {
     // The warning outranks any "saved" toast that follows, and repeats (at
     // most every 30 s) while saves keep failing.
     lastSaveSucceeded = false;
-    if (!storageWarningShown || Date.now() - storageWarningShownAt > 30000) {
+    // Backs off (30 s, 1, 2, 4… up to 5 min) so a running rest timer, which
+    // saves every second, doesn't raise the alert again and again.
+    if (!storageWarningShown || Date.now() - storageWarningShownAt > storageWarningInterval) {
+      if (storageWarningShown) storageWarningInterval = Math.min(5 * 60000, storageWarningInterval * 2);
       storageWarningShown = true;
       storageWarningShownAt = Date.now();
       toast("Storage is full: this change is NOT saved and will be lost when the app closes. Export a backup in More, then archive older history.", { priority: true });
@@ -1228,22 +1235,50 @@ function setChoice(inputId, value, button) {
   button.setAttribute("aria-pressed", "true");
 }
 
+let queuedToast = null;
 function toast(message, options = {}) {
   const old = document.querySelector(".toast");
   // A warning (storage full) is not replaced by a routine message such as
-  // "Workout saved" that would claim the opposite.
-  if (old && old.dataset?.priority === "1" && !options.priority) return;
+  // "Workout saved" that would claim the opposite; the routine message shows
+  // once the warning is gone.
+  if (old && old.dataset?.priority === "1" && !options.priority) {
+    queuedToast = message;
+    return;
+  }
   if (old) old.remove();
   const el = document.createElement("div");
   el.className = "toast";
   el.setAttribute("role", options.priority ? "alert" : "status");
   el.setAttribute("aria-live", options.priority ? "assertive" : "polite");
-  if (options.priority && el.dataset) el.dataset.priority = "1";
+  const dismiss = () => {
+    if (!el.parentNode && el.isConnected === false) return;
+    el.remove();
+    if (options.priority && queuedToast) {
+      const next = queuedToast;
+      queuedToast = null;
+      toast(next);
+    }
+  };
+  if (options.priority && el.dataset) {
+    el.dataset.priority = "1";
+    if (typeof el.addEventListener === "function") el.addEventListener("click", dismiss);
+  }
   el.textContent = message;
   document.body.appendChild(el);
   // Long messages stay long enough to read.
   const duration = options.priority ? 8000 : Math.min(7000, Math.max(2600, String(message).length * 50));
-  setTimeout(() => el.remove(), duration);
+  setTimeout(dismiss, duration);
+}
+
+// A save that worked after a failed one: the "NOT saved" alert is now wrong.
+function clearStorageAlert() {
+  const alertToast = document.querySelector?.('.toast[data-priority="1"]');
+  if (alertToast) alertToast.remove();
+  if (queuedToast) {
+    const next = queuedToast;
+    queuedToast = null;
+    toast(next);
+  }
 }
 
 function getAudioContext() {
@@ -3144,6 +3179,9 @@ function reflectReopenedSet(exIndex, setIndex) {
   if (button) {
     button.className = "primary-btn";
     button.textContent = "Complete";
+    const exercise = state.activeWorkout?.exercises?.[exIndex];
+    const set = exercise?.sets?.[setIndex];
+    if (exercise && set) button.setAttribute?.("aria-label", `Complete, ${exercise.name} set ${set.label || set.set}`);
   }
   const counter = document.querySelector?.("[data-sets-completed]");
   const workout = state.activeWorkout;

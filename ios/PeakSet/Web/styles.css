@@ -1078,6 +1078,12 @@ textarea:focus {
   background: rgba(24, 32, 53, 0.97);
   border: 1px solid rgba(var(--teal-rgb), 0.35);
   box-shadow: var(--shadow);
+  /* Never block the set row underneath; a warning can be tapped away. */
+  pointer-events: none;
+}
+
+.toast[data-priority="1"] {
+  pointer-events: auto;
 }
 
 .mobile-bar {
@@ -1933,6 +1939,17 @@ img {
 
 .exercise-row:has(> span + strong + .compact-btn) > strong {
   white-space: normal;
+  text-align: right;
+}
+
+/* Entry rows without a Delete button (Apple Health steps). */
+.exercise-row:has(> span + strong:last-child) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.exercise-row:has(> span + strong:last-child) > strong {
+  white-space: normal;
+  overflow-wrap: break-word;
   text-align: right;
 }
 

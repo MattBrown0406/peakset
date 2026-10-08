@@ -346,10 +346,14 @@ function refreshNativeBackups() {
   bridge.postMessage({ action: "list" });
 }
 
+// One restore at a time: an iCloud download can take up to 30 s.
+let restoreInProgress = false;
 function restoreNativeBackup(index) {
   const backup = nativeBackups[index];
   const bridge = nativeBackupBridge();
-  if (!backup || !bridge) return;
+  if (!backup || !bridge || restoreInProgress) return;
+  restoreInProgress = true;
+  if (state.view === "more" || onboardingRestoreOpen) render();
   bridge.postMessage({ action: "restore", name: backup.name, location: backup.location });
   toast(String(backup.location || "").startsWith("iCloud") ? "Restoring… iCloud may take up to 30 seconds to download the backup." : "Restoring…");
 }
@@ -366,13 +370,15 @@ function handleNativeBackup(payload) {
     nativeBackupsListState = "done";
     if (state.view === "more" || onboardingRestoreOpen) render();
   } else if (payload.status === "restore") {
+    restoreInProgress = false;
     let parsed = null;
     try { parsed = JSON.parse(payload.json || ""); } catch {}
-    restoreBackupPayload(parsed, `the ${payload.location || "saved"} backup from ${formatShortDate(payload.date)}`);
+    if (!restoreBackupPayload(parsed, `the ${payload.location || "saved"} backup from ${formatShortDate(payload.date)}`) && (state.view === "more" || onboardingRestoreOpen)) render();
   } else if (payload.status === "photosRestored") {
     // Photo files copied back from iCloud Drive after a restore.
     if (["photos", "progress", "today"].includes(state.view)) render();
   } else if (payload.status === "error" && payload.kind === "restore") {
+    restoreInProgress = false;
     // A failed restore must be visible wherever it was started (the new
     // phone's onboarding screen too) and must not replace the backup status.
     toast(typeof payload.message === "string" && payload.message ? `Restore failed: ${payload.message}` : "That backup could not be restored. Try again in a moment.");
@@ -419,8 +425,8 @@ function renderRestoreCard() {
   const native = Boolean(nativeBackupBridge());
   const list = nativeBackups.slice(0, 10).map((backup, index) => `
     <div class="exercise-row">
-      <div><strong>${formatShortDate(backup.date)}</strong><p class="muted" style="margin:2px 0 0">${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))} KB</p></div>
-      <button class="secondary-btn" onclick="restoreNativeBackup(${index})">Restore</button>
+      <div><strong>${formatShortDate(backup.date)}${Number.isFinite(Date.parse(backup.date)) ? `, ${new Date(backup.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}</strong><p class="muted" style="margin:2px 0 0">${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))}\u00a0KB</p></div>
+      <button class="secondary-btn" onclick="restoreNativeBackup(${index})" ${restoreInProgress ? "disabled" : ""}>${restoreInProgress ? "Restoring…" : "Restore"}</button>
     </div>
   `).join("");
   let status = "";
@@ -443,8 +449,8 @@ function renderBackupCard() {
   const native = Boolean(nativeBackupBridge());
   const list = nativeBackups.slice(0, 10).map((backup, index) => `
     <div class="exercise-row">
-      <div><strong>${formatShortDate(backup.date)}</strong><p class="muted" style="margin:2px 0 0">${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))} KB</p></div>
-      <button class="secondary-btn" onclick="restoreNativeBackup(${index})">Restore</button>
+      <div><strong>${formatShortDate(backup.date)}${Number.isFinite(Date.parse(backup.date)) ? `, ${new Date(backup.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}</strong><p class="muted" style="margin:2px 0 0">${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))}\u00a0KB</p></div>
+      <button class="secondary-btn" onclick="restoreNativeBackup(${index})" ${restoreInProgress ? "disabled" : ""}>${restoreInProgress ? "Restoring…" : "Restore"}</button>
     </div>
   `).join("");
   return `
