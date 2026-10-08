@@ -715,6 +715,17 @@ h3 {
   display: block;
 }
 
+/* Builder draft names must stay readable beside the reorder buttons. */
+.exercise-row:has(> .mini-actions) > div > strong {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.coach-note-card .card-head > .ghost-btn {
+  align-self: flex-start;
+  flex: none;
+}
+
 .resume-workout .eyebrow {
   display: flex;
 }
@@ -1903,13 +1914,19 @@ img {
 }
 
 .exercise-row:has(> span + strong + .compact-btn) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+/* A bare date column sizes to the date and never breaks inside it. */
+.exercise-row:has(> span.row-date + strong + .compact-btn) {
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
-.exercise-row:has(> span + strong + .compact-btn) > span {
+.exercise-row > span.row-date {
   white-space: nowrap;
 }
 
+.exercise-row:has(> span + strong + .compact-btn) > span,
 .exercise-row:has(> span + strong + .compact-btn) > strong {
   overflow-wrap: break-word;
 }
