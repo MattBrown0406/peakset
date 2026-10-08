@@ -1246,7 +1246,8 @@ function toast(message, options = {}) {
   // once the warning is gone.
   // While saves are failing, a message claiming something was saved is
   // false: drop it (the storage alert says what really happened).
-  if (!options.priority && !lastSaveSucceeded && /\b(saved|created|added|logged|updated|imported|archived|restored)\b/i.test(String(message))) return;
+  const text = String(message);
+  if (!options.priority && !lastSaveSucceeded && /\b(saved|created|added|logged|updated|imported|archived|restored)\b/i.test(text) && !/\b(not|could|cannot|failed|already|tap|first)\b|n't/i.test(text)) return;
   if (old && old.dataset?.priority === "1" && !options.priority) {
     queuedToast = message;
     return;
@@ -2745,7 +2746,7 @@ function renderPlans() {
       `).join("")}
     </div>
     <div class="grid three">
-      ${plans.map(renderPlanCard).join("")}
+      ${plans.map(renderPlanCard).join("") || '<div class="empty"><p class="muted">No workouts in this filter yet. Build one in the Builder, or pick another filter.</p></div>'}
     </div>
   `;
 }

@@ -1543,6 +1543,16 @@ console.log("Audit round 8 checks passed.");
       runSd("state.weightLogs = Array.from({ length: 12 }, (_, i) => ({ id: 'w' + i, date: new Date(Date.now() - i * 86400000).toISOString(), bodyweight: 200 - i })); toggleAllRecentEntries(); setView('progress')");
       assert.ok(runSd("renderContent()").includes("deleteLogEntry('weight', 'w11')") || runSd("renderContent()").includes("'w11'"), "Show all entries reaches the oldest weigh-in's Delete");
     }
+    // Round 25: a coach-scheduled workout for today wins over an older athlete schedule; failure toasts still show.
+    {
+      const cs = makeContext({ profile: { bodyweight: 200, createdAt: new Date().toISOString() } });
+      const runCs = (code) => vm.runInContext(code, cs.context);
+      runCs("window.confirm = () => true; var day25 = new Date().toLocaleDateString('en-US', { weekday: 'long' }); state.customPlans = [{ id: 'mine', title: 'My Push', muscle: 'chest', phase: 'offseason', rest: 90, note: '', scheduleDay: '', exercises: [['barbell-bench', 3, '8', 120, 0, {}]] }]; updateCustomPlanSchedule('mine', day25)");
+      runCs(`handleIncomingFileText(JSON.stringify({ format: 'mass-method-program', version: 1, from: 'Coach Kim', plans: [{ id: 'c-legs', title: 'Coach Legs', muscle: 'legs', phase: 'offseason', rest: 120, note: '', scheduleDay: day25, exercises: [['barbell-squat', 3, '8', 120, 0, {}]] }] }))`);
+      assert.equal(runCs("todaysRecommendedPlan().title"), "Coach Legs", "the coach's newly scheduled workout is today's workout");
+      runCs("var shown25 = []; document.querySelector = (sel) => null; document.createElement = () => ({ dataset: {}, setAttribute() {}, remove() {} }); document.body.appendChild = (el) => shown25.push(el.textContent); localStorage.setItem = () => { throw new Error('full'); }; saveState(); shown25 = []; toast('The photo could not be saved.'); toast('That weigh-in is already saved.'); toast('Workout saved.')");
+      assert.equal(runCs("shown25.join('|')"), "The photo could not be saved.|That weigh-in is already saved.", "failure and guard messages still show while saves fail; success claims don't");
+    }
     console.log("Audit round 19 checks passed.");
   }
   }

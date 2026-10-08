@@ -620,7 +620,11 @@ function saveBuilderTemplate() {
     const existing = state.customPlans[editingIndex];
     state.customPlans[editingIndex] = { ...existing, ...plan, id: existing.id, phase: plan.muscle === "travel" ? "travel" : existing.phase === "travel" ? plan.phase : (existing.phase ?? plan.phase), rest: existing.rest ?? plan.rest, equipmentProfileId: existing.equipmentProfileId ?? plan.equipmentProfileId, scheduledAt: plan.scheduleDay && plan.scheduleDay !== existing.scheduleDay ? Date.now() : existing.scheduledAt };
   } else {
-    if (plan.scheduleDay) plan.scheduledAt = Date.now();
+    if (plan.scheduleDay) {
+      plan.scheduledAt = Date.now();
+      const others = state.customPlans.filter((item) => item.scheduleDay === plan.scheduleDay);
+      if (others.length) toast(`${others.map((item) => item.title).join(", ")} ${others.length === 1 ? "is" : "are"} also on ${plan.scheduleDay}. Today shows ${plan.title} first.`);
+    }
     state.customPlans.unshift(plan);
   }
   state.builderEditingPlanId = null;
@@ -682,7 +686,7 @@ function updateCustomPlanSchedule(id, scheduleDay) {
   if (scheduleDay && plan.scheduleDay !== scheduleDay) {
     plan.scheduledAt = Date.now();
     const others = state.customPlans.filter((item) => item.id !== id && item.scheduleDay === scheduleDay);
-    if (others.length) toast(`${others.map((item) => item.title).join(", ")} is also on ${scheduleDay}. Today shows ${plan.title} first, then the other.`);
+    if (others.length) toast(`${others.map((item) => item.title).join(", ")} ${others.length === 1 ? "is" : "are"} also on ${scheduleDay}. Today shows ${plan.title} first, then ${others.length === 1 ? "the other" : "the others"}.`);
   }
   plan.scheduleDay = scheduleDay;
   saveState();
@@ -978,7 +982,7 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
     state.activeWorkout.lastExerciseIndex = exIndex;
     state.activeWorkout.lastSetAt = Date.now();
     state.activeWorkout.lastSetKey = `${exIndex}-${setIndex}`;
-    state.activeWorkout.restBeforeLastSet = state.timer.running ? { endsAt: state.timer.endsAt, fullscreen: state.timer.fullscreen, exerciseIndex: state.timer.exerciseIndex } : null;
+    state.activeWorkout.restBeforeLastSet = state.timer.running ? { endsAt: state.timer.endsAt, total: state.timer.total, fullscreen: state.timer.fullscreen, exerciseId: state.activeWorkout.exercises[state.timer.exerciseIndex]?.id ?? null } : null;
   } else {
     // Undoing the set that started the running rest cancels that rest, and
     // brings back the rest it replaced if that one is still going.
@@ -986,7 +990,13 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
       const before = state.activeWorkout.restBeforeLastSet;
       stopTimer();
       const remaining = before ? Math.ceil((Number(before.endsAt) - Date.now()) / 1000) : 0;
-      if (remaining > 1) startTimer(remaining, Boolean(before.fullscreen), Number.isInteger(before.exerciseIndex) ? before.exerciseIndex : null, false);
+      // Find that rest's exercise by id: exercises may have moved since.
+      const restIndex = before?.exerciseId ? state.activeWorkout.exercises.findIndex((item) => item.id === before.exerciseId) : -1;
+      if (remaining > 1) {
+        startTimer(remaining, Boolean(before.fullscreen), restIndex === -1 ? null : restIndex, false);
+        // Keep the ring showing how much of that rest has passed.
+        if (Number(before.total) >= remaining) state.timer.total = Number(before.total);
+      }
     }
     if (state.activeWorkout.lastSetKey === `${exIndex}-${setIndex}`) {
       state.activeWorkout.lastSetKey = null;
@@ -1060,7 +1070,8 @@ finishWorkout = function finishToolkitWorkout() {
   state.workoutLogs.unshift(log);
   // The workout picked on Today is done: Today goes back to the
   // recommendation (picking it again starts a second session).
-  if (state.todayPlanId && state.todayPlanId === workout.planId) {
+  const pickedPlan = state.todayPlanId ? allPlans().find((plan) => plan.id === state.todayPlanId) : null;
+  if (state.todayPlanId && (state.todayPlanId === workout.planId || pickedPlan?.title === workout.title)) {
     state.todayPlanId = null;
     state.todayWorkoutPick = "recommended";
   }
@@ -1227,7 +1238,7 @@ function saveWeeklyCheckIn() {
     notes: document.getElementById("checkNotes")?.value.trim() || ""
   };
   const readiness = [entry.energy, entry.hunger, entry.digestion, entry.recovery].filter((value) => value !== null);
-  if (entry.sleep !== null && (!Number.isFinite(entry.sleep) || entry.sleep <= 0 || entry.sleep > 24)) return toast("Enter sleep between 0.5 and 24 hours.");
+  if (entry.sleep !== null && (!Number.isFinite(entry.sleep) || entry.sleep < 0.5 || entry.sleep > 24)) return toast("Enter sleep between 0.5 and 24 hours.");
   if (readiness.some((value) => !Number.isFinite(value) || value < 1 || value > 5)) return toast("Readiness ratings must be between 1 and 5.");
   if (entry.sleep === null && readiness.length === 0 && !entry.notes) return toast("Add at least one check-in value or note.");
   state.weeklyCheckIns.unshift(entry);
@@ -1266,7 +1277,7 @@ function latestMeasurementValue(key) {
   // Body fat also comes from weigh-ins (smart scale via Apple Health).
   if (key === "bodyFat" && typeof bodyFatSeries === "function") {
     const latest = bodyFatSeries().at(-1);
-    if (latest) return latest.value;
+    if (latest) return Math.round(Number(latest.value) * 10) / 10;
   }
   const entry = state.measurements.find((item) => item[key] !== null && item[key] !== undefined && item[key] !== "");
   return entry ? entry[key] : null;

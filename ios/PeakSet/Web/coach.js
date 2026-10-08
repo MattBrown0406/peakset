@@ -558,8 +558,11 @@ function importProgram(program) {
   // Say so when a program was larger than this app accepts, rather than dropping workouts silently.
   const summary = [plans.length ? `${plans.length} new workout${plans.length === 1 ? "" : "s"}${offered.length > MAX_PROGRAM_PLANS ? ` (the first ${MAX_PROGRAM_PLANS} of ${offered.length})` : ""}` : "", updates.length ? `${updates.length} updated workout${updates.length === 1 ? "" : "s"}` : "", block ? `a ${Number(block.accumulationWeeks) || 4}-week training block` : ""].filter(Boolean).join(" and ");
   if (!window.confirm(`Add ${summary} from ${from}?`)) return false;
+  // A day the coach sets counts as the newest schedule for that day.
+  plans.forEach((plan) => { if (plan.scheduleDay) plan.scheduledAt = Date.now(); });
   updates.forEach(({ existingIndex, plan }) => {
     const existing = state.customPlans[existingIndex];
+    if (plan.scheduleDay && plan.scheduleDay !== existing.scheduleDay) plan.scheduledAt = Date.now();
     // Keep the athlete's id (Today picks, schedules) and their own schedule
     // unless the coach set one.
     state.customPlans[existingIndex] = { ...existing, ...plan, id: existing.id, scheduleDay: plan.scheduleDay || existing.scheduleDay || "" };
