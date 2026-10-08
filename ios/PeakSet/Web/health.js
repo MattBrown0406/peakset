@@ -253,9 +253,9 @@ function bodyFatSeries() {
 function renderBodyCompositionCard() {
   const series = bodyFatSeries();
   const latest = series.at(-1);
-  // Compare with a reading roughly four weeks old (21-35 days), not any older one.
-  const ageDays = (point) => (Date.now() - Date.parse(point.date)) / 86400000;
-  const monthAgo = [...series].reverse().find((point) => ageDays(point) >= 21 && ageDays(point) <= 35);
+  // Compare with a reading taken roughly four weeks before the latest one.
+  const gapDays = (point) => (Date.parse(latest?.date) - Date.parse(point.date)) / 86400000;
+  const monthAgo = latest ? [...series].reverse().find((point) => point !== latest && gapDays(point) >= 21 && gapDays(point) <= 35) : null;
   const lean = state.weightLogs.find((entry) => Number(entry.leanMass) > 0);
   if (!latest && !lean && !state.healthBody?.enabled) return "";
   const change = latest && monthAgo ? latest.value - monthAgo.value : null;
@@ -289,7 +289,11 @@ coachReportData = function coachReportWithMergedMeasurements(days) {
   });
   // Several check-ins merged: say so instead of stamping old tape values with the newest date and source.
   const times = [...contributingDates].map((date) => Date.parse(date)).filter(Number.isFinite);
-  if (times.length > 1) merged.note = `Most recent value of each since ${formatShortDate(new Date(Math.min(...times)).toISOString())}`;
+  const contributingDays = new Set(times.map((time) => dateKey(new Date(time))));
+  if (contributingDays.size > 1) {
+    const span = `most recent value of each since ${formatShortDate(new Date(Math.min(...times)).toISOString())}`;
+    merged.note = merged.note ? `${merged.note} (${span})` : span[0].toUpperCase() + span.slice(1);
+  }
   return { ...report, latestMeasurement: merged };
 };
 
@@ -331,3 +335,16 @@ document.addEventListener("visibilitychange", () => {
 saveState();
 syncHealthBody(false);
 render();
+
+
+// Coach PDFs carry Latin-1 text only: build every line with Western digits
+// and the Gregorian calendar whatever the phone's language.
+const baseBuildCoachReportLinesForLocale = buildCoachReportLines;
+buildCoachReportLines = function buildCoachReportLinesInEnglishNumerals(...args) {
+  reportFormatting = true;
+  try {
+    return baseBuildCoachReportLinesForLocale(...args);
+  } finally {
+    reportFormatting = false;
+  }
+};

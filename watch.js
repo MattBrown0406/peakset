@@ -33,10 +33,12 @@ function suggestedSetValues(exercise, setIndex) {
   const previous = typeof lastExercisePerformance === "function" ? lastExercisePerformance(exercise.id) : null;
   const previousKind = (previous?.sets || []).filter(sameKind);
   const previousSet = previousKind[Math.min(ordinal, previousKind.length - 1)];
-  const order = set?.dropSet ? [previousSet, lastDone] : [lastDone, previousSet];
+  // A first-ever drop set has no drop history: start from the working weight.
+  const lastWorking = exercise.sets.filter((item) => item.done && !item.dropSet).at(-1);
+  const order = set?.dropSet ? [previousSet, lastDone, lastWorking] : [lastDone, previousSet];
   return {
-    weight: String(set?.weight || order[0]?.weight || order[1]?.weight || ""),
-    reps: String(set?.reps || order[0]?.reps || order[1]?.reps || firstNumber(exercise.targetReps, "8"))
+    weight: String(set?.weight || order.find((item) => item?.weight)?.weight || ""),
+    reps: String(set?.reps || order.find((item) => item?.reps)?.reps || firstNumber(exercise.targetReps, "8"))
   };
 }
 

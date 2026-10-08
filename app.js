@@ -3,6 +3,26 @@ const APP_NAME = "Mass Method";
 const DEFAULT_REST_SECONDS = 180;
 // Declared before loadState() runs: sanitizeStoredState reads it at script load.
 const LOGBOOK_RANGES = [7, 14, 30];
+// WebKit's localStorage quota is 5 MiB per origin, counted in bytes.
+const STORAGE_LIMIT_BYTES = 5 * 1024 * 1024;
+let pendingSaveTimer = null;
+let lastStoredBytes = 0;
+let storageNearlyFullWarned = false;
+// While a coach PDF is built, numbers and dates use Western digits and the
+// Gregorian calendar: the PDF only carries Latin-1 text, so Arabic-Indic or
+// Bengali digits (and Hijri dates) would print as blanks.
+let reportFormatting = false;
+function reportLocale() {
+  return reportFormatting ? "en-US" : undefined;
+}
+
+// WebKit stores a string at 2 bytes per character as soon as it contains one
+// character above U+00FF (a curly apostrophe from Smart Punctuation, an
+// emoji), halving how much history fits. JSON escapes keep every stored
+// character at 1 byte; JSON.parse reads them back unchanged.
+function serializeForStorage(value) {
+  return JSON.stringify(value).replace(/[\u0100-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
 // A plan or live workout from an imported program/backup must stay renderable:
 // 50k exercises froze the session view and persisted across launches.
 // What the builder, live workout, and coach imports allow.
@@ -761,7 +781,7 @@ function formatWeight(value, digits = 1) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   // `+ 0` turns -0 into 0 so tiny negative changes never read "-0".
-  return (Number(number.toFixed(digits)) + 0).toLocaleString();
+  return (Number(number.toFixed(digits)) + 0).toLocaleString(reportLocale());
 }
 
 function plural(count, singular, pluralForm = `${singular}s`) {
@@ -852,7 +872,11 @@ function loadState() {
     // Keep an untouched copy of unreadable data before the fresh state is saved over it.
     try {
       const raw = localStorage.getItem(STORE_KEY);
-      if (raw) localStorage.setItem(`${STORE_KEY}-recovery-${Date.now()}`, raw);
+      if (raw) {
+        // Keep only the newest unreadable copy; older ones would fill the quota.
+        Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-recovery-`)).forEach((key) => localStorage.removeItem(key));
+        localStorage.setItem(`${STORE_KEY}-recovery-${Date.now()}`, raw);
+      }
     } catch {}
     return freshDefaultState();
   }
@@ -953,20 +977,50 @@ function sanitizeStoredState(next) {
 }
 
 function saveState() {
+  if (pendingSaveTimer) {
+    clearTimeout(pendingSaveTimer);
+    pendingSaveTimer = null;
+  }
   if (restoringState) return;
   try {
     if (typeof builderDraft !== "undefined") state.builderDraft = builderDraft;
-    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    const serialized = serializeForStorage(state);
+    localStorage.setItem(STORE_KEY, serialized);
+    lastStoredBytes = serialized.length;
     storageWarningShown = false;
+    if (lastStoredBytes > STORAGE_LIMIT_BYTES * 0.8 && !storageNearlyFullWarned) {
+      storageNearlyFullWarned = true;
+      toast("On-device storage is nearly full. Export a backup in More, then archive history older than a year.");
+    }
   } catch {
     // A full or blocked store must not crash the live workout. Keep the
     // in-memory session and warn once so the user can export or clear space.
     if (!storageWarningShown) {
       storageWarningShown = true;
-      toast("Storage is full. This session is not being saved on the device.");
+      toast("Storage is full: new entries won't survive closing the app. Export a backup in More, then archive older history.");
     }
   }
 }
+
+// Typing into a set field saves once the athlete pauses, not on every
+// keystroke (each save rewrites the whole logbook). Any other save, hiding
+// the app, or a page unload flushes it.
+function scheduleStateSave(delay = 400) {
+  if (pendingSaveTimer) clearTimeout(pendingSaveTimer);
+  pendingSaveTimer = setTimeout(() => {
+    pendingSaveTimer = null;
+    saveState();
+  }, delay);
+}
+
+function flushPendingSave() {
+  if (pendingSaveTimer) saveState();
+}
+
+try {
+  document.addEventListener?.("visibilitychange", () => { if (document.hidden) flushPendingSave(); });
+  window.addEventListener?.("pagehide", flushPendingSave);
+} catch {}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1008,9 +1062,52 @@ function divisionSelect(id, selected = "") {
   `;
 }
 
+// Views share one scrolling page; a new view must open at its top, not at
+// the previous view's scroll offset.
+function scrollToTop() {
+  try { window.scrollTo?.(0, 0); } catch {}
+}
+
+function scrollIntoViewIfPresent(selector, block = "center") {
+  try { document.querySelector?.(selector)?.scrollIntoView?.({ block }); } catch {}
+}
+
+// Ids interpolated into inline handlers must be plain tokens.
+function isSafeRowId(id) {
+  return /^[A-Za-z0-9-]{1,80}$/.test(String(id || ""));
+}
+
 function setView(view) {
+  const changed = state.view !== view;
   state.view = view;
   saveState();
+  render();
+  if (changed) scrollToTop();
+}
+
+// A mistyped weigh-in, measurement, check-in or workout must be removable,
+// or it corrupts trends, PRs and progression for good.
+const deletableLogs = {
+  workout: { key: "workoutLogs", label: "workout" },
+  weight: { key: "weightLogs", label: "weigh-in" },
+  measurement: { key: "measurements", label: "measurement check-in" },
+  checkIn: { key: "weeklyCheckIns", label: "weekly check-in" },
+  prep: { key: "prepLogs", label: "prep activity entry" }
+};
+
+function deleteLogEntry(kind, id) {
+  const config = deletableLogs[kind];
+  if (!config || !Array.isArray(state[config.key])) return;
+  const entry = state[config.key].find((item) => item?.id === id);
+  if (!entry) return;
+  if (!window.confirm(`Delete this ${config.label} from ${formatShortDate(entry.date)}? This can't be undone.`)) return;
+  state[config.key] = state[config.key].filter((item) => item?.id !== id);
+  if (kind === "weight" && state.profile) {
+    const newest = state.weightLogs.find((item) => Number(item.bodyweight) > 0);
+    if (newest) state.profile.bodyweight = newest.bodyweight;
+  }
+  saveState();
+  toast(`${config.label[0].toUpperCase()}${config.label.slice(1)} deleted.`);
   render();
 }
 
@@ -1359,13 +1456,13 @@ function renderOnboarding() {
               </div>
               <div class="field">
                 <label for="age">Age</label>
-                <input id="age" type="number" min="13" max="100" placeholder="34" />
+                <input id="age" type="number" inputmode="decimal" min="13" max="100" placeholder="34" />
               </div>
             </div>
             <div class="grid two">
               <div class="field">
                 <label for="bodyweight">Starting Body Weight (<span data-weight-unit>${weightUnit()}</span>)</label>
-                <input id="bodyweight" type="number" step="0.1" placeholder="218.4" />
+                <input id="bodyweight" type="number" inputmode="decimal" step="0.1" placeholder="218.4" />
               </div>
               <div class="field">
                 <label>Training Phase</label>
@@ -1718,7 +1815,7 @@ function formatShortDate(dateString) {
   const date = dateOnly
     ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
     : new Date(dateString);
-  return Number.isFinite(date.getTime()) ? date.toLocaleDateString() : "No date";
+  return Number.isFinite(date.getTime()) ? date.toLocaleDateString(reportLocale()) : "No date";
 }
 
 function measurementRows(entry) {
@@ -1761,6 +1858,11 @@ function coachReportData(days) {
 function plainReportText(value) {
   return String(value ?? "")
     .normalize("NFC")
+    // Backstop for any locale-formatted number: map native digits (Arabic-Indic,
+    // Persian, Devanagari, Bengali, Myanmar) to 0-9 instead of blanking them.
+    .replace(/[\u0660-\u0669\u06F0-\u06F9\u0966-\u096F\u09E6-\u09EF\u1040-\u1049]/g, (digit) => String(digit.charCodeAt(0) & 0xf))
+    .replace(/\u066B/g, ".")
+    .replace(/\u066C/g, ",")
     .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
     .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
     .replace(/[\u2013\u2014\u2212]/g, "-")
@@ -1782,7 +1884,7 @@ function buildCoachReportLines(days, coachNote = "") {
   const profile = state.profile || {};
   const lines = [
     { text: `${APP_NAME} Coach Logbook`, size: 20, bold: true },
-    { text: `${days}-day report generated ${new Date().toLocaleDateString()}`, size: 10 },
+    { text: `${days}-day report generated ${new Date().toLocaleDateString(reportLocale())}`, size: 10 },
     { text: `Athlete: ${profile.gender || "Not set"} - Age ${profile.age || "--"} - ${profile.division || "No division/goal set"}`, size: 10 },
     { text: `Phase: ${phaseLabel(state.phase)} - Current body weight: ${report.latestWeight?.bodyweight || profile.bodyweight || "--"} ${weightUnit()}`, size: 10 }
   ];
@@ -1794,7 +1896,7 @@ function buildCoachReportLines(days, coachNote = "") {
 
   addReportSection(lines, `Summary (last ${days} days)`);
   lines.push({ text: `Workouts: ${report.workouts.length}`, size: 10 });
-  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString()} ${weightUnit()}`, size: 10 });
+  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString(reportLocale())} ${weightUnit()}`, size: 10 });
   lines.push({ text: `Body weight logs: ${report.weights.length}`, size: 10 });
   lines.push({ text: `Weight change in range: ${report.weightDelta === null ? "Needs 2 weigh-ins" : `${report.weightDelta} ${weightUnit()}`}`, size: 10 });
   lines.push({ text: `Measurement check-ins: ${report.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).length}`, size: 10 });
@@ -1822,7 +1924,7 @@ function buildCoachReportLines(days, coachNote = "") {
   if (report.workouts.length) {
     report.workouts.forEach((log) => {
       lines.push({ text: `${formatShortDate(log.date)} - ${log.title || "Workout"}`, size: 11, bold: true });
-      lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume`, size: 10 });
+      lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString(reportLocale())} ${weightUnit()} volume`, size: 10 });
       // Null-prototype: an exercise named "constructor" must not hit Object.prototype.
       const grouped = (log.sets || []).reduce((groups, set) => {
         const key = String(set.exercise ?? "Exercise");
@@ -2590,7 +2692,7 @@ function renderBuilder() {
         <div class="grid two" style="margin-top: 12px;">
           <div class="field">
             <label for="customSets">Sets</label>
-            <input id="customSets" type="number" value="3" min="1" max="10" />
+            <input id="customSets" type="number" inputmode="decimal" value="3" min="1" max="10" />
           </div>
           <div class="field">
             <label for="customReps">Reps</label>
@@ -2606,13 +2708,13 @@ function renderBuilder() {
           </div>
           <div class="field">
             <label for="customDropSets">Drop Sets</label>
-            <input id="customDropSets" type="number" value="0" min="0" max="4" />
+            <input id="customDropSets" type="number" inputmode="decimal" value="0" min="0" max="4" />
           </div>
         </div>
         <div class="grid two" style="margin-top: 12px;">
           <div class="field">
             <label for="customRest">Rest Seconds</label>
-            <input id="customRest" type="number" value="${DEFAULT_REST_SECONDS}" min="15" max="300" step="15" />
+            <input id="customRest" type="number" inputmode="decimal" value="${DEFAULT_REST_SECONDS}" min="15" max="300" step="15" />
           </div>
           <div class="field">
             <label for="customExercise">Exercise</label>
@@ -2909,7 +3011,8 @@ function updateSet(exIndex, setIndex, field, value) {
   const reopened = set.done && ["weight", "reps"].includes(field) && set[field] !== value;
   if (reopened) set.done = false;
   set[field] = value;
-  saveState();
+  if (reopened || field === "rir" || field === "setType") saveState();
+  else scheduleStateSave();
   if (reopened) reflectReopenedSet(exIndex, setIndex);
 }
 
@@ -3212,7 +3315,7 @@ function renderSession() {
         </div>
         <div class="field">
           <label for="activeExerciseSets">Sets</label>
-          <input id="activeExerciseSets" type="number" value="3" min="1" max="10" />
+          <input id="activeExerciseSets" type="number" inputmode="decimal" value="3" min="1" max="10" />
         </div>
         <div class="field">
           <label for="activeExerciseReps">Reps</label>
@@ -3220,11 +3323,11 @@ function renderSession() {
         </div>
         <div class="field">
           <label for="activeExerciseRest">Rest Seconds</label>
-          <input id="activeExerciseRest" type="number" value="90" min="15" max="300" step="15" />
+          <input id="activeExerciseRest" type="number" inputmode="decimal" value="90" min="15" max="300" step="15" />
         </div>
         <div class="field">
           <label for="activeExerciseDropSets">Drop Sets</label>
-          <input id="activeExerciseDropSets" type="number" value="0" min="0" max="4" />
+          <input id="activeExerciseDropSets" type="number" inputmode="decimal" value="0" min="0" max="4" />
         </div>
       </div>
       <button class="primary-btn" onclick="addExerciseToActiveWorkout()">Add to Workout</button>
@@ -3311,7 +3414,7 @@ function renderProgress() {
         <div class="grid two">
           <div class="field">
             <label for="logWeight">Scale Weight</label>
-            <input id="logWeight" type="number" step="0.1" value="${latestWeight?.bodyweight || ""}" />
+            <input id="logWeight" type="number" inputmode="decimal" step="0.1" value="${latestWeight?.bodyweight || ""}" />
           </div>
           <div class="field">
             <label for="logWeightNote">Note</label>
@@ -3433,6 +3536,7 @@ function renderLogbook() {
               <strong>${escapeHtml(log.title)}</strong>
               <span class="badge">${formatShortDate(log.date)}</span>
             </div>
+            ${isSafeRowId(log.id) ? `<button class="ghost-btn danger compact-btn" aria-label="Delete ${escapeHtml(log.title)} from ${formatShortDate(log.date)}" onclick="deleteLogEntry('workout','${log.id}')">Delete workout</button>` : ""}
             <p class="muted">${plural((log.sets || []).length, "set")}, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume</p>
             <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}</p>
           </article>
@@ -3453,7 +3557,8 @@ function saveWeight() {
     return;
   }
   const latest = state.weightLogs[0];
-  if (latest && Number(latest.bodyweight) === bodyweight && Date.now() - Date.parse(latest.date) < 60000) {
+  const sinceLatest = latest ? Date.now() - Date.parse(latest.date) : Infinity;
+  if (latest && Number(latest.bodyweight) === bodyweight && sinceLatest >= 0 && sinceLatest < 60000) {
     toast("That weigh-in is already saved.");
     return;
   }

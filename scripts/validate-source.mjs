@@ -1225,8 +1225,8 @@ console.log("Audit round 8 checks passed.");
     assert(coachJs.includes("const anchor = Number.isFinite(Date.parse(athlete.updatedAt))") && coachJs.includes("function athleteVolumeWeek(athlete)"), "Coach stats must anchor at the check-in and show a week with training");
     assert(app.includes('<p class="label">Workouts, last 7 days</p>') && app.includes('<p class="label">Measurement check-ins</p>') && app.includes("addReportSection(lines, `Summary (last ${days} days)`);"), "Stat labels must match what they count");
     assert(app.includes("That weigh-in is already saved.") && toolkit.includes("workout.savedTemplateId"), "Double taps must not duplicate weigh-ins or templates");
-    assert(watchJs15.includes("const order = set?.dropSet ? [previousSet, lastDone] : [lastDone, previousSet];"), "Watch drop sets must be suggested from previous drops");
-    assert(read("health.js").includes("const monthAgo = [...series].reverse().find((point) => ageDays(point) >= 21 && ageDays(point) <= 35);"), "Body composition must compare against a reading about four weeks old");
+    assert(watchJs15.includes("const order = set?.dropSet ? [previousSet, lastDone, lastWorking] : [lastDone, previousSet];"), "Watch drop sets must be suggested from previous drops, then the working weight");
+    assert(read("health.js").includes("gapDays(point) >= 21 && gapDays(point) <= 35"), "Body composition must compare against a reading about four weeks before the latest");
     assert(app.includes("const checklist = stageChecklist({ ...timeline, phase: timeline.goalDateRaw && timeline.phase === \"prep\" ? \"prep\" : chosenPhase });"), "Checklist must follow the athlete's chosen phase");
     const r16 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
     const run16 = (code) => vm.runInContext(code, r16.context);
@@ -1254,6 +1254,61 @@ console.log("Audit round 8 checks passed.");
     assert(backupService.includes("private static let pendingMirrorDeletesKey") && backupService.includes('folder.appendingPathComponent(".\\(name).icloud")'), "Deleted photos must be removed from the iCloud mirror, including evicted copies");
     assert(swiftWebView.includes("PeakSetIncomingFiles.shared.detach()\n        PeakSetWatchBridge.shared.detach()") && swiftWebView.includes("private var pendingPhotoReplies"), "Native replies must survive a page reload");
     assert(read("ios/MassMethodWatch/WatchWorkoutView.swift").includes("WatchWorkoutModel.maxReps : WatchWorkoutModel.maxWeight"), "Watch crown range must match the clamps");
+  }
+  // Round 16: UX flows and the round-15 verification findings.
+  {
+    const r17 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run17 = (code) => vm.runInContext(code, r17.context);
+    run17("window.confirm = () => true; window.__scrolls = 0; window.scrollTo = () => { window.__scrolls += 1; }");
+    // Switching views and starting workouts open at the top.
+    run17("setView('plans')");
+    assert.ok(run17("window.__scrolls") >= 1, "changing view scrolls to the top");
+    run17("window.__scrolls = 0; startWorkout('chest-density')");
+    assert.ok(run17("window.__scrolls") >= 1, "starting a workout opens it at the top");
+    // Session header leads with Finish/Cancel; tools and a second Finish sit after the exercises.
+    const sessionHtml = run17("renderContent()");
+    assert.ok(sessionHtml.indexOf("Finish Workout") < sessionHtml.indexOf('id="exercise-card-0"'), "Finish Workout is in the header");
+    assert.ok(sessionHtml.indexOf('id="liveExerciseAdd"') > sessionHtml.indexOf('id="exercise-card-0"'), "Add exercise moved below the exercises");
+    assert.ok(!sessionHtml.includes("Save Session"), "the end-workout button says Finish Workout");
+    // Finishing with sets left asks first and says how many.
+    run17("updateSet(0, 0, 'weight', '100'); updateSet(0, 0, 'reps', '8'); completeSet(0, 0); stopTimer(); window.__confirmText = ''; window.confirm = (text) => { window.__confirmText = text; return false; }; finishWorkout()");
+    assert.match(run17("window.__confirmText"), /aren't marked Complete/, "finishing early asks for confirmation");
+    assert.ok(run17("Boolean(state.activeWorkout)"), "declining keeps the workout");
+    // The final set starts no rest and points at Finish.
+    run17("window.confirm = () => true; state.activeWorkout.exercises.forEach((exercise, e) => exercise.sets.forEach((set, i) => { if (!set.done && !(e === 0 && i === 1)) { set.weight = exercise.repsOnly ? '' : '50'; set.reps = '10'; set.done = true; } })); state.activeWorkout.exercises[0].sets[1].weight = '100'; state.activeWorkout.exercises[0].sets[1].reps = '8'; stopTimer(); completeSet(0, 1)");
+    assert.equal(run17("state.timer.running"), false, "no rest timer after the final set");
+    assert.ok(run17("renderContent()").includes("finish-banner"), "all sets logged shows the Finish banner");
+    // Implausible weight asks first.
+    run17("finishWorkout(); startWorkout('chest-density'); updateSet(0, 0, 'weight', '1000'); updateSet(0, 0, 'reps', '8'); window.__asked = false; window.confirm = () => { window.__asked = true; return false; }; completeSet(0, 0)");
+    assert.ok(run17("window.__asked") && !run17("state.activeWorkout.exercises[0].sets[0].done"), "a weight over double the best asks before logging");
+    // Logged entries can be deleted; profile weight follows.
+    run17("window.confirm = () => true; cancelWorkout(); state.weightLogs.unshift({ id: 'w-typo', date: new Date().toISOString(), bodyweight: 2000, note: '' }); state.profile.bodyweight = 2000; deleteLogEntry('weight', 'w-typo')");
+    assert.ok(!run17("state.weightLogs.some((entry) => entry.id === 'w-typo')") && run17("state.profile.bodyweight") !== 2000, "a mistyped weigh-in can be deleted");
+    run17("const id = state.workoutLogs[0].id; deleteLogEntry('workout', id)");
+    assert.equal(run17("state.workoutLogs.length"), 0, "a workout can be deleted");
+    // Verification findings.
+    assert.equal(run17("setUnits('imperial'); nextLoadableWeight('db-lateral-raise', 12.5)"), 15, "12.5 lb dumbbells progress to 15, not 20");
+    assert.equal(run17("nextLoadableWeight('barbell-squat', 137.5)"), 140, "137.5 lb squat progresses to 140");
+    assert.match(read("health.js"), /point !== latest && gapDays\(point\) >= 21/, "body-fat change never compares the latest reading with itself");
+    assert.match(read("coach.js"), /sinceDate: cleanDate\(e\.sinceDate\)/, "coach import keeps the merged-measurement date range");
+    assert.equal(run17("planRepsText('10/side')"), "10/side", "coach and builder reps stay free text");
+    assert.equal(run17("planRepsText('<b>8</b>')"), "8-12", "markup in reps is replaced");
+  }
+  // Round 16 storage: stored state stays 1 byte per character; typing saves after a pause; PDFs use Western digits.
+  {
+    const r18 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run18 = (code) => vm.runInContext(code, r18.context);
+    run18("state.weightLogs.unshift({ id: 'w-q', date: new Date().toISOString(), bodyweight: 200, note: 'Didn’t sleep 💤' }); saveState()");
+    const stored18 = r18.storage.get("stageforge-v1");
+    assert.ok(![...stored18].some((character) => character.charCodeAt(0) > 0xff), "stored state has no characters above U+00FF");
+    assert.equal(JSON.parse(stored18).weightLogs[0].note, "Didn’t sleep 💤", "escaped characters read back unchanged");
+    run18("startWorkout('chest-density'); saveState(); updateSet(0, 0, 'weight', '123')");
+    assert.notEqual(JSON.parse(r18.storage.get("stageforge-v1")).activeWorkout.exercises[0].sets[0].weight, "123", "typing does not rewrite storage on every keystroke");
+    run18("flushPendingSave()");
+    assert.equal(JSON.parse(r18.storage.get("stageforge-v1")).activeWorkout.exercises[0].sets[0].weight, "123", "a pending keystroke save is flushed");
+    assert.equal(run18("plainReportText('\u0661\u0662\u0663\u066B\u0665')"), "123.5", "native digits survive in the PDF");
+    assert.ok(read("health.js").includes("reportFormatting = true;") && app.includes("toLocaleDateString(reportLocale())"), "PDF lines are formatted with Western digits");
+    assert.ok(read("settings.js").includes("function archiveOldHistory()") && read("settings.js").includes("serializeForStorage(restored)"), "storage has a way out and restores use the compact form");
   }
   console.log("Audit round 12 checks passed.");
 }

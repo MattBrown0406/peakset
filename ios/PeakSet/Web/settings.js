@@ -177,9 +177,38 @@ async function shareOrDownload(text, filename, mime = "application/json") {
   return "downloaded";
 }
 
+let lastBackupExportAt = 0;
+
 async function exportBackupFile() {
   const result = await shareOrDownload(JSON.stringify(backupPayload()), `mass-method-backup-${todayStamp()}.json`);
+  lastBackupExportAt = Date.now();
   toast(result === "shared" ? "Backup ready. Save it to Files or iCloud Drive." : "Backup downloaded.");
+  if (state.view === "more") render();
+}
+
+function storageUsedFraction() {
+  let bytes = lastStoredBytes;
+  try {
+    bytes = Object.keys(localStorage).reduce((sum, key) => sum + key.length + String(localStorage.getItem(key) || "").length, 0);
+  } catch {}
+  return bytes / STORAGE_LIMIT_BYTES;
+}
+
+// The way out when on-device storage fills: after exporting a full backup,
+// remove history older than a year from this device (the backup keeps it).
+function archiveOldHistory() {
+  if (Date.now() - lastBackupExportAt > 30 * 60000) return toast("Export a backup first, so archived history stays in that file.");
+  const cutoff = Date.now() - 365 * 86400000;
+  const isOld = (entry) => Number.isFinite(Date.parse(entry?.date)) && Date.parse(entry.date) < cutoff;
+  const keys = ["workoutLogs", "weightLogs", "measurements", "weeklyCheckIns", "prepLogs"];
+  const counts = Object.fromEntries(keys.map((key) => [key, (state[key] || []).filter(isOld).length]));
+  const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  if (!total) return toast("Nothing older than a year to archive.");
+  if (!window.confirm(`Remove ${counts.workoutLogs} workouts and ${total - counts.workoutLogs} other entries older than a year from this iPhone? They stay in the backup you just exported.`)) return;
+  keys.forEach((key) => { state[key] = (state[key] || []).filter((entry) => !isOld(entry)); });
+  saveState();
+  toast(`Archived ${total} entries older than a year.`);
+  render();
 }
 
 function isBackupPayload(payload) {
@@ -216,7 +245,7 @@ function restoreBackupPayload(payload, sourceLabel = "this backup") {
   try {
     Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-before-restore-`)).forEach((key) => localStorage.removeItem(key));
     restoringState = true;
-    localStorage.setItem(STORE_KEY, JSON.stringify(restored));
+    localStorage.setItem(STORE_KEY, serializeForStorage(restored));
   } catch {
     restoringState = false;
     toast("Could not write the backup to this device's storage.");
@@ -366,6 +395,11 @@ function renderBackupCard() {
         <label class="secondary-btn file-btn">Import File<input type="file" accept=".json,.massmethod,application/json" onchange="importFileFromInput(this)" hidden /></label>
       </div>
       <p class="muted compact-note">Import also opens coach check-ins and programs (.massmethod files).</p>
+      ${(() => {
+        const used = storageUsedFraction();
+        if (used < 0.5) return "";
+        return `<div class="signal-card ${used >= 0.8 ? "warning-note" : ""}" style="margin-top:12px"><strong>On-device storage ${Math.round(used * 100)}% full</strong><p class="muted" style="margin:4px 0 8px">Export a backup, then archive history older than a year to make room. The backup file keeps everything.</p><button class="secondary-btn" onclick="archiveOldHistory()" ${Date.now() - lastBackupExportAt > 30 * 60000 ? "disabled" : ""}>Archive History Older Than a Year</button></div>`;
+      })()}
     </section>
   `;
 }

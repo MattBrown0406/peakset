@@ -193,6 +193,8 @@ async function sendCheckInToCoach() {
     state.lastCoachPackageAt = sentAt;
     saveState();
   }
+  // This note went out with this check-in; don't resend it with the next.
+  coachNoteDraft = "";
   toast(result === "shared" ? "Check-in ready. Send it to your coach by Messages, Mail, or AirDrop." : "Check-in file downloaded. Send it to your coach.");
   render();
 }
@@ -230,7 +232,7 @@ function cleanHealthFields(entry, allowed) {
 
 const CLEAN = {
   weight: (entry) => cleanEntry(entry, (e) => ({ bodyweight: cleanNumber(e.bodyweight, 0.1, 2000), bodyFat: cleanNumber(e.bodyFat, 1, 75), leanMass: cleanNumber(e.leanMass, 0.1, 2000), ...cleanHealthFields(e, ["bodyFat", "leanMass"]) })),
-  measurement: (entry) => cleanEntry(entry, (e) => ({ ...Object.fromEntries([...measurementDefinitions.map(([key]) => key), "arm", "thigh"].map((key) => [key, cleanNumber(e[key], 0.1, key === "bodyFat" ? 75 : 400)])), ...cleanHealthFields(e, [...measurementDefinitions.map(([key]) => key), "arm", "thigh"]) })),
+  measurement: (entry) => cleanEntry(entry, (e) => ({ ...Object.fromEntries([...measurementDefinitions.map(([key]) => key), "arm", "thigh"].map((key) => [key, cleanNumber(e[key], 0.1, key === "bodyFat" ? 75 : 400)])), ...cleanHealthFields(e, [...measurementDefinitions.map(([key]) => key), "arm", "thigh"]), ...(cleanDate(e.sinceDate) ? { sinceDate: cleanDate(e.sinceDate) } : {}) })),
   workout: (entry) => cleanEntry(entry, (e) => ({ title: cleanText(e.title, 80) || "Workout", setCount: Array.isArray(e.sets) ? Math.min(e.sets.length, 500) : Math.max(0, Math.min(500, Math.trunc(Number(e.setCount)) || 0)) })),
   checkIn: (entry) => cleanEntry(entry, (e) => ({ sleep: cleanNumber(e.sleep, 0, 24), energy: cleanNumber(e.energy, 1, 5), hunger: cleanNumber(e.hunger, 1, 5), digestion: cleanNumber(e.digestion, 1, 5), recovery: cleanNumber(e.recovery, 1, 5), notes: cleanText(e.notes, 500) })),
   prep: (entry) => cleanEntry(entry, (e) => ({ cardioType: cleanText(e.cardioType, 60), cardioMinutes: cleanNumber(e.cardioMinutes, 0, 1440), steps: cleanNumber(e.steps, 0, 200000), posingMinutes: cleanNumber(e.posingMinutes, 0, 1440) }))
@@ -384,7 +386,8 @@ function sanitizePlan(plan, from) {
     .map((spec) => [
       spec.id,
       spec.sets,
-      /^[0-9]{1,3}( ?(-|to) ?[0-9]{1,3})?( ?(sec|s|each))?( each)?$/i.test(spec.reps.trim()) ? spec.reps.trim() : "8-12",
+      // Free text like "10/side" or "8-10 (pause)", same rule as the builder.
+      planRepsText(spec.reps),
       spec.rest,
       spec.dropSets,
       { group: /^[A-Z0-9]{0,2}$/.test(String(spec.group || "").toUpperCase()) ? String(spec.group || "").toUpperCase() : "", setType: setTypeOptions.some(([value]) => value === spec.setType) ? spec.setType : "standard" }

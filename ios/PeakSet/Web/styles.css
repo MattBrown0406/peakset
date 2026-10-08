@@ -1773,3 +1773,75 @@ textarea {
   margin-top: 2px;
   font-weight: 600;
 }
+
+/* Round 16: live workout puts sets first. */
+.session-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+@media (max-width: 560px) {
+  .topbar .actions.session-actions {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+}
+
+.finish-banner {
+  margin-bottom: 12px;
+  border: 1px solid var(--green);
+  display: grid;
+  gap: 10px;
+}
+
+.finish-banner p {
+  margin: 0;
+}
+
+.session-tools .actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.exercise-quick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.exercise-options {
+  grid-column: 2;
+}
+
+.exercise-options[open] {
+  grid-column: 1 / -1;
+}
+
+.exercise-options > summary {
+  list-style: none;
+  display: grid;
+  place-items: center;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.exercise-options > summary::-webkit-details-marker {
+  display: none;
+}
+
+.exercise-options > .actions {
+  margin-top: 8px;
+}
+
+.compact-btn {
+  width: auto;
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.rest-overlay {
+  overflow-y: auto;
+}
