@@ -146,8 +146,8 @@ function scheduleWatchSnapshot() {
 
 // Every state change goes through saveState, so the watch follows along.
 const baseSaveStateForWatch = saveState;
-saveState = function saveStateAndPublish() {
-  const saved = baseSaveStateForWatch();
+saveState = function saveStateAndPublish(...args) {
+  const saved = baseSaveStateForWatch(...args);
   scheduleWatchSnapshot();
   return saved;
 };

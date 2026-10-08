@@ -872,7 +872,7 @@ function loadState() {
       const total = Math.max(1, Math.round(Number(savedTimer.total)) || seconds);
       // A device clock set backwards must not turn a 90 s rest into hours.
       const savedLeft = Number(savedTimer.left);
-      const clampedEnd = Math.min(endsAt, Date.now() + (Number.isFinite(savedLeft) && savedLeft > 0 ? Math.max(savedLeft, total) : total) * 1000);
+      const clampedEnd = Math.min(endsAt, Date.now() + (Number.isFinite(savedLeft) && savedLeft > 0 ? Math.min(savedLeft, total) : total) * 1000);
       next.timer = {
         seconds,
         total,
@@ -1009,7 +1009,7 @@ function sanitizeStoredState(next) {
   }
 }
 
-function saveState() {
+function saveState(options = {}) {
   if (pendingSaveTimer) {
     clearTimeout(pendingSaveTimer);
     pendingSaveTimer = null;
@@ -1036,8 +1036,11 @@ function saveState() {
     lastSaveSucceeded = false;
     // Backs off (30 s, 1, 2, 4… up to 5 min) so a running rest timer, which
     // saves every second, doesn't raise the alert again and again.
-    if (!storageWarningShown || Date.now() - storageWarningShownAt > storageWarningInterval) {
-      if (storageWarningShown) storageWarningInterval = Math.min(5 * 60000, storageWarningInterval * 2);
+    // Saves the athlete starts (finish, weigh-in) always warn; only the
+    // timer's once-a-second saves back off.
+    const alertVisible = Boolean(document.querySelector?.('.toast[data-priority="1"]'));
+    if (!alertVisible && (!options.background || !storageWarningShown || Date.now() - storageWarningShownAt > storageWarningInterval)) {
+      if (storageWarningShown && options.background) storageWarningInterval = Math.min(5 * 60000, storageWarningInterval * 2);
       storageWarningShown = true;
       storageWarningShownAt = Date.now();
       toast("Storage is full: this change is NOT saved and will be lost when the app closes. Export a backup in More, then archive older history.", { priority: true });
@@ -1241,6 +1244,9 @@ function toast(message, options = {}) {
   // A warning (storage full) is not replaced by a routine message such as
   // "Workout saved" that would claim the opposite; the routine message shows
   // once the warning is gone.
+  // While saves are failing, a message claiming something was saved is
+  // false: drop it (the storage alert says what really happened).
+  if (!options.priority && !lastSaveSucceeded && /\b(saved|created|added|logged|updated|imported|archived|restored)\b/i.test(String(message))) return;
   if (old && old.dataset?.priority === "1" && !options.priority) {
     queuedToast = message;
     return;
@@ -1695,8 +1701,7 @@ function finishedTodayTitles() {
 function todaysSelectedPlan() {
   const pickedToday = state.todayPlanId && state.todayPlanDate === new Date().toDateString();
   const selected = pickedToday ? allPlans().find((plan) => plan.id === state.todayPlanId) : null;
-  // A picked workout that has been finished today gives way to the next one.
-  return (selected && !finishedTodayTitles().has(selected.title) ? selected : null) || todaysRecommendedPlan();
+  return selected || todaysRecommendedPlan();
 }
 
 function todayWorkoutSelect() {
@@ -3315,7 +3320,7 @@ function ensureTimerTick() {
       }
       toast("Rest complete. Next set.");
     }
-    saveState();
+    saveState({ background: true });
     updateTimerDom();
   }, 250);
 }

@@ -1499,11 +1499,15 @@ console.log("Audit round 8 checks passed.");
       assert.equal(runSf("saveState()"), false, "saveState reports a failed write");
       runSf("toast('Workout saved.')");
       assert.ok(runSf("shown22[shown22.length - 1].textContent").startsWith("Storage is full"), "a storage-full warning is not replaced by a success toast");
+      runSf("shown22.forEach((el) => el.remove()); toast('Workout saved.')");
+      assert.equal(runSf("shown22.length"), 0, "no 'saved' message is shown while saves are failing");
       const rs = makeContext(null);
       const runRs = (code) => vm.runInContext(code, rs.context);
       runRs("window.webkit = { messageHandlers: { peaksetBackup: { postMessage() {} } } }; openOnboardingRestore(true); handleNativeBackup({ status: 'list', backups: [] })");
       assert.ok(runRs("renderOnboarding()").includes("No backups found") && !runRs("renderOnboarding()").includes("Back Up Now"), "a new phone with no backups is told so, without backup-only buttons");
       const sk = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, total: 90, running: true, fullscreen: false, startedAt: Date.now(), endsAt: Date.now() + 86400000 } });
+      const sk2 = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, total: 90, left: 30, running: true, fullscreen: false, startedAt: Date.now(), endsAt: Date.now() + 86400000 } });
+      assert.ok(vm.runInContext("state.timer.left", sk2.context) <= 30, "the clock-skew clamp keeps the time that was left");
       assert.ok(vm.runInContext("state.timer.left", sk.context) <= 90, "a rest saved before the clock moved back stays within its length");
     }
     // Round 23: a "Drop set" typed working row is a drop; finished picks give way; undo cancels its rest.
@@ -1512,13 +1516,19 @@ console.log("Audit round 8 checks passed.");
       const runD = (code) => vm.runInContext(code, d.context);
       runD("window.confirm = () => true; window.scrollTo = () => {}; state.workoutLogs = [{ id: 'b1', title: 'Bench', date: new Date(Date.now() - 2 * 86400000).toISOString(), sets: [1, 2, 3].map((n) => ({ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '225', reps: '12', rir: '1', setType: 'standard', label: String(n), targetReps: '8-12' })).concat([{ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '165', reps: '7', rir: '', setType: 'drop', label: '4', targetReps: '8-12' }]) }]");
       assert.ok(runD("progressionSuggestion({ id: 'barbell-bench', name: 'Barbell Bench Press', targetReps: '8-12', sets: [] })").includes("Try "), "a working row typed as a drop set doesn't block progression");
-      assert.equal(runD("setHardSetValue({ setType: 'drop' })"), 0.5, "a drop-typed row counts as half a hard set");
-      runD("chooseTodayWorkout('chest-density'); state.workoutLogs.unshift({ id: 'today1', title: planTemplates.find((plan) => plan.id === 'chest-density').title, date: new Date().toISOString(), sets: [] })");
-      assert.notEqual(runD("todaysSelectedPlan().id"), "chest-density", "Today moves on after the picked workout is finished");
+      runD("state.workoutLogs = [{ id: 'b2', title: 'Bench', date: new Date(Date.now() - 2 * 86400000).toISOString(), sets: [1, 2, 3].map((n) => ({ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '225', reps: '12', rir: '1', setType: 'drop', label: String(n), targetReps: '8-12' })) }]");
+      assert.ok(runD("progressionSuggestion({ id: 'barbell-bench', name: 'Barbell Bench Press', targetReps: '8-12', sets: [] })").includes("Try "), "a template whose rows are all typed Drop set still progresses");
+      assert.equal(runD("setHardSetValue({ setType: 'drop' })"), 1, "a working row typed Drop set is a full hard set (only D rows count half)");
+      runD("chooseTodayWorkout('plan:chest-density'); startWorkout(todaysSelectedPlan().id); state.activeWorkout.exercises.forEach((exercise) => exercise.sets.forEach((set) => { set.weight = exercise.repsOnly ? '' : '50'; set.reps = '10'; set.done = true; })); stopTimer(); finishWorkout()");
+      assert.equal(runD("state.todayWorkoutPick + '|' + (state.todayPlanId === null) + '|' + (todaysSelectedPlan().id !== 'chest-density')"), "recommended|true|true", "after a picked workout is finished, Today's picker and card both move on");
+      runD("chooseTodayWorkout('plan:chest-density')");
+      assert.equal(runD("todaysSelectedPlan().id"), "chest-density", "the same workout can be picked again for a second session");
       runD("startWorkout('back-thickness'); const ex23 = state.activeWorkout.exercises[0]; ex23.sets[0].weight = '100'; ex23.sets[0].reps = '8'; completeSet(0, 0)");
       assert.equal(runD("state.timer.running"), true, "completing a set starts its rest");
       runD("completeSet(0, 0)");
       assert.equal(runD("state.timer.running"), false, "undoing that set cancels its rest");
+      runD("const exB = state.activeWorkout.exercises[0]; exB.sets[0].weight = '100'; exB.sets[0].reps = '8'; completeSet(0, 0); var firstEnd = state.timer.endsAt; exB.sets[1].weight = '100'; exB.sets[1].reps = '8'; completeSet(0, 1); completeSet(0, 1)");
+      assert.ok(runD("state.timer.running && Math.abs(state.timer.endsAt - firstEnd) < 1500"), "undoing a mis-tapped set brings back the rest it replaced");
     }
     console.log("Audit round 19 checks passed.");
   }

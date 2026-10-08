@@ -362,7 +362,11 @@ function progressionSuggestion(exercise) {
   }
   const ceiling = targetRepCeiling(exercise.targetReps || previous.targetReps || "8-12") || 12;
   // A row whose set type is "Drop set" is a drop even without the D-row flag.
-  const isDrop = (set) => set.dropSet || set.setType === "drop";
+  // A row typed "Drop set" next to normal working rows is a drop; when every
+  // working row is typed that way (a "Drop set" template), they are the work.
+  const notDRow = previous.sets.filter((set) => !set.dropSet);
+  const typedWork = notDRow.filter((set) => set.setType !== "drop" && Number(set.reps) > 0);
+  const isDrop = (set) => set.dropSet || (typedWork.length > 0 && set.setType === "drop");
   const workingAny = previous.sets.filter((set) => !isDrop(set) && Number(set.reps) > 0);
   if (workingAny.length && workingAny.every((set) => !(Number(set.weight) > 0))) {
     const bestReps = Math.max(...workingAny.map((set) => Number(set.reps)));
@@ -961,10 +965,20 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
     state.activeWorkout.lastExerciseIndex = exIndex;
     state.activeWorkout.lastSetAt = Date.now();
     state.activeWorkout.lastSetKey = `${exIndex}-${setIndex}`;
+    state.activeWorkout.restBeforeLastSet = state.timer.running ? { endsAt: state.timer.endsAt, fullscreen: state.timer.fullscreen, exerciseIndex: state.timer.exerciseIndex } : null;
   } else {
-    // Undoing the set that started the running rest cancels that rest.
-    if (state.activeWorkout.lastSetKey === `${exIndex}-${setIndex}` && state.timer.running && state.timer.exerciseIndex === exIndex) stopTimer();
-    if (state.activeWorkout.lastSetKey === `${exIndex}-${setIndex}`) state.activeWorkout.lastSetKey = null;
+    // Undoing the set that started the running rest cancels that rest, and
+    // brings back the rest it replaced if that one is still going.
+    if (state.activeWorkout.lastSetKey === `${exIndex}-${setIndex}` && state.timer.running && state.timer.exerciseIndex === exIndex) {
+      const before = state.activeWorkout.restBeforeLastSet;
+      stopTimer();
+      const remaining = before ? Math.ceil((Number(before.endsAt) - Date.now()) / 1000) : 0;
+      if (remaining > 1) startTimer(remaining, Boolean(before.fullscreen), Number.isInteger(before.exerciseIndex) ? before.exerciseIndex : null, false);
+    }
+    if (state.activeWorkout.lastSetKey === `${exIndex}-${setIndex}`) {
+      state.activeWorkout.lastSetKey = null;
+      state.activeWorkout.restBeforeLastSet = null;
+    }
     // Undoing a mis-tap on an untouched exercise lets the watch move on.
     if (state.activeWorkout.lastExerciseIndex === exIndex && !exercise.sets.some((item) => item.done)) state.activeWorkout.lastExerciseIndex = null;
   }
@@ -1031,6 +1045,12 @@ finishWorkout = function finishToolkitWorkout() {
   const endedAt = new Date(Number.isFinite(lastSetAt) && Date.now() - lastSetAt > 3 * 3600000 && lastSetAt >= (Date.parse(workout.startedAt) || 0) ? lastSetAt + 60000 : Date.now()).toISOString();
   const log = { id: workout.id, title: workout.title, phase: workout.phase, date: endedAt, startedAt: workout.startedAt, sets, volume: sets.reduce((sum, set) => sum + (Number(set.weight) || 0) * (Number(set.reps) || 0), 0) };
   state.workoutLogs.unshift(log);
+  // The workout picked on Today is done: Today goes back to the
+  // recommendation (picking it again starts a second session).
+  if (state.todayPlanId && state.todayPlanId === workout.planId) {
+    state.todayPlanId = null;
+    state.todayWorkoutPick = "recommended";
+  }
   if (state.healthKitEnabled && window.webkit?.messageHandlers?.peaksetHealthKit) window.webkit.messageHandlers.peaksetHealthKit.postMessage({ action: "saveWorkout", id: workout.id, title: workout.title, startedAt: workout.startedAt, endedAt });
   state.activeWorkout = null;
   state.view = "today";

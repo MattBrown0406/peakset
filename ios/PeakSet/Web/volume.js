@@ -81,7 +81,7 @@ function addDays(date, days) {
 
 function setHardSetValue(set) {
   if (!set || typeof set !== "object") return 0;
-  return set.dropSet || set.setType === "drop" ? 0.5 : 1;
+  return set.dropSet ? 0.5 : 1;
 }
 
 function weeklyHardSets(weekStart = startOfWeek(), includeActive = true) {
