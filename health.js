@@ -116,6 +116,7 @@ function applyHealthBodySamples(samples) {
     if (manualWeight) {
       // The athlete's own weigh-in wins; attach composition data to it.
       const before = state.weightLogs.length;
+      if (state.weightLogs.some((entry) => entry.id === hkId)) recordDeletedLog("weight", hkId);
       state.weightLogs = state.weightLogs.filter((entry) => entry.id !== hkId);
       changed += before - state.weightLogs.length;
       if (slot.bodyFat && markHealthField(manualWeight, "bodyFat", slot.bodyFat.value)) changed += 1;
@@ -347,4 +348,27 @@ buildCoachReportLines = function buildCoachReportLinesInEnglishNumerals(...args)
   } finally {
     reportFormatting = false;
   }
+};
+
+
+// A hand-logged weigh-in wins over the day's Apple Health reading right away
+// (not only at the next sync), keeping the reading's body-fat / lean-mass
+// values marked as Health data; otherwise the day counted two weigh-ins.
+const baseSaveWeightForHealth = saveWeight;
+saveWeight = function saveWeightReplacingHealthDay(...args) {
+  const before = state.weightLogs.length;
+  const result = baseSaveWeightForHealth(...args);
+  const entry = state.weightLogs[0];
+  if (state.weightLogs.length > before && entry && !isHealthEntry(entry)) {
+    const healthDay = state.weightLogs.find((item) => item.id === `hk-day-${localDayKey(entry.date)}`);
+    if (healthDay) {
+      if (Number(healthDay.bodyFat) > 0) markHealthField(entry, "bodyFat", healthDay.bodyFat);
+      if (Number(healthDay.leanMass) > 0) markHealthField(entry, "leanMass", healthDay.leanMass);
+      state.weightLogs = state.weightLogs.filter((item) => item !== healthDay);
+      recordDeletedLog("weight", healthDay.id);
+      saveState();
+      render();
+    }
+  }
+  return result;
 };

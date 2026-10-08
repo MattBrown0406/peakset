@@ -400,7 +400,7 @@ function renderBackupCard() {
       <p class="eyebrow">Backup and restore</p>
       <h2>Keep your logbook safe</h2>
       ${native ? `
-        <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app). Apple Health data is not included; it re-imports from Apple Health after a restore.</p>
+        <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app). Apple Health readings are not included: body readings re-import from Apple Health after a restore, but imported step history does not.</p>
         <div class="signal-card"><span class="badge green">Automatic</span><strong>${escapeHtml(state.backupStatus?.message || "")}</strong>${state.backupStatus?.at ? `<p class="muted" style="margin:4px 0 0">${new Date(state.backupStatus.at).toLocaleString()}</p>` : ""}</div>
         <div class="actions" style="margin-top:12px">
           <button class="primary-btn" onclick="requestAutomaticSnapshot('manual', true) || toast(state.profile ? 'Backups need the iPhone app.' : 'Finish setting up your profile first; there is nothing to back up yet.')">Back Up Now</button>
@@ -507,4 +507,9 @@ setView = function setViewWithMore(view) {
 
 saveState();
 requestAutomaticSnapshot("launch");
+// iOS keeps the app in memory for days; the daily snapshot also runs when it
+// comes back to the foreground (it is skipped if one ran in the last 20 hours).
+try {
+  document.addEventListener?.("visibilitychange", () => { if (!document.hidden) requestAutomaticSnapshot("resume"); });
+} catch {}
 render();

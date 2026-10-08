@@ -224,6 +224,8 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             "setIndex": set.index,
             "setLabel": set.label,
             "weight": weightText,
+            // The phone converts if its units changed while this was in flight.
+            "unit": current.unit,
             "reps": repsText,
             "completedAt": completedAt.timeIntervalSince1970 * 1000,
             // Lets a locked iPhone show this rest on the Lock Screen.

@@ -1355,6 +1355,16 @@ console.log("Audit round 8 checks passed.");
       prepSeen.add(run19(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'rot-${i}', title: plan.title, date: new Date(Date.now() + ${i} * 60000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); return plan.id; })()`));
     }
     assert.ok(prepSeen.size >= 5, `prep rotation reaches the prep plans (saw ${[...prepSeen].join(", ")})`);
+    // Round 18 simulation findings.
+    run19("state.phase = 'offseason'; state.workoutLogs = []; const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-US', { weekday: 'long' }); state.customPlans = [{ id: 'custom-legs', title: 'Legs DS', muscle: 'legs', phase: 'offseason', rest: 120, note: '', scheduleDay: tomorrow, exercises: [['barbell-squat', 3, '8', 120, 0, {}]] }]");
+    assert.notEqual(run19("todaysRecommendedPlan().muscle"), "legs", "today avoids the muscle tomorrow's scheduled template trains");
+    assert.ok(read("coach.js").includes("const pruneMissing = (list, incoming, apply = true, key = \"\") =>"), "coach copies mirror deletions inside each check-in's range");
+    assert.ok(read("coach.js").includes("existing.sourceId === plan.sourceId"), "re-opening a program doesn't duplicate templates");
+    assert.ok(read("health.js").includes("saveWeight = function saveWeightReplacingHealthDay"), "a hand weigh-in replaces the day's Health reading");
+    assert.ok(read("watch.js").includes("command.unit !== weightUnit()") && read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes('"unit": current.unit'), "watch weights carry their unit");
+    run19("state.workoutLogs = [{ id: 'gone-1', title: 'Old', date: new Date().toISOString(), sets: [] }]; deleteLogEntry('workout', 'gone-1')");
+    assert.ok(run19("state.deletedLogs.some((item) => item.kind === 'workout' && item.id === 'gone-1')"), "deletions are remembered for the coach");
+    assert.ok(read("coach.js").includes("deleted: (Array.isArray(state.deletedLogs) ? state.deletedLogs : []).slice(-300),") && read("coach.js").includes("const tombstones = deletedByKind[kindOf[key]];"), "coach check-ins carry and apply deletions");
   }
   // Round 17 App Store readiness.
   assert(read("settings.js").includes("<h2>Privacy policy</h2>"), "A privacy policy must be reachable in the app (5.1.1)");

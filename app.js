@@ -964,6 +964,7 @@ function sanitizeStoredState(next) {
       ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), receivedAt: String(message.receivedAt ?? "") }
       : null;
   }
+  next.deletedLogs = (Array.isArray(next.deletedLogs) ? next.deletedLogs : []).filter((item) => isObject(item) && typeof item.id === "string" && typeof item.kind === "string").slice(-300);
   // A stored volume of "1e400" rendered as ∞; 0 makes readers recompute it.
   next.workoutLogs = next.workoutLogs.map((log) => ("volume" in log ? { ...log, volume: finiteOrNull(log.volume) ?? 0 } : log));
   // A malformed live workout would crash every screen, including the one
@@ -1116,6 +1117,16 @@ const deletableLogs = {
   prep: { key: "prepLogs", label: "prep activity entry" }
 };
 
+// Deletions are remembered (180 days) so the next coach check-in can remove
+// the same entries from the coach's copy, even ones sent in an earlier check-in.
+function recordDeletedLog(kind, id) {
+  if (!id) return;
+  const cutoff = Date.now() - 180 * 86400000;
+  const list = (Array.isArray(state.deletedLogs) ? state.deletedLogs : []).filter((item) => Date.parse(item?.at) > cutoff && !(item.kind === kind && item.id === id));
+  list.push({ kind, id: String(id).slice(0, 80), at: new Date().toISOString() });
+  state.deletedLogs = list.slice(-300);
+}
+
 function deleteLogEntry(kind, id) {
   const config = deletableLogs[kind];
   if (!config || !Array.isArray(state[config.key])) return;
@@ -1123,6 +1134,7 @@ function deleteLogEntry(kind, id) {
   if (!entry) return;
   if (!window.confirm(`Delete this ${config.label} from ${formatShortDate(entry.date)}? This can't be undone.`)) return;
   state[config.key] = state[config.key].filter((item) => item?.id !== id);
+  recordDeletedLog(kind, id);
   if (kind === "weight" && state.profile) {
     const newest = state.weightLogs.find((item) => Number(item.bodyweight) > 0);
     if (newest) state.profile.bodyweight = newest.bodyweight;
@@ -1560,9 +1572,11 @@ function muscleLabel(muscle) {
 // Rotate through the phase's body-part plans: suggest the muscle group trained
 // least recently (never trained counts as oldest), and never the plan just
 // finished. A fixed plan per phase had a new athlete training chest every day.
-function todaysRecommendedPlan() {
+function todaysRecommendedPlan(avoidMuscles = []) {
   const phase = ["prep", "bulking"].includes(state.phase) ? state.phase : "offseason";
-  const rotation = ["chest", "back", "legs", "shoulders", "arms"];
+  const fullRotation = ["chest", "back", "legs", "shoulders", "arms"];
+  // Tomorrow's scheduled template already covers its muscles.
+  const rotation = fullRotation.filter((muscle) => !avoidMuscles.includes(muscle)).length ? fullRotation.filter((muscle) => !avoidMuscles.includes(muscle)) : fullRotation;
   const candidates = planTemplates.filter((plan) => plan.phase === phase && rotation.includes(plan.muscle) && !plan.id.startsWith("weak-point"));
   const fallback = planTemplates.find((plan) => plan.id === (phase === "prep" ? "prep-upper-pump" : phase === "bulking" ? "back-width" : "chest-density"));
   if (!candidates.length) return fallback;

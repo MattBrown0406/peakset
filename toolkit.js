@@ -706,7 +706,13 @@ renderBuilder = function renderToolkitBuilder() {
 const baseTodaysRecommendedPlan = todaysRecommendedPlan;
 todaysRecommendedPlan = function scheduledRecommendedPlan() {
   const day = new Date().toLocaleDateString("en-US", { weekday: "long" });
-  return state.customPlans.find((plan) => plan.scheduleDay === day) || baseTodaysRecommendedPlan();
+  const scheduled = state.customPlans.find((plan) => plan.scheduleDay === day);
+  if (scheduled) return scheduled;
+  // Don't recommend today the muscles tomorrow's scheduled template trains.
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString("en-US", { weekday: "long" });
+  const next = state.customPlans.find((plan) => plan.scheduleDay === tomorrow);
+  const avoid = next ? [...new Set([next.muscle, ...(next.exercises || []).map((row) => exerciseById(Array.isArray(row) ? row[0] : row?.id).muscle)])] : [];
+  return baseTodaysRecommendedPlan(avoid);
 };
 
 function toolkitSetRows(spec) {

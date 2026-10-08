@@ -218,7 +218,12 @@ function applyWatchCommand(command) {
       const text = String(value ?? "").trim();
       return /^\d{1,6}(\.\d{0,3})?$/.test(text) ? text.replace(/\.$/, "") : null;
     };
-    const weight = numericText(command.weight);
+    let weight = numericText(command.weight);
+    // Sent in the other unit (the phone switched units mid-workout): convert.
+    if (weight !== null && weight !== "" && (command.unit === "lb" || command.unit === "kg") && command.unit !== weightUnit()) {
+      const converted = command.unit === "lb" ? Number(weight) * KG_PER_LB : Number(weight) / KG_PER_LB;
+      weight = String(Math.round(converted * 100) / 100);
+    }
     const reps = numericText(command.reps);
     if (!isRepsOnlyExercise(exercise) && weight !== null) updateSet(exIndex, setIndex, "weight", weight);
     if (reps !== null) updateSet(exIndex, setIndex, "reps", reps);
