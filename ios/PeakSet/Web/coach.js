@@ -844,7 +844,7 @@ function coachMessageHeading(message) {
   const fresh = Number(message.newCount);
   const updated = Number(message.updatedCount);
   if (Number.isFinite(fresh) && Number.isFinite(updated) && fresh + updated > 0) {
-    return [fresh ? `${plural(fresh, "new workout")}` : "", updated ? `${plural(updated, "updated workout")}` : ""].filter(Boolean).join(" and ") + " in Plans" + (message.block ? " and a training block" : "");
+    return [fresh ? `${plural(fresh, "new workout")}` : "", updated ? `${plural(updated, "updated workout")}` : ""].filter(Boolean).join(" and ") + " in Plans" + (message.block ? ", plus a training block" : "");
   }
   if (message.planCount) return `${plural(message.planCount, "new workout")} in Plans`;
   if (message.block) return "New training block";

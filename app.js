@@ -6,6 +6,9 @@ const LOGBOOK_RANGES = [7, 14, 30];
 // WebKit's localStorage quota is 5 MiB per origin, counted in bytes.
 const STORAGE_LIMIT_BYTES = 5 * 1024 * 1024;
 let pendingSaveTimer = null;
+let storageWarningShown = false;
+let storageWarningShownAt = 0;
+let lastSaveSucceeded = true;
 let lastStoredBytes = 0;
 let storageNearlyFullWarned = false;
 // While a coach PDF is built, numbers and dates use Western digits and the
@@ -865,13 +868,16 @@ function loadState() {
     const seconds = clampRestSeconds(savedTimer.seconds);
     const endsAt = Number(savedTimer.endsAt);
     if (savedTimer.running && Number.isFinite(endsAt) && endsAt > Date.now()) {
+      const total = Math.max(1, Math.round(Number(savedTimer.total)) || seconds);
+      // A device clock set backwards must not turn a 90 s rest into hours.
+      const clampedEnd = Math.min(endsAt, Date.now() + total * 1000);
       next.timer = {
         seconds,
-        total: Math.max(1, Math.round(Number(savedTimer.total)) || seconds),
-        left: Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)),
+        total,
+        left: Math.max(0, Math.ceil((clampedEnd - Date.now()) / 1000)),
         running: true,
         startedAt: Number(savedTimer.startedAt) || null,
-        endsAt,
+        endsAt: clampedEnd,
         fullscreen: Boolean(savedTimer.fullscreen),
         exerciseIndex: Number.isInteger(savedTimer.exerciseIndex) ? savedTimer.exerciseIndex : null
       };
@@ -905,7 +911,6 @@ function loadState() {
   }
 }
 
-let storageWarningShown = false;
 // Set while a restore reloads the page so a timer tick cannot overwrite it.
 let restoringState = false;
 
@@ -1014,6 +1019,7 @@ function saveState() {
     localStorage.setItem(STORE_KEY, serialized);
     lastStoredBytes = serialized.length;
     storageWarningShown = false;
+    lastSaveSucceeded = true;
     if (lastStoredBytes > STORAGE_LIMIT_BYTES * 0.8 && !storageNearlyFullWarned) {
       storageNearlyFullWarned = true;
       toast("On-device storage is nearly full. Export a backup in More, then archive history older than a year.");
@@ -1021,12 +1027,18 @@ function saveState() {
   } catch {
     // A full or blocked store must not crash the live workout. Keep the
     // in-memory session and warn once so the user can export or clear space.
-    if (!storageWarningShown) {
+    // The warning outranks any "saved" toast that follows, and repeats (at
+    // most every 30 s) while saves keep failing.
+    lastSaveSucceeded = false;
+    if (!storageWarningShown || Date.now() - storageWarningShownAt > 30000) {
       storageWarningShown = true;
-      toast("Storage is full: new entries won't survive closing the app. Export a backup in More, then archive older history.");
+      storageWarningShownAt = Date.now();
+      toast("Storage is full: this change is NOT saved and will be lost when the app closes. Export a backup in More, then archive older history.", { priority: true });
     }
   }
+  return lastSaveSucceeded;
 }
+
 
 // Typing into a set field saves once the athlete pauses, not on every
 // keystroke (each save rewrites the whole logbook). Any other save, hiding
@@ -1216,16 +1228,22 @@ function setChoice(inputId, value, button) {
   button.setAttribute("aria-pressed", "true");
 }
 
-function toast(message) {
+function toast(message, options = {}) {
   const old = document.querySelector(".toast");
+  // A warning (storage full) is not replaced by a routine message such as
+  // "Workout saved" that would claim the opposite.
+  if (old && old.dataset?.priority === "1" && !options.priority) return;
   if (old) old.remove();
   const el = document.createElement("div");
   el.className = "toast";
-  el.setAttribute("role", "status");
-  el.setAttribute("aria-live", "polite");
+  el.setAttribute("role", options.priority ? "alert" : "status");
+  el.setAttribute("aria-live", options.priority ? "assertive" : "polite");
+  if (options.priority && el.dataset) el.dataset.priority = "1";
   el.textContent = message;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2600);
+  // Long messages stay long enough to read.
+  const duration = options.priority ? 8000 : Math.min(7000, Math.max(2600, String(message).length * 50));
+  setTimeout(() => el.remove(), duration);
 }
 
 function getAudioContext() {
@@ -2609,7 +2627,7 @@ function renderToday() {
     <div class="grid today-stats">
       <article class="card stat">
         <p class="value">${s.workouts}</p>
-        <p class="label">Workouts, last 7 days</p>
+        <p class="label">${s.workouts === 1 ? "Workout" : "Workouts"}, last 7 days</p>
       </article>
       <article class="card stat">
         <p class="value">${Math.round(s.weeklyVolume).toLocaleString()}</p>
@@ -2617,11 +2635,11 @@ function renderToday() {
       </article>
       <article class="card stat">
         <p class="value">${formatWeight(s.lastWeight?.bodyweight || profile.bodyweight)}</p>
-        <p class="label">Current body weight</p>
+        <p class="label">Current body weight (${weightUnit()})</p>
       </article>
       <article class="card stat">
         <p class="value">${s.weightDelta}</p>
-        <p class="label">Weight change from start</p>
+        <p class="label">Weight change from start (${weightUnit()})</p>
       </article>
     </div>
 

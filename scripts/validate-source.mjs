@@ -1223,7 +1223,7 @@ console.log("Audit round 8 checks passed.");
     assert(volumeJs.includes("low = high = Math.round(high * 0.5);"), "Deload target must be half the last build week, not half the minimum");
     assert(toolkit.includes("function progressionRirLimit()") && volumeJs.includes("progressionRirLimit = function blockProgressionRirLimit()"), "Progression must use the block's weekly RIR target");
     assert(coachJs.includes("const anchor = Number.isFinite(Date.parse(athlete.updatedAt))") && coachJs.includes("function athleteVolumeWeek(athlete)"), "Coach stats must anchor at the check-in and show a week with training");
-    assert(app.includes('<p class="label">Workouts, last 7 days</p>') && app.includes('<p class="label">Measurement check-ins</p>') && app.includes("addReportSection(lines, `Summary (last ${days} days)`);"), "Stat labels must match what they count");
+    assert(app.includes('<p class="label">${s.workouts === 1 ? "Workout" : "Workouts"}, last 7 days</p>') && app.includes('<p class="label">Measurement check-ins</p>') && app.includes("addReportSection(lines, `Summary (last ${days} days)`);"), "Stat labels must match what they count");
     assert(app.includes("That weigh-in is already saved.") && toolkit.includes("workout.savedTemplateId"), "Double taps must not duplicate weigh-ins or templates");
     assert(watchJs15.includes("const order = set?.dropSet ? [previousSet, lastDone, lastWorking] : [lastDone, previousSet];"), "Watch drop sets must be suggested from previous drops, then the working weight");
     assert(read("health.js").includes("gapDays(point) >= 21 && gapDays(point) <= 35"), "Body composition must compare against a reading about four weeks before the latest");
@@ -1490,6 +1490,21 @@ console.log("Audit round 8 checks passed.");
       const legacyPlan = (id, sets, day) => ({ id, title: "Push", muscle: "chest", phase: "offseason", rest: 120, note: "", scheduleDay: day, exercises: [["barbell-bench", sets, "8", 120, 0, {}]] });
       runLg(`handleIncomingFileText(${JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", plans: [legacyPlan("c-thu", 5, "Thursday"), legacyPlan("c-mon", 4, "Monday")] }))})`);
       assert.equal(runLg("state.customPlans.map((plan) => plan.id + ':' + plan.exercises[0][1]).join(',')"), "mon:4,thu:5", "an unchanged legacy template keeps its slot when another same-titled one changes");
+    }
+    // Round 22: storage failures outrank "saved" toasts; restore screen says when nothing is found; clock skew.
+    {
+      const sf = makeContext({ profile: { bodyweight: 200 } });
+      const runSf = (code) => vm.runInContext(code, sf.context);
+      runSf("var shown22 = []; document.querySelector = (sel) => (sel === '.toast' ? shown22[shown22.length - 1] || null : null); document.createElement = () => { const el = { dataset: {}, className: '', textContent: '', setAttribute() {}, remove() { shown22 = shown22.filter((item) => item !== el); } }; return el; }; document.body.appendChild = (el) => shown22.push(el); localStorage.setItem = () => { throw new Error('QuotaExceededError'); }");
+      assert.equal(runSf("saveState()"), false, "saveState reports a failed write");
+      runSf("toast('Workout saved.')");
+      assert.ok(runSf("shown22[shown22.length - 1].textContent").startsWith("Storage is full"), "a storage-full warning is not replaced by a success toast");
+      const rs = makeContext(null);
+      const runRs = (code) => vm.runInContext(code, rs.context);
+      runRs("window.webkit = { messageHandlers: { peaksetBackup: { postMessage() {} } } }; openOnboardingRestore(true); handleNativeBackup({ status: 'list', backups: [] })");
+      assert.ok(runRs("renderOnboarding()").includes("No backups found") && !runRs("renderOnboarding()").includes("Back Up Now"), "a new phone with no backups is told so, without backup-only buttons");
+      const sk = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, total: 90, running: true, fullscreen: false, startedAt: Date.now(), endsAt: Date.now() + 86400000 } });
+      assert.ok(vm.runInContext("state.timer.left", sk.context) <= 90, "a rest saved before the clock moved back stays within its length");
     }
     console.log("Audit round 19 checks passed.");
   }

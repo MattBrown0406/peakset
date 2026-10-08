@@ -336,9 +336,13 @@ function requestAutomaticSnapshot(reason = "scheduled", force = false) {
   return true;
 }
 
+// "idle" until a list is requested, "loading" while iOS looks, "done" after.
+let nativeBackupsListState = "idle";
 function refreshNativeBackups() {
   const bridge = nativeBackupBridge();
   if (!bridge) return;
+  nativeBackupsListState = "loading";
+  if (state.view === "more" || onboardingRestoreOpen) render();
   bridge.postMessage({ action: "list" });
 }
 
@@ -347,7 +351,7 @@ function restoreNativeBackup(index) {
   const bridge = nativeBackupBridge();
   if (!backup || !bridge) return;
   bridge.postMessage({ action: "restore", name: backup.name, location: backup.location });
-  toast(backup.location === "iCloud" ? "Restoring… iCloud may take up to 30 seconds to download the backup." : "Restoring…");
+  toast(String(backup.location || "").startsWith("iCloud") ? "Restoring… iCloud may take up to 30 seconds to download the backup." : "Restoring…");
 }
 
 function handleNativeBackup(payload) {
@@ -359,6 +363,7 @@ function handleNativeBackup(payload) {
     if (state.view === "more") render();
   } else if (payload.status === "list") {
     nativeBackups = (Array.isArray(payload.backups) ? payload.backups : []).filter((backup) => backup && typeof backup === "object");
+    nativeBackupsListState = "done";
     if (state.view === "more" || onboardingRestoreOpen) render();
   } else if (payload.status === "restore") {
     let parsed = null;
@@ -408,6 +413,32 @@ function renderUnitsCard() {
   `;
 }
 
+// A new phone's restore screen: only ways to bring data back, and a clear
+// answer when there is nothing to restore.
+function renderRestoreCard() {
+  const native = Boolean(nativeBackupBridge());
+  const list = nativeBackups.slice(0, 10).map((backup, index) => `
+    <div class="exercise-row">
+      <div><strong>${formatShortDate(backup.date)}</strong><p class="muted" style="margin:2px 0 0">${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))} KB</p></div>
+      <button class="secondary-btn" onclick="restoreNativeBackup(${index})">Restore</button>
+    </div>
+  `).join("");
+  let status = "";
+  if (!native) status = '<p class="muted">Open a backup file you exported earlier.</p>';
+  else if (list) status = `<p class="muted">Choose a backup to restore.</p><div class="exercise-list" style="margin-top:12px">${list}</div>`;
+  else if (nativeBackupsListState === "done") status = '<p class="muted">No backups found in iCloud Drive or on this iPhone. Check that iCloud Drive is on for Mass Method in Settings, then try again, or open a backup file you exported.</p>';
+  else status = '<p class="muted">Looking for backups…</p>';
+  return `
+    <section class="card pad">
+      ${status}
+      <div class="actions" style="margin-top:12px">
+        ${native ? '<button class="secondary-btn" onclick="refreshNativeBackups()">Look Again</button>' : ""}
+        <label class="secondary-btn file-btn" role="button" tabindex="0">Import Backup File<input type="file" accept=".json,.massmethod,application/json" onchange="importFileFromInput(this)" hidden /></label>
+      </div>
+    </section>
+  `;
+}
+
 function renderBackupCard() {
   const native = Boolean(nativeBackupBridge());
   const list = nativeBackups.slice(0, 10).map((backup, index) => `
@@ -427,7 +458,7 @@ function renderBackupCard() {
           <button class="primary-btn" onclick="requestAutomaticSnapshot('manual', true) || toast(state.profile ? 'Backups need the iPhone app.' : 'Finish setting up your profile first; there is nothing to back up yet.')">Back Up Now</button>
           <button class="secondary-btn" onclick="refreshNativeBackups()">Show Backups</button>
         </div>
-        ${list ? `<div class="exercise-list" style="margin-top:12px">${list}</div>` : ""}
+        ${list ? `<div class="exercise-list" style="margin-top:12px">${list}</div>` : nativeBackupsListState === "loading" ? '<p class="muted" style="margin-top:12px">Looking for backups…</p>' : nativeBackupsListState === "done" ? '<p class="muted" style="margin-top:12px">No backups found yet in iCloud Drive or on this iPhone.</p>' : ""}
       ` : `<p class="muted">Export a backup file and keep it somewhere safe. Automatic iCloud backups run in the iPhone app.</p>`}
       <div class="actions" style="margin-top:12px">
         <button class="secondary-btn" onclick="exportBackupFile()">Export Backup</button>
@@ -499,7 +530,7 @@ renderOnboarding = function renderOnboardingWithRestore() {
       <section class="modal card pad">
         <p class="eyebrow">Welcome back</p>
         <h1>Restore your logbook</h1>
-        ${renderBackupCard()}
+        ${renderRestoreCard()}
         <button class="secondary-btn" style="margin-top:12px" onclick="openOnboardingRestore(false)">Start fresh instead</button>
       </section>
     </div>

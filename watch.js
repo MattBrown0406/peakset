@@ -147,8 +147,9 @@ function scheduleWatchSnapshot() {
 // Every state change goes through saveState, so the watch follows along.
 const baseSaveStateForWatch = saveState;
 saveState = function saveStateAndPublish() {
-  baseSaveStateForWatch();
+  const saved = baseSaveStateForWatch();
   scheduleWatchSnapshot();
+  return saved;
 };
 
 // Commands are redelivered until the phone acknowledges them, so each one is

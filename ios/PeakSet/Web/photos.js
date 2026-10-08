@@ -74,10 +74,10 @@ function photoImg(photo, className = "", extra = "") {
 // A photo record whose file is not on this iPhone (restored from a backup
 // file, still downloading from iCloud, or deleted) shows a labelled tile
 // instead of a broken image.
-function photoMissing(img) {
+function photoMissing(img, force = false) {
   if (!img || img.dataset.missing) return;
   // A browser-stored photo renders with an empty src until its file is read.
-  if (!img.getAttribute("src")) return;
+  if (!force && !img.getAttribute("src")) return;
   img.dataset.missing = "1";
   img.classList.add("photo-missing");
   img.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400"><rect width="300" height="400" fill="#16213a"/><text x="150" y="190" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">Photo not on</text><text x="150" y="222" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">this iPhone yet</text></svg>')}`;
@@ -208,7 +208,10 @@ async function hydrateBrowserPhotos() {
     try {
       if (!browserPhotoUrls.has(id)) {
         const blob = await photoDbRequest("readonly", (store) => store.get(id));
-        if (!blob) continue;
+        if (!blob) {
+          document.querySelectorAll(`img[data-photo-id="${CSS.escape(id)}"]`).forEach((img) => photoMissing(img, true));
+          continue;
+        }
         browserPhotoUrls.set(id, URL.createObjectURL(blob));
       }
       document.querySelectorAll(`img[data-photo-id="${CSS.escape(id)}"]`).forEach((img) => { img.src = browserPhotoUrls.get(id); });
@@ -365,8 +368,8 @@ function renderPhotoSection() {
         <div><p class="eyebrow">Progress photos</p><h2>${escapeHtml(poseLabel(pose))}</h2></div>
         <span class="badge blue">${progressPhotoList().length} total</span>
       </div>
-      <div class="pose-strip" role="list">
-        ${PHOTO_POSES.map(([key, label]) => `<button role="listitem" class="chip ${key === pose ? "active" : ""}" onclick="setPhotoPose('${key}')">${escapeHtml(label)}${counts[key] ? ` · ${counts[key]}` : ""}</button>`).join("")}
+      <div class="pose-strip" role="group" aria-label="Pose">
+        ${PHOTO_POSES.map(([key, label]) => `<button class="chip ${key === pose ? "active" : ""}" aria-pressed="${key === pose}" onclick="setPhotoPose('${key}')">${escapeHtml(label)}${counts[key] ? ` · ${counts[key]}` : ""}</button>`).join("")}
       </div>
       <p class="muted compact-note">${native ? "Your last photo of this pose appears as a faded guide in the camera so lighting, distance, and angle match." : "Same spot, same light, same distance each week makes the comparison honest."}</p>
       <div class="actions">
