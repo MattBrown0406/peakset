@@ -468,17 +468,32 @@ function sanitizePlan(plan, from) {
 function importProgram(program) {
   const from = String(program?.from || "your coach").slice(0, 60);
   const offered = Array.isArray(program?.plans) ? program.plans : [];
-  // Opening the same program file again must not add the templates twice.
-  const alreadyHave = (plan) => plan.sourceId && state.customPlans.some((existing) => existing.fromCoach === plan.fromCoach && existing.sourceId === plan.sourceId);
-  const plans = offered.slice(0, MAX_PROGRAM_PLANS).map((plan) => sanitizePlan(plan, from)).filter(Boolean).filter((plan) => !alreadyHave(plan));
+  // A template this coach already sent (same source id) is updated in place
+  // when the coach changed it, and skipped when it is identical, so opening a
+  // program twice never duplicates and an edited, re-sent template arrives.
+  const contentKey = (plan) => JSON.stringify([plan.title, plan.muscle, plan.phase, plan.rest, plan.note, plan.exercises]);
+  const sanitized = offered.slice(0, MAX_PROGRAM_PLANS).map((plan) => sanitizePlan(plan, from)).filter(Boolean);
+  const plans = [];
+  const updates = [];
+  sanitized.forEach((plan) => {
+    const existingIndex = plan.sourceId ? state.customPlans.findIndex((item) => item.fromCoach === plan.fromCoach && item.sourceId === plan.sourceId) : -1;
+    if (existingIndex === -1) plans.push(plan);
+    else if (contentKey(state.customPlans[existingIndex]) !== contentKey(plan)) updates.push({ existingIndex, plan });
+  });
   const block = program?.block && typeof program.block === "object" ? program.block : null;
-  if (!plans.length && !block) {
-    toast("That program has no workouts this app can load.");
+  if (!plans.length && !updates.length && !block) {
+    toast(sanitized.length ? "You already have every workout in this program." : "That program has no workouts this app can load.");
     return false;
   }
   // Say so when a program was larger than this app accepts, rather than dropping workouts silently.
-  const summary = [plans.length ? `${plans.length} workout${plans.length === 1 ? "" : "s"}${offered.length > MAX_PROGRAM_PLANS ? ` (the first ${MAX_PROGRAM_PLANS} of ${offered.length})` : ""}` : "", block ? `a ${Number(block.accumulationWeeks) || 4}-week training block` : ""].filter(Boolean).join(" and ");
+  const summary = [plans.length ? `${plans.length} new workout${plans.length === 1 ? "" : "s"}${offered.length > MAX_PROGRAM_PLANS ? ` (the first ${MAX_PROGRAM_PLANS} of ${offered.length})` : ""}` : "", updates.length ? `${updates.length} updated workout${updates.length === 1 ? "" : "s"}` : "", block ? `a ${Number(block.accumulationWeeks) || 4}-week training block` : ""].filter(Boolean).join(" and ");
   if (!window.confirm(`Add ${summary} from ${from}?`)) return false;
+  updates.forEach(({ existingIndex, plan }) => {
+    const existing = state.customPlans[existingIndex];
+    // Keep the athlete's id (Today picks, schedules) and their own schedule
+    // unless the coach set one.
+    state.customPlans[existingIndex] = { ...existing, ...plan, id: existing.id, scheduleDay: plan.scheduleDay || existing.scheduleDay || "" };
+  });
   state.customPlans.unshift(...plans);
   if (block) {
     const incoming = {
@@ -499,7 +514,7 @@ function importProgram(program) {
       state.pendingTrainingBlock = null;
     }
   }
-  state.coachMessage = { from, message: String(program.message || "").slice(0, 2000), receivedAt: new Date().toISOString(), planCount: plans.length };
+  state.coachMessage = { from, message: String(program.message || "").slice(0, 2000), receivedAt: new Date().toISOString(), planCount: plans.length + updates.length };
   saveState();
   toast(`Program from ${from} added to Plans.`);
   setView("plans");

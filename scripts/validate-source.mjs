@@ -1359,12 +1359,21 @@ console.log("Audit round 8 checks passed.");
     run19("state.phase = 'offseason'; state.workoutLogs = []; const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-US', { weekday: 'long' }); state.customPlans = [{ id: 'custom-legs', title: 'Legs DS', muscle: 'legs', phase: 'offseason', rest: 120, note: '', scheduleDay: tomorrow, exercises: [['barbell-squat', 3, '8', 120, 0, {}]] }]");
     assert.notEqual(run19("todaysRecommendedPlan().muscle"), "legs", "today avoids the muscle tomorrow's scheduled template trains");
     assert.ok(read("coach.js").includes("const pruneMissing = (list, incoming, apply = true, key = \"\") =>"), "coach copies mirror deletions inside each check-in's range");
-    assert.ok(read("coach.js").includes("existing.sourceId === plan.sourceId"), "re-opening a program doesn't duplicate templates");
+    assert.ok(read("coach.js").includes("item.sourceId === plan.sourceId"), "re-opening a program doesn't duplicate templates");
     assert.ok(read("health.js").includes("saveWeight = function saveWeightReplacingHealthDay"), "a hand weigh-in replaces the day's Health reading");
     assert.ok(read("watch.js").includes("command.unit !== weightUnit()") && read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes('"unit": current.unit'), "watch weights carry their unit");
     run19("state.workoutLogs = [{ id: 'gone-1', title: 'Old', date: new Date().toISOString(), sets: [] }]; deleteLogEntry('workout', 'gone-1')");
     assert.ok(run19("state.deletedLogs.some((item) => item.kind === 'workout' && item.id === 'gone-1')"), "deletions are remembered for the coach");
     assert.ok(read("coach.js").includes("deleted: (Array.isArray(state.deletedLogs) ? state.deletedLogs : []).slice(-300),") && read("coach.js").includes("const tombstones = deletedByKind[kindOf[key]];"), "coach check-ins carry and apply deletions");
+    // A re-sent program: identical templates are skipped, edited ones update in place.
+    run19("window.confirm = () => true; state.customPlans = []");
+    const program = (reps) => JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", plans: [{ id: "custom-coach-1", title: "Push A", muscle: "chest", phase: "offseason", rest: 120, note: "x", scheduleDay: "Monday", exercises: [["barbell-bench", 3, reps, 120, 0, {}]] }] });
+    run19(`handleIncomingFileText(${JSON.stringify(program("8"))})`);
+    run19(`handleIncomingFileText(${JSON.stringify(program("8"))})`);
+    assert.equal(run19("state.customPlans.length"), 1, "the same program opened twice doesn't duplicate");
+    const firstId = run19("state.customPlans[0].id");
+    run19(`handleIncomingFileText(${JSON.stringify(program("6-8"))})`);
+    assert.equal(run19("state.customPlans.length + '|' + state.customPlans[0].exercises[0][2] + '|' + (state.customPlans[0].id === '" + firstId + "')"), "1|6-8|true", "an edited, re-sent template updates in place");
   }
   // Round 17 App Store readiness.
   assert(read("settings.js").includes("<h2>Privacy policy</h2>"), "A privacy policy must be reachable in the app (5.1.1)");
