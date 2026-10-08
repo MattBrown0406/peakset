@@ -23,15 +23,28 @@ function firstNumber(text, fallback) {
   return match ? match[0] : fallback;
 }
 
+// Filled while a watch snapshot is built: one history lookup per exercise.
+let watchPerformanceCache = null;
 function suggestedSetValues(exercise, setIndex) {
   const set = exercise.sets[setIndex];
-  const doneSets = exercise.sets.filter((item) => item.done);
-  const lastDone = doneSets.at(-1);
-  const previous = typeof lastExercisePerformance === "function" ? lastExercisePerformance(exercise.id) : null;
-  const previousSet = previous?.sets?.filter((item) => Boolean(item.dropSet) === Boolean(set?.dropSet))?.[Math.min(setIndex, (previous?.sets?.length || 1) - 1)];
+  // Working sets and drop sets are suggested from their own kind: a drop must
+  // not be pre-filled with the working weight.
+  const sameKind = (item) => Boolean(item.dropSet) === Boolean(set?.dropSet);
+  const lastDone = exercise.sets.filter((item) => item.done && sameKind(item)).at(-1);
+  const ordinal = exercise.sets.slice(0, setIndex).filter(sameKind).length;
+  let previous = watchPerformanceCache?.get(exercise.id);
+  if (previous === undefined) {
+    previous = typeof lastExercisePerformance === "function" ? lastExercisePerformance(exercise.id) : null;
+    watchPerformanceCache?.set(exercise.id, previous);
+  }
+  const previousKind = (previous?.sets || []).filter(sameKind);
+  const previousSet = previousKind[Math.min(ordinal, previousKind.length - 1)];
+  // A first-ever drop set has no drop history: start from the working weight.
+  const lastWorking = exercise.sets.filter((item) => item.done && !item.dropSet).at(-1);
+  const order = set?.dropSet ? [previousSet, lastDone, lastWorking] : [lastDone, previousSet];
   return {
-    weight: String(set?.weight || lastDone?.weight || previousSet?.weight || ""),
-    reps: String(set?.reps || lastDone?.reps || previousSet?.reps || firstNumber(exercise.targetReps, "8"))
+    weight: String(set?.weight || order.find((item) => item?.weight)?.weight || ""),
+    reps: String(set?.reps || order.find((item) => item?.reps)?.reps || firstNumber(exercise.targetReps, "8"))
   };
 }
 
@@ -60,6 +73,15 @@ function currentWatchExerciseIndex(workout) {
 }
 
 function buildWatchSnapshot() {
+  watchPerformanceCache = new Map();
+  try {
+    return buildWatchSnapshotUncached();
+  } finally {
+    watchPerformanceCache = null;
+  }
+}
+
+function buildWatchSnapshotUncached() {
   const workout = state.activeWorkout;
   const info = typeof blockWeekInfo === "function" ? blockWeekInfo() : null;
   const blockLine = info?.status === "active" ? (info.deload ? "Deload" : `${info.targetRir} RIR`) : "";
@@ -90,14 +112,21 @@ function buildWatchSnapshot() {
       repsOnly: isRepsOnlyExercise(exercise),
       suggestedWeight: suggestion.weight,
       suggestedReps: suggestion.reps,
-      sets: exercise.sets.map((set, setIndex) => ({
-        index: setIndex,
-        label: String(set.label || set.set),
-        weight: String(set.weight ?? ""),
-        reps: String(set.reps ?? ""),
-        done: Boolean(set.done),
-        drop: Boolean(set.dropSet)
-      }))
+      sets: exercise.sets.map((set, setIndex) => {
+        // Each open set carries its own suggestion (drops from last session's
+        // matching drop), so the watch can pre-fill every set correctly even
+        // while the iPhone is locked.
+        const own = set.done ? null : suggestedSetValues(exercise, setIndex);
+        return {
+          index: setIndex,
+          label: String(set.label || set.set),
+          weight: String(set.weight ?? ""),
+          reps: String(set.reps ?? ""),
+          done: Boolean(set.done),
+          drop: Boolean(set.dropSet),
+          ...(own ? { suggestedWeight: String(own.weight ?? ""), suggestedReps: String(own.reps ?? "") } : {})
+        };
+      })
     };
   });
   const allSets = workout.exercises.flatMap((exercise) => exercise.sets);
@@ -139,9 +168,10 @@ function scheduleWatchSnapshot() {
 
 // Every state change goes through saveState, so the watch follows along.
 const baseSaveStateForWatch = saveState;
-saveState = function saveStateAndPublish() {
-  baseSaveStateForWatch();
+saveState = function saveStateAndPublish(...args) {
+  const saved = baseSaveStateForWatch(...args);
   scheduleWatchSnapshot();
+  return saved;
 };
 
 // Commands are redelivered until the phone acknowledges them, so each one is
@@ -205,23 +235,46 @@ function applyWatchCommand(command) {
     }
     const set = exercise?.sets?.[setIndex];
     if (!set || set.done) return false;
-    // The watch sends plain numbers; anything else is dropped before it is stored.
-    const numericText = (value) => { const text = String(value ?? "").trim(); return /^\d{1,6}(\.\d{1,3})?$/.test(text) ? text : ""; };
-    if (!isRepsOnlyExercise(exercise)) updateSet(exIndex, setIndex, "weight", numericText(command.weight));
-    updateSet(exIndex, setIndex, "reps", numericText(command.reps));
+    // The watch sends plain numbers (older builds can send "100."); anything
+    // else is ignored rather than written over the value already on the phone.
+    const numericText = (value) => {
+      const text = String(value ?? "").trim();
+      return /^\d{1,6}(\.\d{0,3})?$/.test(text) ? text.replace(/\.$/, "") : null;
+    };
+    let weight = numericText(command.weight);
+    // Sent in the other unit (the phone switched units mid-workout): convert.
+    if (weight !== null && weight !== "" && (command.unit === "lb" || command.unit === "kg") && command.unit !== weightUnit()) {
+      const converted = command.unit === "lb" ? Number(weight) * KG_PER_LB : Number(weight) / KG_PER_LB;
+      weight = String(Math.round(converted * 100) / 100);
+    }
+    const reps = numericText(command.reps);
+    if (!isRepsOnlyExercise(exercise) && weight !== null) updateSet(exIndex, setIndex, "weight", weight);
+    if (reps !== null) updateSet(exIndex, setIndex, "reps", reps);
     // startTimer replaces the timer object, so identity tells whether this
     // completion started a new rest (start times can match to the millisecond).
     const timerObjectBefore = state.timer;
     const timerBefore = { ...state.timer };
     const anchorBefore = state.activeWorkout.lastExerciseIndex;
+    const lastSetBefore = Number(state.activeWorkout.lastSetAt) || 0;
     completeSet(exIndex, setIndex);
+    // Date the set by when it was done on the watch, not when it arrived.
+    const doneAt = Number(command.completedAt);
+    if (state.activeWorkout?.exercises?.[exIndex]?.sets?.[setIndex]?.done && Number.isFinite(doneAt) && doneAt <= Date.now()) {
+      state.activeWorkout.lastSetAt = Math.max(lastSetBefore, doneAt);
+      saveState();
+    }
     const startedNewRest = state.timer !== timerObjectBefore && state.timer.running && state.timer.exerciseIndex === exIndex;
     const completedAt = Number(command.completedAt);
     // A set that arrives late must not replace a rest started by a newer set.
     if (startedNewRest && timerBefore.running && Number.isFinite(completedAt) && Number(timerBefore.startedAt) >= completedAt) {
       const remaining = Math.ceil((Number(timerBefore.endsAt) - Date.now()) / 1000);
-      if (remaining > 0) startTimer(remaining, Boolean(timerBefore.fullscreen), timerBefore.exerciseIndex, false);
-      else stopTimer();
+      if (remaining > 0) {
+        startTimer(remaining, Boolean(timerBefore.fullscreen), timerBefore.exerciseIndex, false);
+        // Same rest as before: keep its start and length (ring, Lock Screen).
+        if (Number(timerBefore.startedAt) > 0) state.timer.startedAt = Number(timerBefore.startedAt);
+        state.timer.total = Math.max(remaining, Number(timerBefore.total) || 0);
+        if (typeof refreshRestLiveActivity === "function") refreshRestLiveActivity();
+      } else stopTimer();
       // The athlete is still on the newer set's exercise.
       if (state.activeWorkout) state.activeWorkout.lastExerciseIndex = anchorBefore;
       saveState();
@@ -231,8 +284,15 @@ function applyWatchCommand(command) {
     // caught up.
     if (set.done && startedNewRest && Number.isFinite(completedAt) && Date.now() - completedAt > 3000) {
       const remaining = Math.ceil((completedAt + (Number(exercise.rest) || DEFAULT_REST_SECONDS) * 1000 - Date.now()) / 1000);
-      if (remaining > 0) startTimer(remaining, state.view === "session", exIndex, false);
-      else stopTimer();
+      if (remaining > 0) {
+        startTimer(remaining, state.view === "session", exIndex, false);
+        // Keep the real start so the Lock Screen bar shows the time passed.
+        const rest = Number(exercise.rest) || DEFAULT_REST_SECONDS;
+        state.timer.startedAt = completedAt;
+        state.timer.total = Math.max(remaining, rest);
+        if (typeof refreshRestLiveActivity === "function") refreshRestLiveActivity();
+        saveState();
+      } else stopTimer();
     }
     return Boolean(set.done);
   }

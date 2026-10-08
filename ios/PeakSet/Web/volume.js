@@ -200,7 +200,9 @@ function groupWeeklyTarget(group, info = blockWeekInfo(), block = state.training
   let high = group.high * scale;
   if (info?.status === "active") {
     if (info.deload) {
-      low = high = Math.round(group.min * 0.5);
+      // Half of the last build week's target (which equals `high`), matching
+      // the halved plan the app prescribes; group.min halved read "Over target".
+      low = high = Math.round(high * 0.5);
     } else {
       const span = Math.max(1, block.accumulationWeeks - 1);
       const target = low + ((high - low) * info.weekIndex) / span;
@@ -313,7 +315,7 @@ function peakWeekConflict(block = state.trainingBlock) {
 function renderBlockStatusLine(info = blockWeekInfo()) {
   if (!info) return "";
   if (info.status === "upcoming") return `Starts ${formatShortDate(state.trainingBlock.startDate)}`;
-  if (info.status === "complete") return "Block complete. Start the next one.";
+  if (info.status === "complete") return "Block complete. Archive it, then plan the next one.";
   if (info.deload) return `Week ${info.weekNumber} of ${info.length} · Deload: half the sets, 4+ RIR`;
   return `Week ${info.weekNumber} of ${info.length} · Aim for ${info.targetRir} RIR`;
 }
@@ -448,7 +450,13 @@ renderPlans = function renderPlansWithVolume() {
   const html = baseRenderPlansForVolume();
   const headerStart = html.indexOf("compact-page-header");
   const insertAt = headerStart === -1 ? 0 : html.indexOf("</div>", headerStart) + "</div>".length;
-  return `${html.slice(0, insertAt)}<div class="grid volume-stack">${renderTrainingBlockCard()}${renderVolumeCard()}</div>${html.slice(insertAt)}`;
+  // Plans first: the block form and volume chart (13 bars) pushed the first
+  // plan two screens down. A running block keeps a one-line status on top.
+  const info = blockWeekInfo();
+  const status = info && info.status !== "complete"
+    ? `<div class="block-banner ${info.deload ? "deload" : ""}">${escapeHtml(renderBlockStatusLine(info))} <a href="#training-block" class="inline-link">Block details</a></div>`
+    : `<p class="muted compact-note"><a href="#training-block" class="inline-link">Plan a training block and check weekly volume</a> (below the plans)</p>`;
+  return `${html.slice(0, insertAt)}${status}${html.slice(insertAt)}<div class="grid volume-stack" id="training-block" style="margin-top:16px">${renderTrainingBlockCard()}${renderVolumeCard()}</div>`;
 };
 
 const baseRenderTodayForVolume = renderToday;
@@ -469,6 +477,11 @@ function deloadPlan(plan) {
     })
   };
 }
+
+todayPreviewPlan = function todayPreviewWithDeload(plan) {
+  const exempt = String(plan?.id || "").startsWith("quick-") || plan?.adHoc;
+  return blockWeekInfo()?.deload && !exempt ? deloadPlan(plan) : plan;
+};
 
 const baseBeginWorkoutForVolume = beginWorkoutFromPlan;
 beginWorkoutFromPlan = function beginWorkoutWithBlock(plan) {
@@ -498,6 +511,11 @@ renderSession = function renderSessionWithBlock() {
   const info = blockWeekInfo();
   if (!state.activeWorkout || info?.status !== "active") return html;
   return `<div class="block-banner ${info.deload ? "deload" : ""}">${escapeHtml(renderBlockStatusLine(info))}</div>${html}`;
+};
+
+progressionRirLimit = function blockProgressionRirLimit() {
+  const info = blockWeekInfo();
+  return info?.status === "active" && !info.deload && Number.isFinite(info.targetRir) ? Math.max(2, info.targetRir) : 2;
 };
 
 const baseProgressionForVolume = progressionSuggestion;

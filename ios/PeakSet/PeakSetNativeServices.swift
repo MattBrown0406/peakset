@@ -39,11 +39,20 @@ final class PeakSetTimerService {
         return stored > 0 ? Date(timeIntervalSince1970: stored) : nil
     }
 
+    /// Called on main when the athlete has turned notifications off, so the
+    /// page can explain that locked-phone rests will be silent.
+    var onAuthorizationDenied: (() -> Void)?
+
     private func schedule(fireDate: Date, token: UUID) {
         center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
             // `generation` and `scheduledFireDate` are only touched on main.
             DispatchQueue.main.async {
-                guard granted, let self, self.generation == token else { return }
+                guard let self else { return }
+                guard granted else {
+                    self.onAuthorizationDenied?()
+                    return
+                }
+                guard self.generation == token else { return }
                 let content = UNMutableNotificationContent()
                 content.title = "Rest complete"
                 content.body = "Your next set is ready."
@@ -144,13 +153,20 @@ final class PeakSetHealthKitService {
         }
     }
 
-    func saveWeight(value: Double, kilograms: Bool, date: Date, completion: @escaping (Result<String, Error>) -> Void) {
+    func saveWeight(value: Double, kilograms: Bool, date: Date, syncID: String?, completion: @escaping (Result<String, Error>) -> Void) {
         guard value.isFinite, value > 0, let bodyMassType else {
             completion(.failure(ServiceError.healthDataUnavailable))
             return
         }
         let quantity = HKQuantity(unit: kilograms ? .gramUnit(with: .kilo) : .pound(), doubleValue: value)
-        let sample = HKQuantitySample(type: bodyMassType, quantity: quantity, start: date, end: date)
+        // A sync identifier makes HealthKit replace the sample when the same
+        // weigh-in is sent again, instead of adding a duplicate each tap.
+        var metadata: [String: Any] = [:]
+        if let syncID, !syncID.isEmpty {
+            metadata[HKMetadataKeySyncIdentifier] = "massmethod-weight-\(syncID)"
+            metadata[HKMetadataKeySyncVersion] = Int(Date().timeIntervalSince1970)
+        }
+        let sample = HKQuantitySample(type: bodyMassType, quantity: quantity, start: date, end: date, metadata: metadata.isEmpty ? nil : metadata)
         store.save(sample) { success, error in
             if let error {
                 completion(.failure(error))
@@ -241,7 +257,13 @@ final class PeakSetHealthKitService {
         let predicate = HKQuery.predicateForSamples(withStart: start, end: now, options: .strictStartDate)
         let query = HKStatisticsQuery(quantityType: stepType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, error in
             if let error {
-                completion(.failure(error))
+                // No samples today (or read access off, which HealthKit hides)
+                // is reported as "no data": treat it as zero steps.
+                if (error as? HKError)?.code == .errorNoData {
+                    completion(.success(0))
+                } else {
+                    completion(.failure(error))
+                }
                 return
             }
             let steps = result?.sumQuantity()?.doubleValue(for: .count()) ?? 0

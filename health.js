@@ -116,6 +116,7 @@ function applyHealthBodySamples(samples) {
     if (manualWeight) {
       // The athlete's own weigh-in wins; attach composition data to it.
       const before = state.weightLogs.length;
+      if (state.weightLogs.some((entry) => entry.id === hkId)) recordDeletedLog("weight", hkId);
       state.weightLogs = state.weightLogs.filter((entry) => entry.id !== hkId);
       changed += before - state.weightLogs.length;
       if (slot.bodyFat && markHealthField(manualWeight, "bodyFat", slot.bodyFat.value)) changed += 1;
@@ -133,6 +134,9 @@ function applyHealthBodySamples(samples) {
       const existing = state.weightLogs.find((entry) => entry.id === hkId);
       if (!existing) {
         state.weightLogs.push(next);
+        // The day's Health reading is back (the hand-logged one was deleted),
+        // so the coach should show it again.
+        if (Array.isArray(state.deletedLogs)) state.deletedLogs = state.deletedLogs.filter((item) => !(item.kind === "weight" && item.id === hkId));
         changed += 1;
       } else if (JSON.stringify(existing) !== JSON.stringify({ ...existing, ...next })) {
         Object.assign(existing, next);
@@ -153,11 +157,16 @@ function applyHealthBodySamples(samples) {
   state.weightLogs.sort(newestFirst);
   state.measurements.sort(newestFirst);
   if (state.profile && state.weightLogs[0]?.bodyweight) state.profile.bodyweight = state.weightLogs[0].bodyweight;
+  // HealthKit hides read denial by returning no samples. On a first sync
+  // that is far more likely than an empty Health history, so point there.
+  const firstSync = !state.healthBody.lastSyncAt;
   state.healthBody.lastSyncAt = new Date().toISOString();
   delete state.healthBody.resyncFrom;
   state.healthBody.lastResult = changedDays
     ? `Updated ${changedDays} ${changedDays === 1 ? "day" : "days"} from Apple Health.`
-    : "Up to date with Apple Health.";
+    : firstSync && !(Array.isArray(samples) && samples.length)
+      ? "No body data found in Apple Health. If you expected some, allow Mass Method in Settings › Health › Data Access & Devices."
+      : "Up to date with Apple Health.";
   saveState();
   render();
   return changedDays;
@@ -233,10 +242,12 @@ window.handleNativeHealthKit = function handleNativeHealthKitWithBody(payload) {
 // ---------- Display ----------
 
 function bodyFatSeries() {
-  const points = [
-    ...state.weightLogs.filter((entry) => Number(entry.bodyFat) > 0).map((entry) => ({ date: entry.date, value: Number(entry.bodyFat) })),
-    ...state.measurements.filter((entry) => Number(entry.bodyFat) > 0).map((entry) => ({ date: entry.date, value: Number(entry.bodyFat) }))
-  ];
+  // Hand-logged values win over Apple Health on the same day.
+  const fromHealth = (entry) => isHealthEntry(entry) || (Array.isArray(entry?.healthFields) && entry.healthFields.includes("bodyFat"));
+  const withFat = (list) => list.filter((entry) => Number(entry.bodyFat) > 0);
+  const toPoint = (entry) => ({ date: entry.date, value: Number(entry.bodyFat) });
+  const all = [...withFat(state.measurements), ...withFat(state.weightLogs)];
+  const points = [...all.filter((entry) => !fromHealth(entry)), ...all.filter(fromHealth)].map(toPoint);
   const byDay = new Map();
   points.forEach((point) => {
     const day = localDayKey(point.date);
@@ -248,7 +259,9 @@ function bodyFatSeries() {
 function renderBodyCompositionCard() {
   const series = bodyFatSeries();
   const latest = series.at(-1);
-  const monthAgo = [...series].reverse().find((point) => !isWithinDays(point.date, 28));
+  // Compare with a reading taken roughly four weeks before the latest one.
+  const gapDays = (point) => (Date.parse(latest?.date) - Date.parse(point.date)) / 86400000;
+  const monthAgo = latest ? [...series].reverse().find((point) => point !== latest && gapDays(point) >= 21 && gapDays(point) <= 35) : null;
   const lean = state.weightLogs.find((entry) => Number(entry.leanMass) > 0);
   if (!latest && !lean && !state.healthBody?.enabled) return "";
   const change = latest && monthAgo ? latest.value - monthAgo.value : null;
@@ -270,12 +283,23 @@ coachReportData = function coachReportWithMergedMeasurements(days) {
   const report = baseCoachReportDataForHealth(days);
   if (!report.measurements.length) return report;
   const merged = { date: report.measurements[0].date, note: report.measurements[0].note || "" };
+  const contributingDates = new Set();
   report.measurements.forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
       if (["id", "date", "note", "source", "healthFields", "_unitOrigin"].includes(key)) return;
-      if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") merged[key] = value;
+      if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") {
+        merged[key] = value;
+        contributingDates.add(entry.date);
+      }
     });
   });
+  // Several check-ins merged: say so instead of stamping old tape values with the newest date and source.
+  const times = [...contributingDates].map((date) => Date.parse(date)).filter(Number.isFinite);
+  const contributingDays = new Set(times.map((time) => dateKey(new Date(time))));
+  if (contributingDays.size > 1) {
+    const span = `most recent value of each since ${formatShortDate(new Date(Math.min(...times)).toISOString())}`;
+    merged.note = merged.note ? `${merged.note} (${span})` : span[0].toUpperCase() + span.slice(1);
+  }
   return { ...report, latestMeasurement: merged };
 };
 
@@ -317,3 +341,39 @@ document.addEventListener("visibilitychange", () => {
 saveState();
 syncHealthBody(false);
 render();
+
+
+// Coach PDFs carry Latin-1 text only: build every line with Western digits
+// and the Gregorian calendar whatever the phone's language.
+const baseBuildCoachReportLinesForLocale = buildCoachReportLines;
+buildCoachReportLines = function buildCoachReportLinesInEnglishNumerals(...args) {
+  reportFormatting = true;
+  try {
+    return baseBuildCoachReportLinesForLocale(...args);
+  } finally {
+    reportFormatting = false;
+  }
+};
+
+
+// A hand-logged weigh-in wins over the day's Apple Health reading right away
+// (not only at the next sync), keeping the reading's body-fat / lean-mass
+// values marked as Health data; otherwise the day counted two weigh-ins.
+const baseSaveWeightForHealth = saveWeight;
+saveWeight = function saveWeightReplacingHealthDay(...args) {
+  const before = state.weightLogs.length;
+  const result = baseSaveWeightForHealth(...args);
+  const entry = state.weightLogs[0];
+  if (state.weightLogs.length > before && entry && !isHealthEntry(entry)) {
+    const healthDay = state.weightLogs.find((item) => item.id === `hk-day-${localDayKey(entry.date)}`);
+    if (healthDay) {
+      if (Number(healthDay.bodyFat) > 0) markHealthField(entry, "bodyFat", healthDay.bodyFat);
+      if (Number(healthDay.leanMass) > 0) markHealthField(entry, "leanMass", healthDay.leanMass);
+      state.weightLogs = state.weightLogs.filter((item) => item !== healthDay);
+      recordDeletedLog("weight", healthDay.id);
+      saveState();
+      render();
+    }
+  }
+  return result;
+};

@@ -177,9 +177,58 @@ async function shareOrDownload(text, filename, mime = "application/json") {
   return "downloaded";
 }
 
+let lastBackupExportAt = 0;
+let pendingBackupShare = null;
+
 async function exportBackupFile() {
-  const result = await shareOrDownload(JSON.stringify(backupPayload()), `mass-method-backup-${todayStamp()}.json`);
+  const filename = `mass-method-backup-${todayStamp()}.json`;
+  const result = await shareOrDownload(JSON.stringify(backupPayload()), filename);
+  // On iOS "shared" only means the share sheet opened; archiving unlocks when
+  // native reports the file was actually saved or sent.
+  if (result === "shared") pendingBackupShare = filename;
+  else lastBackupExportAt = Date.now();
   toast(result === "shared" ? "Backup ready. Save it to Files or iCloud Drive." : "Backup downloaded.");
+  if (state.view === "more") render();
+}
+
+const baseHandleNativeShareForBackup = window.handleNativeShare;
+window.handleNativeShare = function handleNativeShareForBackup(payload) {
+  baseHandleNativeShareForBackup?.(payload);
+  if (pendingBackupShare && payload?.filename === pendingBackupShare) {
+    if (payload.completed) {
+      lastBackupExportAt = Date.now();
+      if (state.view === "more") render();
+    }
+    pendingBackupShare = null;
+  }
+};
+
+function storageUsedFraction() {
+  let bytes = lastStoredBytes;
+  try {
+    bytes = Object.keys(localStorage).reduce((sum, key) => sum + key.length + String(localStorage.getItem(key) || "").length, 0);
+  } catch {}
+  return bytes / STORAGE_LIMIT_BYTES;
+}
+
+// The way out when on-device storage fills: after exporting a full backup,
+// remove history older than a year from this device (the backup keeps it).
+function archiveOldHistory() {
+  if (Date.now() - lastBackupExportAt > 30 * 60000) return toast("Export a backup first, so archived history stays in that file.");
+  const cutoff = Date.now() - 365 * 86400000;
+  // Apple Health readings are not in exported backups; leave them in place.
+  // The start weigh-in stays so "change from start" does not move.
+  const startId = startingWeighIn()?.id;
+  const isOld = (entry) => !(startId && entry?.id === startId) && Number.isFinite(Date.parse(entry?.date)) && Date.parse(entry.date) < cutoff && !String(entry?.id || "").startsWith("hk-") && entry?.cardioType !== "HealthKit";
+  const keys = ["workoutLogs", "weightLogs", "measurements", "weeklyCheckIns", "prepLogs"];
+  const counts = Object.fromEntries(keys.map((key) => [key, (state[key] || []).filter(isOld).length]));
+  const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  if (!total) return toast("Nothing older than a year to archive.");
+  if (!window.confirm(`Remove ${counts.workoutLogs} workouts and ${total - counts.workoutLogs} other entries older than a year from this iPhone? They stay in the backup you just exported.`)) return;
+  keys.forEach((key) => { state[key] = (state[key] || []).filter((entry) => !isOld(entry)); });
+  saveState();
+  toast(`Archived ${total} entries older than a year.`);
+  render();
 }
 
 function isBackupPayload(payload) {
@@ -189,7 +238,7 @@ function isBackupPayload(payload) {
 function backupSummary(payloadState) {
   const logs = Array.isArray(payloadState.workoutLogs) ? payloadState.workoutLogs.length : 0;
   const weights = Array.isArray(payloadState.weightLogs) ? payloadState.weightLogs.length : 0;
-  return `${logs} workouts and ${weights} weigh-ins`;
+  return `${logs} workout${logs === 1 ? "" : "s"} and ${weights} weigh-in${weights === 1 ? "" : "s"}`;
 }
 
 function restoreBackupPayload(payload, sourceLabel = "this backup") {
@@ -216,7 +265,12 @@ function restoreBackupPayload(payload, sourceLabel = "this backup") {
   try {
     Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-before-restore-`)).forEach((key) => localStorage.removeItem(key));
     restoringState = true;
-    localStorage.setItem(STORE_KEY, JSON.stringify(restored));
+    localStorage.setItem(STORE_KEY, serializeForStorage(restored));
+    // A backup file holds photo records, not images; ask iOS to copy the
+    // images back from the iCloud Drive mirror (no-op when there are none).
+    if (native && Array.isArray(restored.progressPhotos) && restored.progressPhotos.some((photo) => photo?.storage === "native")) {
+      try { nativeBackupBridge().postMessage({ action: "restorePhotos" }); } catch {}
+    }
   } catch {
     restoringState = false;
     toast("Could not write the backup to this device's storage.");
@@ -266,28 +320,44 @@ function nativeBackupBridge() {
   return window.webkit?.messageHandlers?.peaksetBackup || null;
 }
 
+let lastSnapshotAttemptAt = 0;
 function requestAutomaticSnapshot(reason = "scheduled", force = false) {
   const bridge = nativeBackupBridge();
   if (!bridge || !state.profile) return false;
   const last = Date.parse(state.backupStatus?.at || "");
   if (!force && Number.isFinite(last) && Date.now() - last < SNAPSHOT_INTERVAL_MS) return false;
+  // After a failed backup (iCloud full or signed out), every app switch would
+  // serialize and send the whole logbook again; retry at most every 15 min.
+  if (!force && Date.now() - lastSnapshotAttemptAt < 15 * 60000) return false;
+  lastSnapshotAttemptAt = Date.now();
   // The athlete id keeps a fresh install (new id until it restores) from
   // overwriting another install's backup for the same day in iCloud Drive.
   bridge.postMessage({ action: "snapshot", reason, filename: `mass-method-backup-${todayStamp()}-${String(state.athleteId || "device").slice(0, 8)}.json`, json: JSON.stringify(nativeBackupPayload()) });
   return true;
 }
 
+// "idle" until a list is requested, "loading" while iOS looks, "done" after.
+let nativeBackupsListState = "idle";
 function refreshNativeBackups() {
   const bridge = nativeBackupBridge();
   if (!bridge) return;
+  nativeBackupsListState = "loading";
+  if (state.view === "more" || onboardingRestoreOpen) render();
   bridge.postMessage({ action: "list" });
 }
 
+// One restore at a time: an iCloud download can take up to 30 s.
+let restoreInProgress = false;
+let restoringBackupIndex = -1;
 function restoreNativeBackup(index) {
   const backup = nativeBackups[index];
   const bridge = nativeBackupBridge();
-  if (!backup || !bridge) return;
+  if (!backup || !bridge || restoreInProgress) return;
+  restoreInProgress = true;
+  restoringBackupIndex = index;
+  if (state.view === "more" || onboardingRestoreOpen) render();
   bridge.postMessage({ action: "restore", name: backup.name, location: backup.location });
+  toast(String(backup.location || "").startsWith("iCloud") ? "Restoring… iCloud may take up to 30 seconds to download the backup." : "Restoring…");
 }
 
 function handleNativeBackup(payload) {
@@ -299,11 +369,22 @@ function handleNativeBackup(payload) {
     if (state.view === "more") render();
   } else if (payload.status === "list") {
     nativeBackups = (Array.isArray(payload.backups) ? payload.backups : []).filter((backup) => backup && typeof backup === "object");
+    nativeBackupsListState = "done";
     if (state.view === "more" || onboardingRestoreOpen) render();
   } else if (payload.status === "restore") {
+    restoreInProgress = false;
     let parsed = null;
     try { parsed = JSON.parse(payload.json || ""); } catch {}
-    restoreBackupPayload(parsed, `the ${payload.location || "saved"} backup from ${formatShortDate(payload.date)}`);
+    if (!restoreBackupPayload(parsed, `the ${payload.location || "saved"} backup from ${formatShortDate(payload.date)}`) && (state.view === "more" || onboardingRestoreOpen)) render();
+  } else if (payload.status === "photosRestored") {
+    // Photo files copied back from iCloud Drive after a restore.
+    if (["photos", "progress", "today"].includes(state.view)) render();
+  } else if (payload.status === "error" && payload.kind === "restore") {
+    restoreInProgress = false;
+    // A failed restore must be visible wherever it was started (the new
+    // phone's onboarding screen too) and must not replace the backup status.
+    toast(typeof payload.message === "string" && payload.message ? `Restore failed: ${payload.message}` : "That backup could not be restored. Try again in a moment.");
+    if (state.view === "more" || onboardingRestoreOpen) render();
   } else if (payload.status === "error") {
     state.backupStatus = { ...state.backupStatus, message: typeof payload.message === "string" && payload.message ? payload.message : "Automatic backup failed." };
     saveState();
@@ -340,12 +421,38 @@ function renderUnitsCard() {
   `;
 }
 
+// A new phone's restore screen: only ways to bring data back, and a clear
+// answer when there is nothing to restore.
+function renderRestoreCard() {
+  const native = Boolean(nativeBackupBridge());
+  const list = nativeBackups.slice(0, 10).map((backup, index) => `
+    <div class="exercise-row">
+      <div><strong>${formatShortDate(backup.date)}</strong><p class="muted" style="margin:2px 0 0">${Number.isFinite(Date.parse(backup.date)) ? `${new Date(backup.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ` : ""}${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))}\u00a0KB</p></div>
+      <button class="secondary-btn" onclick="restoreNativeBackup(${index})" ${restoreInProgress ? "disabled" : ""}>${restoreInProgress && restoringBackupIndex === index ? "Restoring…" : "Restore"}</button>
+    </div>
+  `).join("");
+  let status = "";
+  if (!native) status = '<p class="muted">Open a backup file you exported earlier.</p>';
+  else if (list) status = `<p class="muted">Choose a backup to restore.</p><div class="exercise-list" style="margin-top:12px">${list}</div>`;
+  else if (nativeBackupsListState === "done") status = '<p class="muted">No backups found in iCloud Drive or on this iPhone. Check that iCloud Drive is on for Mass Method in Settings, then try again, or open a backup file you exported.</p>';
+  else status = '<p class="muted">Looking for backups…</p>';
+  return `
+    <section class="card pad">
+      ${status}
+      <div class="actions" style="margin-top:12px">
+        ${native ? '<button class="secondary-btn" onclick="refreshNativeBackups()">Look Again</button>' : ""}
+        <label class="secondary-btn file-btn" role="button" tabindex="0">Import Backup File<input type="file" accept=".json,.massmethod,application/json" onchange="importFileFromInput(this)" hidden /></label>
+      </div>
+    </section>
+  `;
+}
+
 function renderBackupCard() {
   const native = Boolean(nativeBackupBridge());
   const list = nativeBackups.slice(0, 10).map((backup, index) => `
     <div class="exercise-row">
-      <div><strong>${formatShortDate(backup.date)}</strong><p class="muted" style="margin:2px 0 0">${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))} KB</p></div>
-      <button class="secondary-btn" onclick="restoreNativeBackup(${index})">Restore</button>
+      <div><strong>${formatShortDate(backup.date)}</strong><p class="muted" style="margin:2px 0 0">${Number.isFinite(Date.parse(backup.date)) ? `${new Date(backup.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ` : ""}${escapeHtml(backup.location || "")} · ${Math.max(1, Math.round((Number(backup.bytes) || 0) / 1024))}\u00a0KB</p></div>
+      <button class="secondary-btn" onclick="restoreNativeBackup(${index})" ${restoreInProgress ? "disabled" : ""}>${restoreInProgress && restoringBackupIndex === index ? "Restoring…" : "Restore"}</button>
     </div>
   `).join("");
   return `
@@ -353,19 +460,24 @@ function renderBackupCard() {
       <p class="eyebrow">Backup and restore</p>
       <h2>Keep your logbook safe</h2>
       ${native ? `
-        <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app). Apple Health data is not included; it re-imports from Apple Health after a restore.</p>
+        <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app). Apple Health readings are not included: body readings re-import from Apple Health after a restore, but imported step history does not.</p>
         <div class="signal-card"><span class="badge green">Automatic</span><strong>${escapeHtml(state.backupStatus?.message || "")}</strong>${state.backupStatus?.at ? `<p class="muted" style="margin:4px 0 0">${new Date(state.backupStatus.at).toLocaleString()}</p>` : ""}</div>
         <div class="actions" style="margin-top:12px">
-          <button class="primary-btn" onclick="requestAutomaticSnapshot('manual', true)">Back Up Now</button>
+          <button class="primary-btn" onclick="requestAutomaticSnapshot('manual', true) || toast(state.profile ? 'Backups need the iPhone app.' : 'Finish setting up your profile first; there is nothing to back up yet.')">Back Up Now</button>
           <button class="secondary-btn" onclick="refreshNativeBackups()">Show Backups</button>
         </div>
-        ${list ? `<div class="exercise-list" style="margin-top:12px">${list}</div>` : ""}
+        ${list ? `<div class="exercise-list" style="margin-top:12px">${list}</div>` : nativeBackupsListState === "loading" ? '<p class="muted" style="margin-top:12px">Looking for backups…</p>' : nativeBackupsListState === "done" ? '<p class="muted" style="margin-top:12px">No backups found yet in iCloud Drive or on this iPhone.</p>' : ""}
       ` : `<p class="muted">Export a backup file and keep it somewhere safe. Automatic iCloud backups run in the iPhone app.</p>`}
       <div class="actions" style="margin-top:12px">
         <button class="secondary-btn" onclick="exportBackupFile()">Export Backup</button>
         <label class="secondary-btn file-btn">Import File<input type="file" accept=".json,.massmethod,application/json" onchange="importFileFromInput(this)" hidden /></label>
       </div>
       <p class="muted compact-note">Import also opens coach check-ins and programs (.massmethod files).</p>
+      ${(() => {
+        const used = storageUsedFraction();
+        if (used < 0.5) return "";
+        return `<div class="signal-card ${used >= 0.8 ? "warning-note" : ""}" style="margin-top:12px"><strong>On-device storage ${Math.round(used * 100)}% full</strong><p class="muted" style="margin:4px 0 8px">Export a backup, then archive history older than a year to make room. The backup file keeps every entry; photos stay in iCloud Drive.</p><button class="secondary-btn" onclick="archiveOldHistory()" ${Date.now() - lastBackupExportAt > 30 * 60000 ? "disabled" : ""}>Archive History Older Than a Year</button></div>`;
+      })()}
     </section>
   `;
 }
@@ -379,6 +491,25 @@ function registerMoreSection(order, renderSection) {
 
 registerMoreSection(10, renderUnitsCard);
 registerMoreSection(20, renderBackupCard);
+
+// App Review 5.1.1 requires the privacy policy to be reachable in the app.
+registerMoreSection(90, () => `
+  <section class="card pad privacy-policy">
+    <p class="eyebrow">Privacy</p>
+    <h2>Privacy policy</h2>
+    <details>
+      <summary class="ghost-btn">Read the privacy policy</summary>
+      <div class="policy-text">
+        <p><strong>Mass Method does not collect your data.</strong> There are no accounts, no analytics, no ads, and no servers. Everything you log stays on your iPhone and Apple Watch.</p>
+        <p><strong>Backups.</strong> If iCloud Drive is on, automatic backups are saved to your own iCloud Drive; otherwise they stay on this iPhone. Only you can read them. Apple Health readings are never included in automatic backups.</p>
+        <p><strong>Apple Health.</strong> With your permission, Mass Method reads body weight, body fat, lean body mass, waist and steps, and writes body weight and strength workouts. Health data is used only to show your progress in the app. It is never sold, used for advertising, or sent anywhere unless you share it.</p>
+        <p><strong>Sharing.</strong> Data leaves your device only when you choose to share it: exporting a backup file, exporting a PDF, or sending a check-in to your coach (which can include readings imported from Apple Health). You choose where those files go.</p>
+        <p><strong>Camera and photos.</strong> Progress photos you take or choose are stored on this iPhone and in your own iCloud Drive backup folder. They are never uploaded anywhere else.</p>
+        <p><strong>Deleting data.</strong> Delete individual entries in Progress, History and Logbook, or delete the app to remove everything on this device. Backups in iCloud Drive can be deleted from the Files app.</p>
+      </div>
+    </details>
+  </section>
+`);
 
 function renderMore() {
   return `
@@ -407,7 +538,7 @@ renderOnboarding = function renderOnboardingWithRestore() {
       <section class="modal card pad">
         <p class="eyebrow">Welcome back</p>
         <h1>Restore your logbook</h1>
-        ${renderBackupCard()}
+        ${renderRestoreCard()}
         <button class="secondary-btn" style="margin-top:12px" onclick="openOnboardingRestore(false)">Start fresh instead</button>
       </section>
     </div>
@@ -436,4 +567,9 @@ setView = function setViewWithMore(view) {
 
 saveState();
 requestAutomaticSnapshot("launch");
+// iOS keeps the app in memory for days; the daily snapshot also runs when it
+// comes back to the foreground (it is skipped if one ran in the last 20 hours).
+try {
+  document.addEventListener?.("visibilitychange", () => { if (!document.hidden) requestAutomaticSnapshot("resume"); });
+} catch {}
 render();

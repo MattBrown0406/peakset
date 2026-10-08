@@ -42,6 +42,7 @@ function coachMigrateState() {
     athlete.volumeWeeks = objects(athlete.volumeWeeks).map((week) => ({ ...week, totals: Object.fromEntries(Object.entries(week.totals && typeof week.totals === "object" ? week.totals : {}).map(([key, value]) => [key, finiteOrNull(value) ?? 0])) }));
     athlete.photos = objects(athlete.photos).filter((photo) => /^[A-Za-z0-9-]+$/.test(String(photo.id || "")));
     athlete.packages = objects(athlete.packages);
+    athlete.deleted = objects(athlete.deleted).filter((item) => typeof item.kind === "string" && typeof item.id === "string").slice(-300);
     if (athlete.trainingBlock && typeof athlete.trainingBlock !== "object") athlete.trainingBlock = null;
   });
   if (state.coachMessage && typeof state.coachMessage !== "object") state.coachMessage = null;
@@ -87,11 +88,13 @@ function mergedLatestMeasurement() {
   const merged = { id: `latest-${newest}`, date: newest, healthFields: [] };
   const fromHealth = (entry, key) => String(entry.id || "").startsWith("hk-") || (Array.isArray(entry.healthFields) && entry.healthFields.includes(key));
   let bodyFatDate = null;
+  const contributingDates = new Set();
   state.measurements.forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
       if (["id", "date", "note", "source", "healthFields", "_unitOrigin"].includes(key)) return;
       if ((merged[key] === undefined || merged[key] === null) && value !== null && value !== undefined && value !== "") {
         merged[key] = value;
+        contributingDates.add(entry.date);
         if (key === "bodyFat") bodyFatDate = entry.date;
         if (fromHealth(entry, key)) merged.healthFields.push(key);
       }
@@ -105,6 +108,9 @@ function mergedLatestMeasurement() {
     merged.healthFields = merged.healthFields.filter((key) => key !== "bodyFat");
     if (fromHealth(scaleBodyFat, "bodyFat")) merged.healthFields.push("bodyFat");
   }
+  // Values merged from several check-ins must not read as all measured on the newest date.
+  const times = [...contributingDates].map((date) => Date.parse(date)).filter(Number.isFinite);
+  if (times.length > 1) merged.sinceDate = new Date(Math.min(...times)).toISOString();
   return merged;
 }
 
@@ -138,6 +144,11 @@ async function buildCoachPackage(days = logbookDays()) {
     },
     note: coachNoteDraft || "",
     weightLogs: report.weights,
+    // Entries the athlete deleted (or replaced) since; the coach drops them.
+    deleted: (Array.isArray(state.deletedLogs) ? state.deletedLogs : []).filter((item) => {
+      const list = { weight: state.weightLogs, workout: state.workoutLogs, checkIn: state.weeklyCheckIns, prep: state.prepLogs, measurement: state.measurements }[item?.kind];
+      return !(Array.isArray(list) && list.some((entry) => entry?.id === item.id));
+    }).slice(-300),
     // Latest value of every metric first (Health adds waist-only days), then
     // the athlete's own tape check-ins.
     measurements: [mergedLatestMeasurement(), ...state.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).slice(0, 5)].filter(Boolean),
@@ -158,6 +169,8 @@ window.handleNativeShare = function handleNativeShareForCoach(payload) {
   if (pendingCoachShare && payload?.filename === pendingCoachShare.filename) {
     if (payload.completed) {
       state.lastCoachPackageAt = pendingCoachShare.at;
+      // The note went out with this check-in; don't resend it with the next.
+      coachNoteDraft = "";
       saveState();
       render();
     }
@@ -186,6 +199,7 @@ async function sendCheckInToCoach() {
     pendingCoachShare = { filename: name.replace(/\//g, "-"), at: sentAt };
   } else {
     state.lastCoachPackageAt = sentAt;
+    coachNoteDraft = "";
     saveState();
   }
   toast(result === "shared" ? "Check-in ready. Send it to your coach by Messages, Mail, or AirDrop." : "Check-in file downloaded. Send it to your coach.");
@@ -225,11 +239,36 @@ function cleanHealthFields(entry, allowed) {
 
 const CLEAN = {
   weight: (entry) => cleanEntry(entry, (e) => ({ bodyweight: cleanNumber(e.bodyweight, 0.1, 2000), bodyFat: cleanNumber(e.bodyFat, 1, 75), leanMass: cleanNumber(e.leanMass, 0.1, 2000), ...cleanHealthFields(e, ["bodyFat", "leanMass"]) })),
-  measurement: (entry) => cleanEntry(entry, (e) => ({ ...Object.fromEntries([...measurementDefinitions.map(([key]) => key), "arm", "thigh"].map((key) => [key, cleanNumber(e[key], 0.1, key === "bodyFat" ? 75 : 400)])), ...cleanHealthFields(e, [...measurementDefinitions.map(([key]) => key), "arm", "thigh"]) })),
-  workout: (entry) => cleanEntry(entry, (e) => ({ title: cleanText(e.title, 80) || "Workout", setCount: Array.isArray(e.sets) ? Math.min(e.sets.length, 500) : Math.max(0, Math.min(500, Math.trunc(Number(e.setCount)) || 0)) })),
+  measurement: (entry) => cleanEntry(entry, (e) => ({ ...Object.fromEntries([...measurementDefinitions.map(([key]) => key), "arm", "thigh"].map((key) => [key, cleanNumber(e[key], 0.1, key === "bodyFat" ? 75 : 400)])), ...cleanHealthFields(e, [...measurementDefinitions.map(([key]) => key), "arm", "thigh"]), ...(cleanDate(e.sinceDate) ? { sinceDate: cleanDate(e.sinceDate) } : {}) })),
+  workout: (entry) => cleanEntry(entry, (e) => ({ title: cleanText(e.title, 80) || "Workout", setCount: Array.isArray(e.sets) ? Math.min(e.sets.length, 500) : Math.max(0, Math.min(500, Math.trunc(Number(e.setCount)) || 0)), exercises: workoutExerciseSummary(e) })),
   checkIn: (entry) => cleanEntry(entry, (e) => ({ sleep: cleanNumber(e.sleep, 0, 24), energy: cleanNumber(e.energy, 1, 5), hunger: cleanNumber(e.hunger, 1, 5), digestion: cleanNumber(e.digestion, 1, 5), recovery: cleanNumber(e.recovery, 1, 5), notes: cleanText(e.notes, 500) })),
   prep: (entry) => cleanEntry(entry, (e) => ({ cardioType: cleanText(e.cardioType, 60), cardioMinutes: cleanNumber(e.cardioMinutes, 0, 1440), steps: cleanNumber(e.steps, 0, 200000), posingMinutes: cleanNumber(e.posingMinutes, 0, 1440) }))
 };
+
+// Per-exercise summary the coach can read (best set and set count). Built
+// from the athlete's sets on import, or kept from an earlier import.
+function workoutExerciseSummary(entry) {
+  if (!Array.isArray(entry?.sets)) {
+    return safeArray(entry?.exercises).slice(0, 15).map((item) => ({ name: cleanText(item?.name, 60), sets: cleanNumber(item?.sets, 0, 100) ?? 0, weight: cleanNumber(item?.weight, 0, 2000), reps: cleanNumber(item?.reps, 0, 500) })).filter((item) => item.name);
+  }
+  const byExercise = new Map();
+  entry.sets.slice(0, 500).forEach((set) => {
+    const name = cleanText(set?.exercise, 60);
+    if (!name) return;
+    const item = byExercise.get(name) || { name, sets: 0, weight: null, reps: null };
+    item.sets += 1;
+    const weight = cleanNumber(set?.weight, 0, 2000);
+    const reps = cleanNumber(set?.reps, 0, 500);
+    if (weight !== null && (item.weight === null || weight > item.weight || (weight === item.weight && (reps ?? 0) > (item.reps ?? 0)))) {
+      item.weight = weight;
+      item.reps = reps;
+    } else if (item.weight === null && reps !== null && reps > (item.reps ?? 0)) {
+      item.reps = reps;
+    }
+    byExercise.set(name, item);
+  });
+  return [...byExercise.values()].slice(0, 15);
+}
 
 function cleanList(list, cleaner) {
   return safeArray(list).map(cleaner).filter(Boolean);
@@ -279,6 +318,7 @@ function convertAthleteHistory(athlete, targetUnits) {
       if (!["id", "date", "bodyFat"].includes(key) && typeof entry[key] === "number") entry[key] = scale(entry[key], lengthFactor);
     });
   });
+  safeArray(athlete.workoutLogs).forEach((log) => safeArray(log.exercises).forEach((item) => { item.weight = scale(item.weight, weightFactor); }));
 }
 
 function mergeById(existing, incoming, limitDays = COACH_HISTORY_DAYS) {
@@ -286,9 +326,12 @@ function mergeById(existing, incoming, limitDays = COACH_HISTORY_DAYS) {
   [...safeArray(existing), ...safeArray(incoming)].forEach((entry) => {
     if (entry.date) byId.set(entry.id, entry);
   });
+  // A day of tolerance for entries dated ahead of this phone's clock (the
+  // athlete's phone may run a few minutes fast).
   return [...byId.values()]
-    .filter((entry) => isWithinDays(entry.date, limitDays))
-    .sort((a, b) => new Date(b.date) - new Date(a.date));
+    .filter((entry) => isWithinDays(entry.date, limitDays) || (Date.parse(entry.date) > Date.now() && Date.parse(entry.date) - Date.now() < 86400000))
+    // On the same date the "latest-…" summary (every metric) comes first.
+    .sort((a, b) => new Date(b.date) - new Date(a.date) || Number(String(b.id || "").startsWith("latest-")) - Number(String(a.id || "").startsWith("latest-")));
 }
 
 async function importCoachPackage(pkg) {
@@ -324,6 +367,64 @@ async function importCoachPackage(pkg) {
     existing.units = profile.units;
   }
   const incomingUnitsMatch = profile.units === (existing.units || profile.units);
+  // A newer check-in is the athlete's complete record for its date range:
+  // entries in that range it no longer contains were deleted or replaced on
+  // the athlete's phone (a mistyped weigh-in, a Health reading superseded by a
+  // hand-logged one), so the coach's copy drops them too.
+  const generatedTime = Date.parse(generatedAt);
+  const rangeStart = generatedTime - (cleanNumber(pkg.rangeDays, 1, 366) || 0) * 86400000;
+  const withinRange = (entry) => {
+    const time = Date.parse(entry?.date);
+    // Same strict cutoff the athlete's report used to fill the package.
+    return Number.isFinite(time) && time > rangeStart && time <= generatedTime;
+  };
+  // Explicit deletions from the athlete. The coach keeps every one it has
+  // seen, so an older check-in opened later (or opened again) cannot bring a
+  // deleted entry back.
+  const deletedByKind = {};
+  const deletedList = [];
+  const seenDeleted = new Set();
+  // An entry a newer check-in contains again (an Apple Health reading that
+  // returned after a hand-logged one was deleted) is no longer deleted.
+  const listKinds = { weight: pkg.weightLogs, workout: pkg.workoutLogs, checkIn: pkg.weeklyCheckIns, prep: pkg.prepLogs, measurement: pkg.measurements };
+  const presentAgain = (kind, id) => newer && safeArray(listKinds[kind]).some((entry) => entry.id === id);
+  // A package's own lists are the truth for its ids (older builds kept a
+  // deletion record for a Health reading that came back).
+  const inThisPackage = (kind, id) => safeArray(listKinds[kind]).some((entry) => entry.id === id);
+  [...safeArray(existing.deleted).filter((item) => !presentAgain(item.kind, item.id)), ...safeArray(pkg.deleted).slice(-300).filter((item) => !inThisPackage(item.kind, item.id))].forEach((item) => {
+    const kind = ["weight", "workout", "checkIn", "prep", "measurement"].includes(item?.kind) ? item.kind : null;
+    const id = typeof item?.id === "string" ? item.id.slice(0, 80) : "";
+    if (!kind || !id || seenDeleted.has(`${kind}:${id}`)) return;
+    seenDeleted.add(`${kind}:${id}`);
+    deletedList.push({ kind, id });
+    (deletedByKind[kind] ||= new Set()).add(id);
+  });
+  // Date ranges already covered by newer check-ins: an entry from an older
+  // file that falls inside one but is missing here was deleted on the phone.
+  const coveredByNewer = safeArray(existing.packages).map((item) => {
+    const end = Date.parse(item.generatedAt);
+    const days = cleanNumber(item.rangeDays, 1, 366);
+    return Number.isFinite(end) && end > generatedTime && days ? [end - days * 86400000, end] : null;
+  }).filter(Boolean);
+  const kindOf = { weightLogs: "weight", workoutLogs: "workout", weeklyCheckIns: "checkIn", prepLogs: "prep", measurements: "measurement" };
+  const pruneMissing = (list, incoming, apply = true, key = "") => {
+    const tombstones = deletedByKind[kindOf[key]];
+    const kept = safeArray(list).filter((entry) => !tombstones?.has(entry?.id));
+    if (!newer || !apply || !Number.isFinite(rangeStart) || rangeStart >= generatedTime) return kept;
+    const ids = new Set(safeArray(incoming).map((entry) => entry?.id));
+    return kept.filter((entry) => !withinRange(entry) || ids.has(entry.id));
+  };
+  const keepIncoming = (incoming, list, key) => {
+    const tombstones = deletedByKind[kindOf[key]];
+    const have = new Set(safeArray(list).map((entry) => entry?.id));
+    return incoming.filter((entry) => {
+      if (tombstones?.has(entry?.id)) return false;
+      // The roster already holds a newer copy of this entry.
+      if (have.has(entry?.id)) return newer;
+      const time = Date.parse(entry?.date);
+      return !(Number.isFinite(time) && coveredByNewer.some(([start, end]) => time > start && time <= end));
+    });
+  };
   const photos = [...storedPhotos, ...safeArray(existing.photos)].sort((a, b) => new Date(b.date) - new Date(a.date));
   const athlete = {
     ...existing,
@@ -332,15 +433,27 @@ async function importCoachPackage(pkg) {
     name: newer ? cleanText(pkg.athlete.name, 60) || existing.name || "" : existing.name,
     profile: newer ? profile : existing.profile,
     updatedAt: newer ? generatedAt : existing.updatedAt,
-    weightLogs: mergeById(existing.weightLogs, incomingUnitsMatch ? cleanList(pkg.weightLogs, CLEAN.weight) : []),
-    measurements: mergeById(existing.measurements, incomingUnitsMatch ? cleanList(pkg.measurements, CLEAN.measurement) : [], 365).slice(0, 30),
-    workoutLogs: mergeById(existing.workoutLogs, cleanList(pkg.workoutLogs, CLEAN.workout)).slice(0, 60),
-    weeklyCheckIns: mergeById(existing.weeklyCheckIns, cleanList(pkg.weeklyCheckIns, CLEAN.checkIn)).slice(0, 40),
-    prepLogs: mergeById(existing.prepLogs, cleanList(pkg.prepLogs, CLEAN.prep)).slice(0, 120),
+    weightLogs: mergeById(pruneMissing(existing.weightLogs, pkg.weightLogs, incomingUnitsMatch, "weightLogs"), incomingUnitsMatch ? keepIncoming(cleanList(pkg.weightLogs, CLEAN.weight), existing.weightLogs, "weightLogs") : []),
+    // The package's "latest-<date>" summary replaces the previous one (a
+    // deleted tape check-in moves the athlete's latest date back), and
+    // deleted tape check-ins are dropped like other deleted entries.
+    measurements: mergeById(
+      safeArray(existing.measurements)
+        .filter((entry) => !deletedByKind.measurement?.has(entry?.id))
+        .filter((entry) => !(newer && incomingUnitsMatch && String(entry?.id || "").startsWith("latest-") && !safeArray(pkg.measurements).some((item) => item?.id === entry.id))),
+      incomingUnitsMatch ? keepIncoming(cleanList(pkg.measurements, CLEAN.measurement), existing.measurements, "measurements") : [],
+      365
+    ).slice(0, 30),
+    // Exercise summaries are shown for the newest workouts only; dropping
+    // them from older entries keeps a full roster inside the storage budget.
+    workoutLogs: mergeById(pruneMissing(existing.workoutLogs, pkg.workoutLogs, true, "workoutLogs"), keepIncoming(cleanList(pkg.workoutLogs, CLEAN.workout), existing.workoutLogs, "workoutLogs")).slice(0, 60).map((log, index) => (index < 15 ? log : (({ exercises, ...rest }) => rest)(log))),
+    weeklyCheckIns: mergeById(pruneMissing(existing.weeklyCheckIns, pkg.weeklyCheckIns, true, "weeklyCheckIns"), keepIncoming(cleanList(pkg.weeklyCheckIns, CLEAN.checkIn), existing.weeklyCheckIns, "weeklyCheckIns")).slice(0, 40),
+    prepLogs: mergeById(pruneMissing(existing.prepLogs, pkg.prepLogs, true, "prepLogs"), keepIncoming(cleanList(pkg.prepLogs, CLEAN.prep), existing.prepLogs, "prepLogs")).slice(0, 120),
     volumeWeeks: newer ? cleanVolumeWeeks(pkg.volumeWeeks) : safeArray(existing.volumeWeeks),
     trainingBlock: newer ? cleanTrainingBlock(pkg.trainingBlock) : existing.trainingBlock,
     lastNote: newer ? cleanText(pkg.note, 2000) : existing.lastNote,
     photos: photos.slice(0, COACH_PHOTOS_PER_ATHLETE),
+    deleted: deletedList.slice(-300),
     packages: [{ generatedAt, rangeDays: cleanNumber(pkg.rangeDays, 1, 366) }, ...safeArray(existing.packages)].slice(0, 30)
   };
   const previous = athleteById(athleteId);
@@ -355,6 +468,8 @@ async function importCoachPackage(pkg) {
   }
   // Only now that the import is kept, drop photo files beyond the cap.
   photos.slice(COACH_PHOTOS_PER_ATHLETE).forEach(deletePhotoFile);
+  // A program drafted for another athlete must not carry over.
+  if (state.coach.selectedAthleteId !== athleteId) coachProgramDraft = { planIds: [], message: "", blockWeeks: 0, focus: [] };
   state.coach.selectedAthleteId = athleteId;
   state.view = "coach";
   saveState();
@@ -379,7 +494,8 @@ function sanitizePlan(plan, from) {
     .map((spec) => [
       spec.id,
       spec.sets,
-      /^[0-9]{1,3}( ?(-|to) ?[0-9]{1,3})?( ?(sec|s|each))?( each)?$/i.test(spec.reps.trim()) ? spec.reps.trim() : "8-12",
+      // Free text like "10/side" or "8-10 (pause)", same rule as the builder.
+      planRepsText(spec.reps),
       spec.rest,
       spec.dropSets,
       { group: /^[A-Z0-9]{0,2}$/.test(String(spec.group || "").toUpperCase()) ? String(spec.group || "").toUpperCase() : "", setType: setTypeOptions.some(([value]) => value === spec.setType) ? spec.setType : "standard" }
@@ -395,20 +511,82 @@ function sanitizePlan(plan, from) {
     note: String(plan.note || `From ${from}`).slice(0, 300),
     scheduleDay: day,
     fromCoach: from,
+    sourceId: String(plan.id || "").slice(0, 80),
     exercises
   };
 }
 
 function importProgram(program) {
   const from = String(program?.from || "your coach").slice(0, 60);
-  const plans = (Array.isArray(program?.plans) ? program.plans : []).slice(0, 50).map((plan) => sanitizePlan(plan, from)).filter(Boolean);
-  const block = program?.block && typeof program.block === "object" ? program.block : null;
-  if (!plans.length && !block) {
-    toast("That program has no workouts this app can load.");
+  const offered = Array.isArray(program?.plans) ? program.plans : [];
+  // A template this coach already sent (same source id) is updated in place
+  // when the coach changed it, and skipped when it is identical, so opening a
+  // program twice never duplicates and an edited, re-sent template arrives.
+  // The coach's schedule counts only when the coach set one; otherwise the
+  // athlete's own schedule stays and is not a "change".
+  const contentKey = (plan, scheduleDay = plan.scheduleDay) => JSON.stringify([plan.title, plan.muscle, plan.phase, plan.rest, plan.note, scheduleDay || "", plan.exercises]);
+  const sanitized = offered.slice(0, MAX_PROGRAM_PLANS).map((plan) => sanitizePlan(plan, from)).filter(Boolean);
+  const plans = [];
+  const updates = [];
+  const claimed = new Set();
+  const matchFor = new Map();
+  const claim = (plan, predicate) => {
+    if (matchFor.has(plan)) return;
+    const index = state.customPlans.findIndex((item, itemIndex) => !claimed.has(itemIndex) && item.fromCoach === plan.fromCoach && predicate(item));
+    if (index !== -1) {
+      claimed.add(index);
+      matchFor.set(plan, index);
+    }
+  };
+  // Same source id first; then coach workouts imported before source ids
+  // existed, by title — identical ones before changed ones, so two
+  // same-titled templates never swap contents.
+  sanitized.forEach((plan) => plan.sourceId && claim(plan, (item) => item.sourceId === plan.sourceId));
+  sanitized.forEach((plan) => claim(plan, (item) => !item.sourceId && item.title === plan.title && contentKey(item) === contentKey(plan, plan.scheduleDay || item.scheduleDay)));
+  sanitized.forEach((plan) => claim(plan, (item) => !item.sourceId && item.title === plan.title));
+  sanitized.forEach((plan) => {
+    if (!matchFor.has(plan)) return plans.push(plan);
+    const existingIndex = matchFor.get(plan);
+    const existing = state.customPlans[existingIndex];
+    if (contentKey(existing) !== contentKey(plan, plan.scheduleDay || existing.scheduleDay)) updates.push({ existingIndex, plan });
+    else if (!existing.sourceId && plan.sourceId) existing.sourceId = plan.sourceId;
+  });
+  const offeredBlock = program?.block && typeof program.block === "object" ? program.block : null;
+  // The same block re-opened (same file again) must not replace the running
+  // block or re-queue it.
+  // The send time makes each sent program unique; a coach sending the next
+  // block with the same settings is a new block.
+  const blockKey = offeredBlock ? JSON.stringify([from, String(program?.createdAt || ""), offeredBlock.name, offeredBlock.accumulationWeeks, offeredBlock.focus, offeredBlock.start]) : "";
+  const block = offeredBlock && ![state.trainingBlock?.sourceKey, state.pendingTrainingBlock?.sourceKey].includes(blockKey) ? offeredBlock : null;
+  const message = String(program?.message || "").slice(0, 2000);
+  if (!plans.length && !updates.length && !block) {
+    // A weekly re-send often only carries a new note from the coach.
+    const current = state.coachMessage;
+    const seen = state.lastCoachMessageSeen;
+    const alreadySeen = (current && current.from === from && current.message === message) || (seen && seen.from === from && seen.message === message);
+    if (sanitized.length && message.trim() && !alreadySeen) {
+      if (!window.confirm(`You already have every workout in this program. Show the new message from ${from}?`)) return false;
+      state.coachMessage = { from, message, receivedAt: new Date().toISOString(), planCount: 0 };
+      saveState();
+      // The coach note is shown on Today.
+      setView("today");
+      return true;
+    }
+    toast(sanitized.length ? "You already have every workout in this program." : "That program has no workouts this app can load.");
     return false;
   }
-  const summary = [plans.length ? `${plans.length} workout${plans.length === 1 ? "" : "s"}` : "", block ? `a ${Number(block.accumulationWeeks) || 4}-week training block` : ""].filter(Boolean).join(" and ");
+  // Say so when a program was larger than this app accepts, rather than dropping workouts silently.
+  const summary = [plans.length ? `${plans.length} new workout${plans.length === 1 ? "" : "s"}${offered.length > MAX_PROGRAM_PLANS ? ` (the first ${MAX_PROGRAM_PLANS} of ${offered.length})` : ""}` : "", updates.length ? `${updates.length} updated workout${updates.length === 1 ? "" : "s"}` : "", block ? `a ${Number(block.accumulationWeeks) || 4}-week training block` : ""].filter(Boolean).join(" and ");
   if (!window.confirm(`Add ${summary} from ${from}?`)) return false;
+  // A day the coach sets counts as the newest schedule for that day.
+  plans.forEach((plan) => { if (plan.scheduleDay) plan.scheduledAt = Date.now(); });
+  updates.forEach(({ existingIndex, plan }) => {
+    const existing = state.customPlans[existingIndex];
+    if (plan.scheduleDay && plan.scheduleDay !== existing.scheduleDay) plan.scheduledAt = Date.now();
+    // Keep the athlete's id (Today picks, schedules) and their own schedule
+    // unless the coach set one.
+    state.customPlans[existingIndex] = { ...existing, ...plan, id: existing.id, scheduleDay: plan.scheduleDay || existing.scheduleDay || "" };
+  });
   state.customPlans.unshift(...plans);
   if (block) {
     const incoming = {
@@ -418,7 +596,8 @@ function importProgram(program) {
       accumulationWeeks: Math.max(3, Math.min(6, Number(block.accumulationWeeks) || 4)),
       deload: true,
       focus: (Array.isArray(block.focus) ? block.focus : []).filter((key) => MUSCLE_GROUPS.some((group) => group.key === key)).slice(0, 3),
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      sourceKey: blockKey
     };
     // Finish the current block (often its deload) first; the coach's block
     // takes over on its start date.
@@ -429,7 +608,7 @@ function importProgram(program) {
       state.pendingTrainingBlock = null;
     }
   }
-  state.coachMessage = { from, message: String(program.message || "").slice(0, 2000), receivedAt: new Date().toISOString(), planCount: plans.length };
+  state.coachMessage = { from, message, receivedAt: new Date().toISOString(), planCount: plans.length + updates.length, newCount: plans.length, updatedCount: updates.length, ...(block ? { block: true } : {}) };
   saveState();
   toast(`Program from ${from} added to Plans.`);
   setView("plans");
@@ -439,6 +618,8 @@ function importProgram(program) {
 registerIncomingFileHandler(PROGRAM_FORMAT, importProgram);
 
 function dismissCoachMessage() {
+  // Re-opening the same program file must not bring a read note back as new.
+  if (state.coachMessage?.message) state.lastCoachMessageSeen = { from: String(state.coachMessage.from || "").slice(0, 60), message: String(state.coachMessage.message).slice(0, 2000) };
   state.coachMessage = null;
   saveState();
   render();
@@ -446,9 +627,12 @@ function dismissCoachMessage() {
 
 // ---------- Coach: build and send a program ----------
 
+const MAX_PROGRAM_PLANS = 50;
+
 function toggleProgramPlan(id) {
   const ids = new Set(coachProgramDraft.planIds);
   if (ids.has(id)) ids.delete(id);
+  else if (ids.size >= MAX_PROGRAM_PLANS) return toast(`A program can include up to ${MAX_PROGRAM_PLANS} workouts.`);
   else ids.add(id);
   coachProgramDraft = { ...coachProgramDraft, planIds: [...ids] };
   render();
@@ -525,13 +709,28 @@ function removeAthlete(id) {
   render();
 }
 
+// The check-in's current week is partial (empty on a Monday check-in); show
+// it only once it has training, otherwise the last completed week.
+function athleteVolumeWeek(athlete) {
+  const weeks = safeArray(athlete.volumeWeeks).filter((week) => week && typeof week === "object" && week.totals && typeof week.totals === "object");
+  const total = (week) => Object.values(week.totals).reduce((sum, value) => sum + (Number(value) || 0), 0);
+  return weeks[0] && total(weeks[0]) > 0 ? weeks[0] : weeks[1] || weeks[0] || null;
+}
+
 function athleteSummary(athlete) {
+  // Windows end at the check-in, not at "now": the numbers must not shrink
+  // the longer the coach waits to open it.
+  const anchor = Number.isFinite(Date.parse(athlete.updatedAt)) ? Date.parse(athlete.updatedAt) : Date.now();
+  const within = (date, days) => {
+    const time = Date.parse(date);
+    return Number.isFinite(time) && time <= anchor + 60000 && anchor - time < days * 86400000;
+  };
   const weights = safeArray(athlete.weightLogs).map((entry) => ({ date: entry.date, value: Number(entry.bodyweight) })).filter((entry) => entry.value > 0);
-  const recent = weights.filter((entry) => isWithinDays(entry.date, 7));
+  const recent = weights.filter((entry) => within(entry.date, 7));
   const avg = recent.length ? recent.reduce((sum, entry) => sum + entry.value, 0) / recent.length : null;
-  const prior = weights.filter((entry) => !isWithinDays(entry.date, 7) && isWithinDays(entry.date, 14));
+  const prior = weights.filter((entry) => !within(entry.date, 7) && within(entry.date, 14));
   const priorAvg = prior.length ? prior.reduce((sum, entry) => sum + entry.value, 0) / prior.length : null;
-  const workouts7 = safeArray(athlete.workoutLogs).filter((log) => isWithinDays(log.date, 7)).length;
+  const workouts7 = safeArray(athlete.workoutLogs).filter((log) => within(log.date, 7)).length;
   const checkIn = safeArray(athlete.weeklyCheckIns)[0];
   const days = athlete.updatedAt ? Math.floor((Date.now() - new Date(athlete.updatedAt)) / 86400000) : null;
   return {
@@ -574,7 +773,7 @@ function renderRoster() {
 }
 
 function renderAthleteVolume(athlete) {
-  const week = safeArray(athlete.volumeWeeks)[0];
+  const week = athleteVolumeWeek(athlete);
   if (!week?.totals) return '<p class="muted">No volume data in this check-in.</p>';
   const totals = Object.fromEntries(MUSCLE_GROUPS.map((group) => [group.key, Number(week.totals[group.key]) || 0]));
   const block = athlete.trainingBlock ? { focus: Array.isArray(athlete.trainingBlock.focus) ? athlete.trainingBlock.focus : [] } : null;
@@ -601,12 +800,12 @@ function renderAthleteDetail(athlete) {
     </div>
     <div class="grid two" style="margin-top:12px">
       <section class="card pad"><h2>Body weight</h2>${weights.length > 1 ? sparkline(weights) : '<p class="muted">Needs two weigh-ins.</p>'}</section>
-      <section class="card pad"><h2>Latest measurements</h2>${latestMeasurement ? `<p class="muted">${formatShortDate(latestMeasurement.date)}</p><div class="measurement-grid">${measurementDefinitions.filter(([key]) => latestMeasurement[key] !== null && latestMeasurement[key] !== undefined).map(([key, label]) => `<div class="stat card"><p class="value">${escapeHtml(latestMeasurement[key])}</p><p class="label">${escapeHtml(String(label).replace(/ %$/, ""))} ${key === "bodyFat" ? "%" : lengthLabel}</p></div>`).join("")}</div>` : '<p class="muted">No measurements yet.</p>'}</section>
+      <section class="card pad"><h2>Latest measurements</h2>${latestMeasurement ? `<p class="muted">${latestMeasurement.sinceDate ? `Most recent value of each, ${formatShortDate(latestMeasurement.sinceDate)} to ${formatShortDate(latestMeasurement.date)}` : formatShortDate(latestMeasurement.date)}</p><div class="measurement-grid">${measurementDefinitions.filter(([key]) => latestMeasurement[key] !== null && latestMeasurement[key] !== undefined).map(([key, label]) => `<div class="stat card"><p class="value">${escapeHtml(latestMeasurement[key])}</p><p class="label">${escapeHtml(String(label).replace(/ %$/, ""))} ${key === "bodyFat" ? "%" : lengthLabel}</p></div>`).join("")}</div>` : '<p class="muted">No measurements yet.</p>'}</section>
     </div>
-    <section class="card pad" style="margin-top:12px"><div class="card-head"><div><p class="eyebrow">Weekly volume</p><h2>Hard sets this week</h2></div>${athlete.trainingBlock ? `<span class="badge blue">${escapeHtml(athlete.trainingBlock.statusLine || athlete.trainingBlock.name || "")}</span>` : ""}</div><div class="volume-list">${renderAthleteVolume(athlete)}</div></section>
+    <section class="card pad" style="margin-top:12px"><div class="card-head"><div><p class="eyebrow">Weekly volume</p><h2>${athleteVolumeWeek(athlete)?.weekStart ? `Hard sets, week of ${escapeHtml(formatShortDate(athleteVolumeWeek(athlete).weekStart))}` : "Hard sets"}</h2></div>${athlete.trainingBlock ? `<span class="badge blue">${escapeHtml(athlete.trainingBlock.statusLine || athlete.trainingBlock.name || "")}</span>` : ""}</div><div class="volume-list">${renderAthleteVolume(athlete)}</div></section>
     ${safeArray(athlete.photos).length ? `<section class="card pad" style="margin-top:12px"><p class="eyebrow">Progress photos</p><div class="photo-strip">${safeArray(athlete.photos).map((photo) => `<figure class="photo-thumb">${photoImg(photo)}<figcaption>${escapeHtml(poseLabel(photo.pose))}<br />${formatShortDate(photo.date)}</figcaption></figure>`).join("")}</div></section>` : ""}
     <div class="grid two" style="margin-top:12px">
-      <section class="card pad"><h2>Recent workouts</h2><div class="exercise-list">${safeArray(athlete.workoutLogs).slice(0, 8).map((log) => `<div class="exercise-row"><div><strong>${escapeHtml(log.title || "Workout")}</strong><p class="muted" style="margin:2px 0 0">${formatShortDate(log.date)} · ${plural(Number(log.setCount ?? workoutLogSets(log).length) || 0, "set")}</p></div></div>`).join("") || '<p class="muted">No workouts in range.</p>'}</div></section>
+      <section class="card pad"><h2>Recent workouts</h2><div class="exercise-list">${safeArray(athlete.workoutLogs).slice(0, 8).map((log) => `<div class="exercise-row"><div><strong>${escapeHtml(log.title || "Workout")}</strong><p class="muted" style="margin:2px 0 0">${formatShortDate(log.date)} · ${plural(Number(log.setCount ?? workoutLogSets(log).length) || 0, "set")}</p>${safeArray(log.exercises).length ? `<p class="muted compact-note" style="margin:2px 0 0">${safeArray(log.exercises).map((item) => `${escapeHtml(item.name)}: ${plural(Number(item.sets) || 0, "set")}${item.weight ? `, best ${escapeHtml(formatWeight(item.weight))} ${athlete.profile?.units === "metric" ? "kg" : "lb"}${item.reps ? ` × ${escapeHtml(String(item.reps))}` : ""}` : item.reps ? `, best ${escapeHtml(String(item.reps))} reps` : ""}`).join(" · ")}</p>` : ""}</div></div>`).join("") || '<p class="muted">No workouts in range.</p>'}</div></section>
       <section class="card pad"><h2>Recovery check-ins</h2><div class="exercise-list">${safeArray(athlete.weeklyCheckIns).slice(0, 6).map((entry) => `<div class="exercise-row"><span>${formatShortDate(entry.date)} · Sleep ${escapeHtml(entry.sleep ?? "--")}h</span><strong>Energy ${escapeHtml(entry.energy ?? "--")} · Recovery ${escapeHtml(entry.recovery ?? "--")}/5</strong></div>${entry.notes ? `<p class="muted compact-note">${escapeHtml(entry.notes)}</p>` : ""}`).join("") || '<p class="muted">No check-ins in range.</p>'}</div></section>
     </div>
     <section class="card pad" style="margin-top:12px">
@@ -637,7 +836,7 @@ registerMoreSection(25, () => `
   <section class="card pad">
     <p class="eyebrow">Coaching</p>
     <h2>Work with a coach</h2>
-    <p class="muted">Send your coach a check-in with weight, measurements, workouts, recovery, volume, and your latest photos. ${state.lastCoachPackageAt ? `Last sent ${formatShortDate(state.lastCoachPackageAt)}.` : ""}</p>
+    <p class="muted">Send your coach a check-in with weight, measurements (including readings imported from Apple Health), workouts, recovery, volume, and your latest photos. ${state.lastCoachPackageAt ? `Last sent ${formatShortDate(state.lastCoachPackageAt)}.` : ""}</p>
     <button class="primary-btn" onclick="sendCheckInToCoach()">Send Check-In to Coach</button>
     <label class="toggle-row"><input type="checkbox" ${state.coach?.enabled ? "checked" : ""} onchange="setCoachEnabled(this.checked)" /> <span>I coach athletes (adds a roster of athlete check-ins)</span></label>
     ${state.coach?.enabled ? `<button class="secondary-btn" style="margin-top:10px" onclick="openAthlete('')">Open Coach Hub (${coachAthletes().length})</button>` : ""}
@@ -661,8 +860,20 @@ renderToday = function renderTodayWithCoach() {
   const html = baseRenderTodayForCoach();
   const message = state.coachMessage;
   if (!message) return html;
-  return `<section class="card pad coach-note-card" style="margin-bottom:12px"><div class="card-head"><div><p class="eyebrow">From ${escapeHtml(message.from)}</p><h2>${message.planCount ? `${message.planCount} new workout${message.planCount === 1 ? "" : "s"} in Plans` : "New program"}</h2></div><button class="ghost-btn" onclick="dismissCoachMessage()">Dismiss</button></div>${message.message ? `<p>${escapeHtml(message.message)}</p>` : ""}</section>${html}`;
+  return `<section class="card pad coach-note-card" style="margin-bottom:12px"><div class="card-head"><div><p class="eyebrow">From ${escapeHtml(message.from)}</p><h2>${coachMessageHeading(message)}</h2></div><button class="ghost-btn" onclick="dismissCoachMessage()">Dismiss</button></div>${message.message ? `<p>${escapeHtml(message.message)}</p>` : ""}</section>${html}`;
 };
+
+function coachMessageHeading(message) {
+  const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  const fresh = Number(message.newCount);
+  const updated = Number(message.updatedCount);
+  if (Number.isFinite(fresh) && Number.isFinite(updated) && fresh + updated > 0) {
+    return [fresh ? `${plural(fresh, "new workout")}` : "", updated ? `${plural(updated, "updated workout")}` : ""].filter(Boolean).join(" and ") + " in Plans" + (message.block ? ", plus a training block" : "");
+  }
+  if (message.planCount) return `${plural(message.planCount, "new workout")} in Plans`;
+  if (message.block) return "New training block";
+  return message.message ? "New message" : "New program";
+}
 
 const baseRenderPlanCardForCoach = renderPlanCard;
 renderPlanCard = function renderPlanCardWithCoach(plan) {

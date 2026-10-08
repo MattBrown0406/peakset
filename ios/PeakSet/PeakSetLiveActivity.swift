@@ -19,19 +19,46 @@ final class PeakSetLiveActivityManager {
         let nextSetLabel: String
         let completedSets: Int
         let totalSets: Int
+        /// The page sent the rest's real start (keep it as is).
+        var startedAtFromPage = false
     }
 
     nonisolated func show(_ rest: Rest) {
         Task { @MainActor in self.enqueue { await self.performShow(rest) } }
     }
 
-    nonisolated func shift(by seconds: TimeInterval) {
+    /// Starts the workout's activity in its "next set ready" state when none
+    /// is running. Called at workout start and on foregrounding: iOS refuses
+    /// requests from the background, so a workout logged entirely on the watch
+    /// with the phone locked would otherwise never get a Lock Screen countdown.
+    nonisolated func showReady(workoutTitle: String, exerciseName: String, completedSets: Int, totalSets: Int) {
+        Task { @MainActor in
+            self.enqueue {
+                guard ActivityAuthorizationInfo().areActivitiesEnabled,
+                      !Activity<RestTimerAttributes>.activities.contains(where: { $0.activityState == .active || $0.activityState == .stale }) else { return }
+                let now = Date()
+                let state = RestTimerAttributes.ContentState(startedAt: now, endsAt: now, exerciseName: exerciseName, nextSetLabel: "", completedSets: completedSets, totalSets: totalSets)
+                do {
+                    _ = try Activity.request(attributes: RestTimerAttributes(workoutTitle: workoutTitle), content: ActivityContent(state: state, staleDate: nil), pushType: nil)
+                } catch {
+                    #if DEBUG
+                    NSLog("MassMethod ready Live Activity request failed: %@", String(describing: error))
+                    #endif
+                }
+            }
+        }
+    }
+
+    /// Moves the running rest. `target` (the rest the watch adjusted) keeps a
+    /// late command from moving a newer rest.
+    nonisolated func shift(by seconds: TimeInterval, ifEndingAt target: Date? = nil) {
         Task { @MainActor in
             self.enqueue {
                 for activity in Activity<RestTimerAttributes>.activities {
                     var state = activity.content.state
                     // Nothing to move once the rest is over.
                     guard state.endsAt > Date() else { continue }
+                    if let target, abs(state.endsAt.timeIntervalSince(target)) > 5 { continue }
                     state.endsAt = state.endsAt.addingTimeInterval(seconds)
                     if state.endsAt <= Date() {
                         // Keep the workout's activity (it can't be restarted
@@ -84,8 +111,11 @@ final class PeakSetLiveActivityManager {
             #endif
             return
         }
+        // Same rest, new details (a superset's next set): keep the bar where it was.
+        let existing = Activity<RestTimerAttributes>.activities.first(where: { $0.attributes.workoutTitle == rest.workoutTitle && ($0.activityState == .active || $0.activityState == .stale) })
+        let sameRest = existing.map { abs($0.content.state.endsAt.timeIntervalSince(rest.endsAt)) < 1 } ?? false
         let state = RestTimerAttributes.ContentState(
-            startedAt: rest.startedAt,
+            startedAt: sameRest && !rest.startedAtFromPage ? (existing?.content.state.startedAt ?? rest.startedAt) : rest.startedAt,
             endsAt: rest.endsAt,
             exerciseName: rest.exerciseName,
             nextSetLabel: rest.nextSetLabel,

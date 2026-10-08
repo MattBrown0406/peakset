@@ -3,9 +3,58 @@ const APP_NAME = "Mass Method";
 const DEFAULT_REST_SECONDS = 180;
 // Declared before loadState() runs: sanitizeStoredState reads it at script load.
 const LOGBOOK_RANGES = [7, 14, 30];
+// WebKit's localStorage quota is 5 MiB per origin, counted in bytes.
+const STORAGE_LIMIT_BYTES = 5 * 1024 * 1024;
+let pendingSaveTimer = null;
+let storageWarningShown = false;
+let storageWarningShownAt = 0;
+let storageWarningInterval = 30000;
+let lastSaveSucceeded = true;
+let lastStoredBytes = 0;
+let storageNearlyFullWarned = false;
+// While a coach PDF is built, numbers and dates use Western digits and the
+// Gregorian calendar: the PDF only carries Latin-1 text, so Arabic-Indic or
+// Bengali digits (and Hijri dates) would print as blanks.
+let reportFormatting = false;
+// Numbers in a coach PDF: one format throughout (en-US), so a German PDF
+// never mixes "201,4" with "201.4" or prints 1.025 for 1,025.
+function reportNumberLocale() {
+  return reportFormatting ? "en-US" : undefined;
+}
+
+function reportLocale() {
+  if (!reportFormatting) return undefined;
+  // The athlete's own date order (UK coaches read 07/10/2026 as 7 October),
+  // with Latin digits and the Gregorian calendar the PDF can print.
+  try {
+    const base = new Intl.DateTimeFormat().resolvedOptions().locale.split("-u-")[0];
+    return new Intl.Locale(base, { calendar: "gregory", numberingSystem: "latn" }).toString();
+  } catch {
+    return "en-US";
+  }
+}
+
+// WebKit charges localStorage 2 bytes per character whenever the string is
+// held internally as 16-bit, which depends on how it was built, not on what
+// it contains: one curly apostrophe (Smart Punctuation) makes JSON.stringify
+// return a 16-bit string, and .replace() keeps it 16-bit. So escape every
+// non-ASCII character as \uXXXX (JSON.parse reads them back unchanged) and
+// rebuild the result through TextDecoder, which returns an 8-bit string for
+// ASCII input. Measured in WKWebView: the logbook then fits twice as much.
+function serializeForStorage(value) {
+  const ascii = JSON.stringify(value).replace(/[\u0080-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  try {
+    if (typeof TextEncoder === "function" && typeof TextDecoder === "function") return new TextDecoder().decode(new TextEncoder().encode(ascii));
+  } catch {}
+  return ascii;
+}
 // A plan or live workout from an imported program/backup must stay renderable:
 // 50k exercises froze the session view and persisted across launches.
-const MAX_PLAN_EXERCISES = 30;
+// What the builder, live workout, and coach imports allow.
+const MAX_PLAN_EXERCISES = 40;
+// Load-time safety net only: above anything the UI can reach (the library has
+// ~120 distinct exercises), so it never truncates a real workout or template.
+const MAX_STORED_PLAN_EXERCISES = 150;
 const MAX_PLAN_SETS = 14;
 const MAX_STATE_DEPTH = 16;
 
@@ -757,7 +806,7 @@ function formatWeight(value, digits = 1) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   // `+ 0` turns -0 into 0 so tiny negative changes never read "-0".
-  return (Number(number.toFixed(digits)) + 0).toLocaleString();
+  return (Number(number.toFixed(digits)) + 0).toLocaleString(reportNumberLocale());
 }
 
 function plural(count, singular, pluralForm = `${singular}s`) {
@@ -820,13 +869,17 @@ function loadState() {
     const seconds = clampRestSeconds(savedTimer.seconds);
     const endsAt = Number(savedTimer.endsAt);
     if (savedTimer.running && Number.isFinite(endsAt) && endsAt > Date.now()) {
+      const total = Math.max(1, Math.round(Number(savedTimer.total)) || seconds);
+      // A device clock set backwards must not turn a 90 s rest into hours.
+      const savedLeft = Number(savedTimer.left);
+      const clampedEnd = Math.min(endsAt, Date.now() + (Number.isFinite(savedLeft) && savedLeft > 0 ? Math.min(savedLeft, total) : total) * 1000);
       next.timer = {
         seconds,
-        total: Math.max(1, Math.round(Number(savedTimer.total)) || seconds),
-        left: Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)),
+        total,
+        left: Math.max(0, Math.ceil((clampedEnd - Date.now()) / 1000)),
         running: true,
         startedAt: Number(savedTimer.startedAt) || null,
-        endsAt,
+        endsAt: clampedEnd,
         fullscreen: Boolean(savedTimer.fullscreen),
         exerciseIndex: Number.isInteger(savedTimer.exerciseIndex) ? savedTimer.exerciseIndex : null
       };
@@ -837,7 +890,9 @@ function loadState() {
         running: false,
         startedAt: null,
         endsAt: null,
-        fullscreen: Boolean(savedTimer.running && savedTimer.fullscreen),
+        // A rest that ended while the app was closed shows "Rest complete"
+        // only if it ended recently, not a day-old overlay on the next visit.
+        fullscreen: Boolean(savedTimer.running && savedTimer.fullscreen && Number.isFinite(endsAt) && Date.now() - endsAt < 10 * 60000),
         exerciseIndex: Number.isInteger(savedTimer.exerciseIndex) ? savedTimer.exerciseIndex : null
       };
     }
@@ -848,13 +903,16 @@ function loadState() {
     // Keep an untouched copy of unreadable data before the fresh state is saved over it.
     try {
       const raw = localStorage.getItem(STORE_KEY);
-      if (raw) localStorage.setItem(`${STORE_KEY}-recovery-${Date.now()}`, raw);
+      if (raw) {
+        // Keep the two newest unreadable copies; more would fill the quota.
+        Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-recovery-`)).sort().slice(0, -1).forEach((key) => localStorage.removeItem(key));
+        localStorage.setItem(`${STORE_KEY}-recovery-${Date.now()}`, raw);
+      }
     } catch {}
     return freshDefaultState();
   }
 }
 
-let storageWarningShown = false;
 // Set while a restore reloads the page so a timer tick cannot overwrite it.
 let restoringState = false;
 
@@ -912,9 +970,12 @@ function sanitizeStoredState(next) {
   if (next.coachMessage !== null && next.coachMessage !== undefined) {
     const message = next.coachMessage;
     next.coachMessage = isObject(message)
-      ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), receivedAt: String(message.receivedAt ?? "") }
+      ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), ...(Number.isFinite(message.newCount) && Number.isFinite(message.updatedCount) ? { newCount: Math.max(0, Math.min(100, Math.trunc(message.newCount))), updatedCount: Math.max(0, Math.min(100, Math.trunc(message.updatedCount))) } : {}), ...(message.block === true ? { block: true } : {}), receivedAt: String(message.receivedAt ?? "") }
       : null;
   }
+  const seenNote = next.lastCoachMessageSeen;
+  next.lastCoachMessageSeen = isObject(seenNote) ? { from: String(seenNote.from ?? "").slice(0, 60), message: String(seenNote.message ?? "").slice(0, 2000) } : null;
+  next.deletedLogs = (Array.isArray(next.deletedLogs) ? next.deletedLogs : []).filter((item) => isObject(item) && typeof item.id === "string" && typeof item.kind === "string").slice(-300);
   // A stored volume of "1e400" rendered as ∞; 0 makes readers recompute it.
   next.workoutLogs = next.workoutLogs.map((log) => ("volume" in log ? { ...log, volume: finiteOrNull(log.volume) ?? 0 } : log));
   // A malformed live workout would crash every screen, including the one
@@ -922,7 +983,7 @@ function sanitizeStoredState(next) {
   const workout = next.activeWorkout;
   if (workout !== null && workout !== undefined) {
     const exercises = isObject(workout) && Array.isArray(workout.exercises)
-      ? workout.exercises.filter((exercise) => isObject(exercise) && Array.isArray(exercise.sets) && exerciseLibrary.some((item) => item.id === exercise.id)).slice(0, MAX_PLAN_EXERCISES).map((exercise) => ({
+      ? workout.exercises.filter((exercise) => isObject(exercise) && Array.isArray(exercise.sets) && exerciseLibrary.some((item) => item.id === exercise.id)).slice(0, MAX_STORED_PLAN_EXERCISES).map((exercise) => ({
           ...exercise,
           name: String(exercise.name ?? exerciseById(exercise.id).name),
           targetSets: Math.max(1, Math.min(12, Math.trunc(finiteOrNull(exercise.targetSets) ?? 3))),
@@ -948,21 +1009,66 @@ function sanitizeStoredState(next) {
   }
 }
 
-function saveState() {
+function saveState(options = {}) {
+  if (pendingSaveTimer) {
+    clearTimeout(pendingSaveTimer);
+    pendingSaveTimer = null;
+  }
   if (restoringState) return;
   try {
     if (typeof builderDraft !== "undefined") state.builderDraft = builderDraft;
-    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    const serialized = serializeForStorage(state);
+    localStorage.setItem(STORE_KEY, serialized);
+    lastStoredBytes = serialized.length;
     storageWarningShown = false;
+    storageWarningInterval = 30000;
+    if (!lastSaveSucceeded) clearStorageAlert();
+    lastSaveSucceeded = true;
+    if (lastStoredBytes > STORAGE_LIMIT_BYTES * 0.8 && !storageNearlyFullWarned) {
+      storageNearlyFullWarned = true;
+      toast("On-device storage is nearly full. Export a backup in More, then archive history older than a year.");
+    }
   } catch {
     // A full or blocked store must not crash the live workout. Keep the
     // in-memory session and warn once so the user can export or clear space.
-    if (!storageWarningShown) {
+    // The warning outranks any "saved" toast that follows, and repeats (at
+    // most every 30 s) while saves keep failing.
+    lastSaveSucceeded = false;
+    // Backs off (30 s, 1, 2, 4… up to 5 min) so a running rest timer, which
+    // saves every second, doesn't raise the alert again and again.
+    // Saves the athlete starts (finish, weigh-in) always warn; only the
+    // timer's once-a-second saves back off.
+    const alertVisible = Boolean(document.querySelector?.('.toast[data-priority="1"]'));
+    if (!alertVisible && (!options.background || !storageWarningShown || Date.now() - storageWarningShownAt > storageWarningInterval)) {
+      if (storageWarningShown && options.background) storageWarningInterval = Math.min(5 * 60000, storageWarningInterval * 2);
       storageWarningShown = true;
-      toast("Storage is full. This session is not being saved on the device.");
+      storageWarningShownAt = Date.now();
+      toast("Storage is full: this change is NOT saved and will be lost when the app closes. Export a backup in More, then archive older history.", { priority: true });
     }
   }
+  return lastSaveSucceeded;
 }
+
+
+// Typing into a set field saves once the athlete pauses, not on every
+// keystroke (each save rewrites the whole logbook). Any other save, hiding
+// the app, or a page unload flushes it.
+function scheduleStateSave(delay = 400) {
+  if (pendingSaveTimer) clearTimeout(pendingSaveTimer);
+  pendingSaveTimer = setTimeout(() => {
+    pendingSaveTimer = null;
+    saveState();
+  }, delay);
+}
+
+function flushPendingSave() {
+  if (pendingSaveTimer) saveState();
+}
+
+try {
+  document.addEventListener?.("visibilitychange", () => { if (document.hidden) flushPendingSave(); });
+  window.addEventListener?.("pagehide", flushPendingSave);
+} catch {}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1004,9 +1110,63 @@ function divisionSelect(id, selected = "") {
   `;
 }
 
+// Views share one scrolling page; a new view must open at its top, not at
+// the previous view's scroll offset.
+function scrollToTop() {
+  try { window.scrollTo?.(0, 0); } catch {}
+}
+
+function scrollIntoViewIfPresent(selector, block = "center") {
+  try { document.querySelector?.(selector)?.scrollIntoView?.({ block }); } catch {}
+}
+
+// Ids interpolated into inline handlers must be plain tokens.
+function isSafeRowId(id) {
+  return /^[A-Za-z0-9-]{1,80}$/.test(String(id || ""));
+}
+
 function setView(view) {
+  const changed = state.view !== view;
   state.view = view;
   saveState();
+  render();
+  if (changed) scrollToTop();
+}
+
+// A mistyped weigh-in, measurement, check-in or workout must be removable,
+// or it corrupts trends, PRs and progression for good.
+const deletableLogs = {
+  workout: { key: "workoutLogs", label: "workout" },
+  weight: { key: "weightLogs", label: "weigh-in" },
+  measurement: { key: "measurements", label: "measurement check-in" },
+  checkIn: { key: "weeklyCheckIns", label: "weekly check-in" },
+  prep: { key: "prepLogs", label: "prep activity entry" }
+};
+
+// Deletions are remembered (180 days) so the next coach check-in can remove
+// the same entries from the coach's copy, even ones sent in an earlier check-in.
+function recordDeletedLog(kind, id) {
+  if (!id) return;
+  const cutoff = Date.now() - 180 * 86400000;
+  const list = (Array.isArray(state.deletedLogs) ? state.deletedLogs : []).filter((item) => Date.parse(item?.at) > cutoff && !(item.kind === kind && item.id === id));
+  list.push({ kind, id: String(id).slice(0, 80), at: new Date().toISOString() });
+  state.deletedLogs = list.slice(-300);
+}
+
+function deleteLogEntry(kind, id) {
+  const config = deletableLogs[kind];
+  if (!config || !Array.isArray(state[config.key])) return;
+  const entry = state[config.key].find((item) => item?.id === id);
+  if (!entry) return;
+  if (!window.confirm(`Delete this ${config.label} from ${formatShortDate(entry.date)}? This can't be undone.`)) return;
+  state[config.key] = state[config.key].filter((item) => item?.id !== id);
+  recordDeletedLog(kind, id);
+  if (kind === "weight" && state.profile) {
+    const newest = state.weightLogs.find((item) => Number(item.bodyweight) > 0);
+    if (newest) state.profile.bodyweight = newest.bodyweight;
+  }
+  saveState();
+  toast(`${config.label[0].toUpperCase()}${config.label.slice(1)} deleted.`);
   render();
 }
 
@@ -1053,8 +1213,9 @@ function chooseTodayWorkout(pick) {
     return;
   }
 
-  const candidates = allPlans().filter((plan) => planMatchesTodayPick(plan, pick));
-  const selected = randomItem(candidates);
+  const chosenId = String(pick).startsWith("plan:") ? String(pick).slice(5) : null;
+  const candidates = chosenId ? allPlans().filter((plan) => plan.id === chosenId) : allPlans().filter((plan) => planMatchesTodayPick(plan, pick));
+  const selected = chosenId ? candidates[0] : randomItem(candidates);
   if (!selected) {
     toast("No workouts found for that pick.");
     return;
@@ -1077,16 +1238,54 @@ function setChoice(inputId, value, button) {
   button.setAttribute("aria-pressed", "true");
 }
 
-function toast(message) {
+let queuedToast = null;
+function toast(message, options = {}) {
   const old = document.querySelector(".toast");
+  // A warning (storage full) is not replaced by a routine message such as
+  // "Workout saved" that would claim the opposite; the routine message shows
+  // once the warning is gone.
+  // While saves are failing, a message claiming something was saved is
+  // false: drop it (the storage alert says what really happened).
+  const text = String(message);
+  if (!options.priority && !lastSaveSucceeded && /\b(saved|created|added|logged|updated|imported|archived|restored)\b/i.test(text) && !/\b(not|could|cannot|failed|already|tap|first|pick|at least)\b|n't/i.test(text)) return;
+  if (old && old.dataset?.priority === "1" && !options.priority) {
+    queuedToast = message;
+    return;
+  }
   if (old) old.remove();
   const el = document.createElement("div");
   el.className = "toast";
-  el.setAttribute("role", "status");
-  el.setAttribute("aria-live", "polite");
+  el.setAttribute("role", options.priority ? "alert" : "status");
+  el.setAttribute("aria-live", options.priority ? "assertive" : "polite");
+  const dismiss = () => {
+    if (!el.parentNode && el.isConnected === false) return;
+    el.remove();
+    if (options.priority && queuedToast) {
+      const next = queuedToast;
+      queuedToast = null;
+      toast(next);
+    }
+  };
+  if (options.priority && el.dataset) {
+    el.dataset.priority = "1";
+    if (typeof el.addEventListener === "function") el.addEventListener("click", dismiss);
+  }
   el.textContent = message;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2600);
+  // Long messages stay long enough to read.
+  const duration = options.priority ? 8000 : Math.min(7000, Math.max(2600, String(message).length * 50));
+  setTimeout(dismiss, duration);
+}
+
+// A save that worked after a failed one: the "NOT saved" alert is now wrong.
+function clearStorageAlert() {
+  const alertToast = document.querySelector?.('.toast[data-priority="1"]');
+  if (alertToast) alertToast.remove();
+  if (queuedToast) {
+    const next = queuedToast;
+    queuedToast = null;
+    toast(next);
+  }
 }
 
 function getAudioContext() {
@@ -1355,13 +1554,13 @@ function renderOnboarding() {
               </div>
               <div class="field">
                 <label for="age">Age</label>
-                <input id="age" type="number" min="13" max="100" placeholder="34" />
+                <input id="age" type="number" inputmode="decimal" min="13" max="100" placeholder="34" />
               </div>
             </div>
             <div class="grid two">
               <div class="field">
                 <label for="bodyweight">Starting Body Weight (<span data-weight-unit>${weightUnit()}</span>)</label>
-                <input id="bodyweight" type="number" step="0.1" placeholder="218.4" />
+                <input id="bodyweight" type="number" inputmode="decimal" step="0.1" placeholder="218.4" />
               </div>
               <div class="field">
                 <label>Training Phase</label>
@@ -1434,10 +1633,70 @@ function muscleLabel(muscle) {
   return muscle[0].toUpperCase() + muscle.slice(1);
 }
 
-function todaysRecommendedPlan() {
-  if (state.phase === "prep") return planTemplates.find((p) => p.id === "prep-upper-pump");
-  if (state.phase === "bulking") return planTemplates.find((p) => p.id === "back-width");
-  return planTemplates.find((p) => p.id === "chest-density");
+// Rotate through the phase's body-part plans: suggest the muscle group trained
+// least recently (never trained counts as oldest), and never the plan just
+// finished. A fixed plan per phase had a new athlete training chest every day.
+function todaysRecommendedPlan(avoidMuscles = [], planFits = null) {
+  const phase = ["prep", "bulking"].includes(state.phase) ? state.phase : "offseason";
+  const fullRotation = ["chest", "back", "legs", "shoulders", "arms"];
+  // Tomorrow's scheduled template already covers its muscles.
+  const rotation = fullRotation.filter((muscle) => !avoidMuscles.includes(muscle)).length ? fullRotation.filter((muscle) => !avoidMuscles.includes(muscle)) : fullRotation;
+  const { byId } = exerciseIndexes();
+  // Road Gym templates are tagged "travel"; rank them by the muscle most of
+  // their exercises train.
+  const planMuscle = (plan) => {
+    if (fullRotation.includes(plan.muscle)) return plan.muscle;
+    const counts = {};
+    (plan.exercises || []).forEach((row) => {
+      const muscle = byId.get(Array.isArray(row) ? row[0] : row?.id)?.muscle;
+      if (muscle) counts[muscle] = (counts[muscle] || 0) + 1;
+    });
+    return Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || plan.muscle;
+  };
+  let candidates = planTemplates.filter((plan) => plan.phase === phase && rotation.includes(plan.muscle) && !plan.id.startsWith("weak-point"));
+  let fallback = planTemplates.find((plan) => plan.id === (phase === "prep" ? "prep-upper-pump" : phase === "bulking" ? "back-width" : "chest-density"));
+  // A limited equipment profile (Road Gym, garage) gets, for each muscle, a
+  // phase plan it can run, else a Road Gym template for that muscle, else the
+  // usual plans (exercises can be swapped), so the rotation never sticks.
+  if (typeof planFits === "function") {
+    const travel = planTemplates.filter((plan) => plan.phase === "travel" && planFits(plan));
+    const perMuscle = rotation.flatMap((muscle) => {
+      const phasePlans = candidates.filter((plan) => plan.muscle === muscle);
+      const fitting = phasePlans.filter(planFits);
+      if (fitting.length) return fitting;
+      const travelFitting = travel.filter((plan) => planMuscle(plan) === muscle);
+      return travelFitting.length ? travelFitting : phasePlans;
+    });
+    if (perMuscle.length) candidates = perMuscle;
+    if (!candidates.some(planFits) && travel.length) fallback = travel[0];
+  }
+  if (!candidates.length) return fallback;
+  const lastTrained = Object.fromEntries([...new Set([...rotation, ...candidates.map(planMuscle)])].map((muscle) => [muscle, -Infinity]));
+  const lastByTitle = {};
+  (state.workoutLogs || []).forEach((log) => {
+    const time = Date.parse(log?.date);
+    if (!Number.isFinite(time)) return;
+    if (log.title) lastByTitle[log.title] = Math.max(lastByTitle[log.title] ?? -Infinity, time);
+    new Set(workoutLogSets(log).map((set) => byId.get(loggedExerciseId(set))?.muscle)).forEach((muscle) => {
+      if (muscle in lastTrained) lastTrained[muscle] = Math.max(lastTrained[muscle], time);
+    });
+  });
+  const order = (muscle) => (rotation.includes(muscle) ? rotation.indexOf(muscle) : rotation.length);
+  const muscle = [...new Set(candidates.map(planMuscle))].sort((a, b) => lastTrained[a] - lastTrained[b] || order(a) - order(b))[0];
+  // Within the muscle group, the plan done least recently (each plan gets its turn).
+  const forMuscle = candidates.filter((plan) => planMuscle(plan) === muscle).sort((a, b) => (lastByTitle[a.title] ?? -Infinity) - (lastByTitle[b.title] ?? -Infinity));
+  return forMuscle[0] || fallback;
+}
+
+// What Start will actually load (volume.js halves sets in a deload week).
+function todayPreviewPlan(plan) {
+  return plan;
+}
+
+// Titles of workouts finished today (local day).
+function finishedTodayTitles() {
+  const today = new Date().toDateString();
+  return new Set((state.workoutLogs || []).filter((log) => Number.isFinite(Date.parse(log?.date)) && new Date(log.date).toDateString() === today).map((log) => log.title));
 }
 
 function todaysSelectedPlan() {
@@ -1460,9 +1719,11 @@ function todayWorkoutSelect() {
     ["prep", "Random Prep"],
     ["travel", "Random Road Gym"]
   ];
+  const saved = (state.customPlans || []).filter((plan) => isSafeRowId(plan.id));
   return `
     <select id="todayWorkoutPick" onchange="chooseTodayWorkout(this.value)">
       ${options.map(([value, label]) => `<option value="${value}" ${activePick === value ? "selected" : ""}>${label}</option>`).join("")}
+      ${saved.length ? `<optgroup label="My templates">${saved.map((plan) => `<option value="plan:${plan.id}" ${activePick === `plan:${plan.id}` ? "selected" : ""}>${escapeHtml(plan.title)}</option>`).join("")}</optgroup>` : ""}
     </select>
   `;
 }
@@ -1471,13 +1732,18 @@ function totalVolume(log) {
   return (log.sets || []).reduce((sum, set) => sum + ((Number(set.weight) || 0) * (Number(set.reps) || 0)), 0);
 }
 
-function stats() {
-  const lastWeight = state.weightLogs[0];
+// The weigh-in "change from start" is measured from (archiving keeps it).
+function startingWeighIn() {
   const startedAt = Date.parse(state.profile?.createdAt || "");
   const sinceStart = Number.isFinite(startedAt)
     ? state.weightLogs.filter((entry) => Date.parse(entry.date) >= startedAt - 86400000)
     : state.weightLogs;
-  const firstWeight = sinceStart[sinceStart.length - 1] || state.weightLogs[state.weightLogs.length - 1];
+  return sinceStart[sinceStart.length - 1] || state.weightLogs[state.weightLogs.length - 1];
+}
+
+function stats() {
+  const lastWeight = state.weightLogs[0];
+  const firstWeight = startingWeighIn();
   const lastSeven = state.workoutLogs.filter((log) => Date.now() - new Date(log.date).getTime() < 7 * 86400000);
   const weeklyVolume = lastSeven.reduce((sum, log) => sum + (Number(log.volume) || totalVolume(log)), 0);
   const weightDelta = lastWeight && firstWeight
@@ -1488,6 +1754,15 @@ function stats() {
 
 function normalizedExerciseName(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// One estimate everywhere (History tab, Library panel, sparklines): a
+// single is the weight actually lifted, and sets above 30 reps are not used.
+function estimateOneRepMax(weight, reps) {
+  const load = Number(weight);
+  const count = Number(reps);
+  if (!Number.isFinite(load) || !Number.isFinite(count) || load <= 0 || count <= 0 || count > 30) return 0;
+  return count === 1 ? load : load * (1 + count / 30);
 }
 
 let exerciseIdIndex = null;
@@ -1546,9 +1821,7 @@ function exerciseHistoryData(exerciseId) {
         const repsOnly = Boolean(set.repsOnly) || exercise.muscle === "abs";
         // Reps-only (abs) work tracks total reps instead of load x reps.
         const volume = repsOnly ? reps || 0 : weight !== null && reps !== null ? weight * reps : 0;
-        const estimatedOneRepMax = weight !== null && reps !== null && reps <= 30
-          ? weight * (1 + reps / 30)
-          : 0;
+        const estimatedOneRepMax = weight !== null && reps !== null ? estimateOneRepMax(weight, reps) : 0;
         return {
           weight,
           reps,
@@ -1707,7 +1980,7 @@ function formatShortDate(dateString) {
   const date = dateOnly
     ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
     : new Date(dateString);
-  return Number.isFinite(date.getTime()) ? date.toLocaleDateString() : "No date";
+  return Number.isFinite(date.getTime()) ? date.toLocaleDateString(reportLocale()) : "No date";
 }
 
 function measurementRows(entry) {
@@ -1724,14 +1997,14 @@ function measurementRows(entry) {
 }
 
 function coachReportData(days) {
-  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.round(Number(days)) : logbookDays();
+  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.max(1, Math.round(Number(days))) : logbookDays();
   const workouts = state.workoutLogs.filter((log) => isWithinDays(log.date, days));
   const weights = state.weightLogs.filter((log) => isWithinDays(log.date, days));
   const measurements = state.measurements.filter((log) => isWithinDays(log.date, days));
   const volume = workouts.reduce((sum, log) => sum + (Number(log.volume) || totalVolume(log)), 0);
   const sortedWeights = [...weights].sort((a, b) => new Date(a.date) - new Date(b.date));
   const weightDelta = sortedWeights.length > 1
-    ? (Number(sortedWeights[sortedWeights.length - 1].bodyweight) - Number(sortedWeights[0].bodyweight)).toFixed(1)
+    ? ((delta) => `${delta > 0 ? "+" : ""}${delta.toFixed(1)}`)(Number((Number(sortedWeights[sortedWeights.length - 1].bodyweight) - Number(sortedWeights[0].bodyweight)).toFixed(1)) + 0)
     : null;
   return {
     days,
@@ -1750,6 +2023,16 @@ function coachReportData(days) {
 function plainReportText(value) {
   return String(value ?? "")
     .normalize("NFC")
+    // Backstop for any locale-formatted number: map native digits (Arabic-Indic,
+    // Persian, Devanagari, Bengali, Myanmar) to 0-9 instead of blanking them.
+    .replace(/[\u200E\u200F\u061C\u202A-\u202E\u2066-\u2069]/g, "")
+    .replace(/[\u0660-\u0669\u06F0-\u06F9\u0966-\u096F\u09E6-\u09EF\u1040-\u1049]/g, (digit) => {
+      const code = digit.charCodeAt(0);
+      const zero = [0x0660, 0x06f0, 0x0966, 0x09e6, 0x1040].find((start) => code >= start && code <= start + 9);
+      return String(code - zero);
+    })
+    .replace(/\u066B/g, ".")
+    .replace(/\u066C/g, ",")
     .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
     .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
     .replace(/[\u2013\u2014\u2212]/g, "-")
@@ -1766,12 +2049,12 @@ function addReportSection(lines, title) {
 }
 
 function buildCoachReportLines(days, coachNote = "") {
-  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.round(Number(days)) : logbookDays();
+  days = Number.isFinite(Number(days)) && Number(days) > 0 ? Math.max(1, Math.round(Number(days))) : logbookDays();
   const report = coachReportData(days);
   const profile = state.profile || {};
   const lines = [
     { text: `${APP_NAME} Coach Logbook`, size: 20, bold: true },
-    { text: `${days}-day report generated ${new Date().toLocaleDateString()}`, size: 10 },
+    { text: `${days}-day report generated ${new Date().toLocaleDateString(reportLocale())}`, size: 10 },
     { text: `Athlete: ${profile.gender || "Not set"} - Age ${profile.age || "--"} - ${profile.division || "No division/goal set"}`, size: 10 },
     { text: `Phase: ${phaseLabel(state.phase)} - Current body weight: ${report.latestWeight?.bodyweight || profile.bodyweight || "--"} ${weightUnit()}`, size: 10 }
   ];
@@ -1781,9 +2064,9 @@ function buildCoachReportLines(days, coachNote = "") {
     lines.push({ text: coachNote, size: 10 });
   }
 
-  addReportSection(lines, "Weekly Summary");
+  addReportSection(lines, `Summary (last ${days} days)`);
   lines.push({ text: `Workouts: ${report.workouts.length}`, size: 10 });
-  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString()} ${weightUnit()}`, size: 10 });
+  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString(reportNumberLocale())} ${weightUnit()}`, size: 10 });
   lines.push({ text: `Body weight logs: ${report.weights.length}`, size: 10 });
   lines.push({ text: `Weight change in range: ${report.weightDelta === null ? "Needs 2 weigh-ins" : `${report.weightDelta} ${weightUnit()}`}`, size: 10 });
   lines.push({ text: `Measurement check-ins: ${report.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).length}`, size: 10 });
@@ -1811,7 +2094,7 @@ function buildCoachReportLines(days, coachNote = "") {
   if (report.workouts.length) {
     report.workouts.forEach((log) => {
       lines.push({ text: `${formatShortDate(log.date)} - ${log.title || "Workout"}`, size: 11, bold: true });
-      lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume`, size: 10 });
+      lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString(reportNumberLocale())} ${weightUnit()} volume`, size: 10 });
       // Null-prototype: an exercise named "constructor" must not hit Object.prototype.
       const grouped = (log.sets || []).reduce((groups, set) => {
         const key = String(set.exercise ?? "Exercise");
@@ -2305,7 +2588,11 @@ function saveStageGoal() {
 function renderStageTimeline() {
   const timeline = getStageTimeline();
   const trend = weightTrendSummary();
-  const checklist = stageChecklist(timeline);
+  // Without a show date the timeline's phase is only a placeholder, so the
+  // checklist follows the phase the athlete picked; within 16 weeks of a show
+  // it is contest prep whatever the picker says.
+  const chosenPhase = ["offseason", "bulking", "prep"].includes(state.phase) ? state.phase : timeline.phase;
+  const checklist = stageChecklist({ ...timeline, phase: timeline.goalDateRaw && timeline.phase === "prep" ? "prep" : chosenPhase });
   const profile = state.profile || {};
   return `
     <section class="card pad stage-timeline">
@@ -2376,10 +2663,10 @@ function renderToday() {
           ${["offseason", "bulking", "prep"].map((phase) => `
             <button class="phase-btn ${state.phase === phase ? "active" : ""}" onclick="setPhase('${phase}')">${phaseLabel(phase)}</button>
           `).join("")}
-          <button class="phase-btn" onclick="startWorkout('road-gym-full')">Road Gym</button>
         </div>
         <div class="actions">
-          <button class="primary-btn" onclick="startWorkout('${plan.id}')">Start ${escapeHtml(plan.title)}</button>
+          <button class="primary-btn" onclick="startWorkout('${plan.id}')">Start ${escapeHtml(Array.from(plan.title).length > 32 ? `${Array.from(plan.title).slice(0, 31).join("").trimEnd()}…` : plan.title)}</button>
+          <button class="secondary-btn" onclick="startWorkout('road-gym-full')">Start Road Gym</button>
           <button class="secondary-btn" onclick="setView('plans')">Browse Plans</button>
         </div>
       </div>
@@ -2388,19 +2675,19 @@ function renderToday() {
     <div class="grid today-stats">
       <article class="card stat">
         <p class="value">${s.workouts}</p>
-        <p class="label">Workouts this week</p>
+        <p class="label">${s.workouts === 1 ? "Workout" : "Workouts"}, last 7 days</p>
       </article>
       <article class="card stat">
         <p class="value">${Math.round(s.weeklyVolume).toLocaleString()}</p>
-        <p class="label">Weekly volume ${weightUnit()}</p>
+        <p class="label">Volume ${weightUnit()}, last 7 days</p>
       </article>
       <article class="card stat">
         <p class="value">${formatWeight(s.lastWeight?.bodyweight || profile.bodyweight)}</p>
-        <p class="label">Current body weight</p>
+        <p class="label">Current body weight (${weightUnit()})</p>
       </article>
       <article class="card stat">
         <p class="value">${s.weightDelta}</p>
-        <p class="label">Weight change from start</p>
+        <p class="label">Weight change from start (${weightUnit()})</p>
       </article>
     </div>
 
@@ -2423,7 +2710,7 @@ function renderToday() {
           ${todayWorkoutSelect()}
         </div>
         <div class="exercise-list">
-          ${knownPlanExercises(plan).map(([id, sets, reps]) => `
+          ${knownPlanExercises(todayPreviewPlan(plan)).map(([id, sets, reps]) => `
             <div class="exercise-row">
               <strong>${escapeHtml(exerciseById(id).name)}</strong>
               <span class="badge">${escapeHtml(sets)} x ${escapeHtml(reps)}</span>
@@ -2440,8 +2727,9 @@ function allPlans() {
 }
 
 function renderPlans() {
-  const filters = ["all", "chest", "back", "shoulders", "arms", "legs", "prep", "travel"];
-  const plans = allPlans().filter((plan) => {
+  const filters = ["all", "chest", "back", "shoulders", "arms", "legs", "abs", "prep", "travel"];
+  // Saved and coach-sent templates first: they are what the athlete is looking for.
+  const plans = [...(state.customPlans || []), ...planTemplates].filter((plan) => {
     if (state.activeFilter === "all") return true;
     if (state.activeFilter === "prep") return plan.phase === "prep";
     if (state.activeFilter === "travel") return plan.phase === "travel" || plan.muscle === "travel";
@@ -2458,7 +2746,7 @@ function renderPlans() {
       `).join("")}
     </div>
     <div class="grid three">
-      ${plans.map(renderPlanCard).join("")}
+      ${plans.map(renderPlanCard).join("") || '<div class="empty"><p class="muted">No workouts in this filter yet. Build one in the Builder, or pick another filter.</p></div>'}
     </div>
   `;
 }
@@ -2575,7 +2863,7 @@ function renderBuilder() {
         <div class="grid two" style="margin-top: 12px;">
           <div class="field">
             <label for="customSets">Sets</label>
-            <input id="customSets" type="number" value="3" min="1" max="10" />
+            <input id="customSets" type="number" inputmode="decimal" value="3" min="1" max="10" />
           </div>
           <div class="field">
             <label for="customReps">Reps</label>
@@ -2591,13 +2879,13 @@ function renderBuilder() {
           </div>
           <div class="field">
             <label for="customDropSets">Drop Sets</label>
-            <input id="customDropSets" type="number" value="0" min="0" max="4" />
+            <input id="customDropSets" type="number" inputmode="decimal" value="0" min="0" max="4" />
           </div>
         </div>
         <div class="grid two" style="margin-top: 12px;">
           <div class="field">
             <label for="customRest">Rest Seconds</label>
-            <input id="customRest" type="number" value="${DEFAULT_REST_SECONDS}" min="15" max="300" step="15" />
+            <input id="customRest" type="number" inputmode="decimal" value="${DEFAULT_REST_SECONDS}" min="15" max="300" step="15" />
           </div>
           <div class="field">
             <label for="customExercise">Exercise</label>
@@ -2785,6 +3073,10 @@ function exerciseHasProgress(exercise) {
 
 function addExerciseToActiveWorkout() {
   if (!state.activeWorkout) return false;
+  if (state.activeWorkout.exercises.length >= MAX_PLAN_EXERCISES) {
+    toast(`A workout can hold up to ${MAX_PLAN_EXERCISES} exercises.`);
+    return false;
+  }
   const id = document.getElementById("activeExerciseToAdd")?.value;
   const exercise = exerciseLibrary.find((item) => item.id === id);
   if (!exercise) return false;
@@ -2890,7 +3182,8 @@ function updateSet(exIndex, setIndex, field, value) {
   const reopened = set.done && ["weight", "reps"].includes(field) && set[field] !== value;
   if (reopened) set.done = false;
   set[field] = value;
-  saveState();
+  if (reopened || field === "rir" || field === "setType") saveState();
+  else scheduleStateSave();
   if (reopened) reflectReopenedSet(exIndex, setIndex);
 }
 
@@ -2899,6 +3192,9 @@ function reflectReopenedSet(exIndex, setIndex) {
   if (button) {
     button.className = "primary-btn";
     button.textContent = "Complete";
+    const exercise = state.activeWorkout?.exercises?.[exIndex];
+    const set = exercise?.sets?.[setIndex];
+    if (exercise && set) button.setAttribute?.("aria-label", `Complete, ${exercise.name} set ${set.label || set.set}`);
   }
   const counter = document.querySelector?.("[data-sets-completed]");
   const workout = state.activeWorkout;
@@ -3025,7 +3321,7 @@ function ensureTimerTick() {
       }
       toast("Rest complete. Next set.");
     }
-    saveState();
+    saveState({ background: true });
     updateTimerDom();
   }, 250);
 }
@@ -3193,7 +3489,7 @@ function renderSession() {
         </div>
         <div class="field">
           <label for="activeExerciseSets">Sets</label>
-          <input id="activeExerciseSets" type="number" value="3" min="1" max="10" />
+          <input id="activeExerciseSets" type="number" inputmode="decimal" value="3" min="1" max="10" />
         </div>
         <div class="field">
           <label for="activeExerciseReps">Reps</label>
@@ -3201,11 +3497,11 @@ function renderSession() {
         </div>
         <div class="field">
           <label for="activeExerciseRest">Rest Seconds</label>
-          <input id="activeExerciseRest" type="number" value="90" min="15" max="300" step="15" />
+          <input id="activeExerciseRest" type="number" inputmode="decimal" value="90" min="15" max="300" step="15" />
         </div>
         <div class="field">
           <label for="activeExerciseDropSets">Drop Sets</label>
-          <input id="activeExerciseDropSets" type="number" value="0" min="0" max="4" />
+          <input id="activeExerciseDropSets" type="number" inputmode="decimal" value="0" min="0" max="4" />
         </div>
       </div>
       <button class="primary-btn" onclick="addExerciseToActiveWorkout()">Add to Workout</button>
@@ -3237,7 +3533,7 @@ function renderSession() {
               ${exercise.sets.map((set, setIndex) => `
                 <div class="set-row ${isRepsOnlyExercise(exercise) ? "reps-only" : ""}">
                   <div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>
-                  ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
+                  ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="${weightUnit()}" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
                   <input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
                   <button class="${set.done ? "secondary-btn" : "primary-btn"}" data-set-button="${exIndex}-${setIndex}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
                 </div>
@@ -3292,7 +3588,7 @@ function renderProgress() {
         <div class="grid two">
           <div class="field">
             <label for="logWeight">Scale Weight</label>
-            <input id="logWeight" type="number" step="0.1" value="${latestWeight?.bodyweight || ""}" />
+            <input id="logWeight" type="number" inputmode="decimal" step="0.1" value="${latestWeight?.bodyweight || ""}" />
           </div>
           <div class="field">
             <label for="logWeightNote">Note</label>
@@ -3379,7 +3675,7 @@ function renderLogbook() {
       </article>
       <article class="card stat">
         <p class="value">${report.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).length}</p>
-        <p class="label">Check-ins</p>
+        <p class="label">Measurement check-ins</p>
       </article>
     </div>
     <section class="card pad" style="margin-top: 16px;">
@@ -3408,14 +3704,15 @@ function renderLogbook() {
     <section class="card pad" style="margin-top: 16px;">
       <h2>Workout Detail</h2>
       <div class="grid two">
-        ${report.workouts.slice(0, 8).map((log) => `
+        ${report.workouts.map((log) => `
           <article class="log-card card">
             <div class="card-head">
               <strong>${escapeHtml(log.title)}</strong>
               <span class="badge">${formatShortDate(log.date)}</span>
             </div>
+            ${isSafeRowId(log.id) ? `<button class="ghost-btn danger compact-btn" aria-label="Delete ${escapeHtml(log.title)} from ${formatShortDate(log.date)}" onclick="deleteLogEntry('workout','${log.id}')">Delete workout</button>` : ""}
             <p class="muted">${plural((log.sets || []).length, "set")}, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume</p>
-            <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}</p>
+            <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}${(log.sets || []).length > 4 ? ` <span class="muted">+${(log.sets || []).length - 4} more ${(log.sets || []).length === 5 ? "set" : "sets"}</span>` : ""}</p>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No workouts logged in this range.</p></div>'}
       </div>
@@ -3431,6 +3728,12 @@ function saveWeight() {
   }
   if (!isPlausibleBodyweight(bodyweight)) {
     toast(bodyweightRangeMessage());
+    return;
+  }
+  const latest = state.weightLogs[0];
+  const sinceLatest = latest ? Date.now() - Date.parse(latest.date) : Infinity;
+  if (latest && Number(latest.bodyweight) === bodyweight && sinceLatest >= 0 && sinceLatest < 60000) {
+    toast("That weigh-in is already saved.");
     return;
   }
   const entry = {

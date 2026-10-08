@@ -12,6 +12,9 @@ struct WatchSnapshot: Codable, Equatable {
         var reps: String
         var done: Bool
         let drop: Bool
+        /// The phone's pre-fill for this set; nil from older iPhone builds.
+        var suggestedWeight: String? = nil
+        var suggestedReps: String? = nil
     }
 
     struct Exercise: Codable, Equatable {
@@ -195,7 +198,14 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         snapshot = current
         let (restFollows, partner) = Self.supersetNext(in: current, exerciseIndex: exerciseIndex, setIndex: set.index)
         let restEnds = completedAt.addingTimeInterval(max(15, exercise.rest ?? 120))
-        if restFollows {
+        // No rest after the workout's last set (the phone skips it too).
+        let anyOpen = current.exercises.contains { $0.sets.contains { !$0.done } }
+        if !anyOpen {
+            // Workout done: no rest screen or alert from an earlier rest.
+            localRest = nil
+            // Just before this set, so a rest that starts with it still shows.
+            restSkippedAt = completedAt.addingTimeInterval(-0.001)
+        } else if restFollows {
             localRest = (completedAt, restEnds)
             localRestStartedOnWatch = true
         }
@@ -224,10 +234,12 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
             "setIndex": set.index,
             "setLabel": set.label,
             "weight": weightText,
+            // The phone converts if its units changed while this was in flight.
+            "unit": current.unit,
             "reps": repsText,
             "completedAt": completedAt.timeIntervalSince1970 * 1000,
             // Lets a locked iPhone show this rest on the Lock Screen.
-            "restEndsAt": restFollows ? restEnds.timeIntervalSince1970 * 1000 : 0,
+            "restEndsAt": restFollows && anyOpen ? restEnds.timeIntervalSince1970 * 1000 : 0,
             "workoutTitle": current.title,
             "exerciseName": upcomingSet == nil ? "Workout complete" : (upcoming?.name ?? exercise.name),
             "nextSetLabel": upcomingSet.map { "Set \($0.label) of \(upcoming?.sets.count ?? 0)" } ?? "",
@@ -334,13 +346,14 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         guard next != snapshot else { return }
         let previousSet = nextSet?.index
         let previousExercise = selectedExercise
-        let previousValues = nextSet.map { ($0.weight, $0.reps) }
+        let previousValues = nextSet.map { [$0.weight, $0.reps, $0.suggestedWeight ?? "", $0.suggestedReps ?? ""] }
         let previousUnit = snapshot?.unit
         snapshot = next
         if followCurrent || !next.exercises.indices.contains(selectedExercise) {
             selectedExercise = next.exercises.indices.contains(next.currentExercise) ? next.currentExercise : 0
         }
-        let valuesChanged = nextSet.map { ($0.weight, $0.reps) }.map { $0 != (previousValues?.0 ?? "", previousValues?.1 ?? "") } ?? false
+        // Typed values or the phone's suggestion for the target set changed.
+        let valuesChanged = nextSet.map { [$0.weight, $0.reps, $0.suggestedWeight ?? "", $0.suggestedReps ?? ""] != (previousValues ?? ["", "", "", ""]) } ?? false
         // Reload when the target set moved, or when the phone typed new values
         // and the athlete has not started editing on the watch.
         // A unit switch on the phone makes any draft number meaningless.
@@ -358,8 +371,19 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         // The phone's number inputs accept anything ("1e400", 20 digits); an
         // unclamped value would trap in Int() and crash the watch on every
         // launch until the phone edited that set.
-        weight = Self.clampWeight(Double(set?.weight.isEmpty == false ? set!.weight : exercise.suggestedWeight) ?? 0)
-        reps = Self.clampReps(Double(set?.reps.isEmpty == false ? set!.reps : exercise.suggestedReps) ?? 8)
+        // Same rule as the phone: a working set follows the working set just
+        // done (on this watch too, while the iPhone is locked); a drop follows
+        // last session's matching drop, never the working weight.
+        let lastDone = set.flatMap { target in exercise.sets.last { $0.done && $0.drop == target.drop } }
+        // A first-ever drop starts from today's working weight.
+        let lastWorking = exercise.sets.last { $0.done && !$0.drop }
+        let candidates: [(String?, String?)] = set?.drop == true
+            ? [(set?.suggestedWeight, set?.suggestedReps), (lastDone?.weight, lastDone?.reps), (lastWorking?.weight, lastWorking?.reps)]
+            : [(lastDone?.weight, lastDone?.reps), (set?.suggestedWeight, set?.suggestedReps)]
+        let pickedWeight = set?.weight.isEmpty == false ? set!.weight : (candidates.compactMap { $0.0 }.first { !$0.isEmpty } ?? exercise.suggestedWeight)
+        let pickedReps = set?.reps.isEmpty == false ? set!.reps : (candidates.compactMap { $0.1 }.first { !$0.isEmpty } ?? exercise.suggestedReps)
+        weight = Self.clampWeight(Double(pickedWeight) ?? 0)
+        reps = Self.clampReps(Double(pickedReps) ?? 8)
         loadingDraft = false
         draftEdited = false
     }
@@ -416,7 +440,7 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
 
     static func format(_ value: Double) -> String {
         let safe = clampWeight(value)
-        return safe.rounded() == safe ? String(Int(safe)) : String(format: "%.2f", safe).replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
+        return safe.rounded() == safe ? String(Int(safe)) : String(format: "%.2f", safe).replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
     }
 
     static func formatReps(_ value: Double) -> String {

@@ -1151,11 +1151,15 @@ console.log("Audit round 8 checks passed.");
   // Verification follow-ups.
   assert(app.includes("    weeklyCheckIns: [],\n    prepLogs: [],\n    timer: { ...defaultState.timer }"), "freshDefaultState must not alias defaultState arrays");
   assert(toolkit.includes("const cutoff = Date.now() - Number(report.days) * 86400000;"), "Toolkit report cutoff must reuse the coerced day count");
-  assert(backupService.includes("if self.restoredFromICloud.isSet {"), "Backup list must not pull iCloud photos before a restore happened");
+  assert(backupService.includes("if self.photoRestorePending {"), "Backup list must not pull iCloud photos before a restore happened");
   assert(read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes("if let previous = lastScheduledRestEnd, previous != endsAt {"), "Watch must not dismiss a just-delivered alert on a same-rest snapshot");
   // Adversarial inputs: bounded plans, bounded depth, own-property lookups, O(1) name resolution.
-  assert(app.includes("const MAX_PLAN_EXERCISES = 30;") && toolkit.includes(".slice(0, MAX_PLAN_EXERCISES)") && read("coach.js").includes(".slice(0, MAX_PLAN_EXERCISES)"), "Plan exercise counts must be capped everywhere plans enter");
-  assert(read("coach.js").includes(".slice(0, 50).map((plan) => sanitizePlan(plan, from))"), "Imported programs must cap the number of plans");
+  // UI/import cap (40) is enforced where exercises are added; the load-time cap (150) sits above
+  // anything the UI can reach so a reload never truncates a real workout (round 15 regression).
+  assert(app.includes("const MAX_PLAN_EXERCISES = 40;") && app.includes("const MAX_STORED_PLAN_EXERCISES = 150;"), "Plan caps must separate the UI limit from the load-time safety net");
+  assert(!/slice\(0, MAX_PLAN_EXERCISES\)/.test(app) && !/slice\(0, MAX_PLAN_EXERCISES\)/.test(toolkit), "Load-time paths must use the stored-plan cap, not the UI cap");
+  assert(read("coach.js").includes(".slice(0, MAX_PLAN_EXERCISES)") && read("coach.js").includes("offered.slice(0, MAX_PROGRAM_PLANS)"), "Imported programs must be capped");
+  assert(toolkit.includes("if (builderDraft.length >= MAX_PLAN_EXERCISES)") && toolkit.includes("if (state.activeWorkout.exercises.length >= MAX_PLAN_EXERCISES)"), "UI add paths must stop at the exercise cap");
   assert(app.includes("function pruneDeepObjects(root, maxDepth = MAX_STATE_DEPTH)") && app.includes("pruneDeepObjects(parsed)") && read("settings.js").includes("...pruneDeepObjects(payload.state)"), "Loaded and restored state must be depth-pruned");
   assert(read("settings.js").includes("const stack = [rootValue];"), "dropOrigins must be iterative");
   assert(read("settings.js").includes("Object.hasOwn(incomingFileHandlers, format)"), "File dispatcher must not resolve formats through Object.prototype");
@@ -1163,15 +1167,15 @@ console.log("Audit round 8 checks passed.");
   assert(app.includes("}, Object.create(null));"), "PDF exercise grouping must use a null-prototype object");
   assert(app.includes("function exerciseIndexes()") && toolkit.includes("loggedNameIndex = new Map("), "Logged-set exercise resolution must use an index, not a library scan");
   assert(app.includes('next.workoutLogs = next.workoutLogs.map((log) => ("volume" in log ? { ...log, volume: finiteOrNull(log.volume) ?? 0 } : log));'), "Stored workout volume must be finite");
-  assert(toolkit.includes("function planRepsText(value)"), "Plan reps must be validated text");
+  assert(toolkit.includes("function planRepsText(value)") && !toolkit.includes("[0-9A-Za-z .\\-–]{1,20}"), "Plan reps must stay free text (round 15: '10/side' was rewritten to 8-12)");
   {
     // Runtime: a 5k-exercise program is capped and the session still renders; prototype-key names are safe.
     const r12 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
     const run12 = (code) => vm.runInContext(code, r12.context);
     run12("window.confirm = () => true; handleIncomingFileText(JSON.stringify({ format: 'mass-method-program', version: 1, from: 'X', plans: [{ title: 'Huge', exercises: Array.from({ length: 5000 }, () => ['barbell-bench', 10, '8', 90, 4]) }] }))");
-    assert.equal(run12("state.customPlans[0].exercises.length"), 30, "imported program capped at 30 exercises");
+    assert.equal(run12("state.customPlans[0].exercises.length"), 40, "imported program capped at 40 exercises");
     run12("startWorkout(state.customPlans[0].id)");
-    assert.equal(run12("state.activeWorkout.exercises.length"), 30, "started workout capped at 30 exercises");
+    assert.equal(run12("state.activeWorkout.exercises.length"), 40, "started workout keeps the 40 imported exercises");
     assert.ok(run12("renderContent().length") > 1000, "capped session renders");
     run12("cancelWorkout(); state.workoutLogs.unshift({ id: 'c', title: 'T', date: new Date().toISOString(), sets: [{ exercise: 'constructor', exerciseId: '', weight: '100', reps: '5' }] })");
     assert.ok(run12("buildCoachReportLines(7, '').some((line) => line.text.startsWith('constructor:'))"), "PDF groups a set named constructor");
@@ -1183,6 +1187,420 @@ console.log("Audit round 8 checks passed.");
     assert.ok(vm.runInContext("JSON.stringify(nativeBackupPayload()).length", r12b.context) > 0, "snapshot survives a deeply nested stored value");
     assert.ok(vm.runInContext("JSON.stringify(state.junk).length", r12b.context) < 400, "deeply nested stored values are pruned on load");
   }
+  // Round 15: free-text reps survive save + reload; a live workout above the UI cap survives reload;
+  // the watch's "100." weight is accepted; an invalid watch value never wipes the phone's value.
+  {
+    const r15 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run15 = (code) => vm.runInContext(code, r15.context);
+    run15("window.confirm = () => true");
+    run15("builderDraft = ['10/side', '12, 10, 8', '8-10 (pause)', '10+10', '1:00'].map((reps) => ({ id: 'barbell-bench', sets: 3, reps, rest: 90, dropSets: 0, group: '', setType: 'standard' })); saveBuilderTemplate()");
+    const savedReps = run15("JSON.stringify(state.customPlans[0].exercises.map((row) => row[2]))");
+    assert.equal(savedReps, JSON.stringify(["10/side", "12, 10, 8", "8-10 (pause)", "10+10", "1:00"]), "builder reps are kept verbatim");
+    const reloaded15 = makeContext(JSON.parse(r15.storage.get("stageforge-v1")));
+    assert.equal(vm.runInContext("JSON.stringify(state.customPlans[0].exercises.map((row) => row[2]))", reloaded15.context), savedReps, "builder reps survive reload");
+    // A live workout beyond the UI cap (built by an older version) keeps every exercise and logged set on reload.
+    run15("startWorkout('chest-density'); const ids = exerciseLibrary.map((item) => item.id).filter((id) => !state.activeWorkout.exercises.some((exercise) => exercise.id === id)).slice(0, 40); ids.forEach((id) => state.activeWorkout.exercises.push({ id, originalId: id, name: exerciseById(id).name, repsOnly: false, targetSets: 1, targetDropSets: 0, targetReps: '8-12', rest: 90, group: '', defaultSetType: 'standard', sets: [{ set: 1, label: '1', dropSet: false, setType: 'standard', weight: '50', reps: '10', rir: '', done: true }] })); saveState()");
+    const liveCount = run15("state.activeWorkout.exercises.length");
+    assert.ok(liveCount > 40, "test workout exceeds the UI cap");
+    const reloadedLive = makeContext(JSON.parse(r15.storage.get("stageforge-v1")));
+    assert.equal(vm.runInContext("state.activeWorkout.exercises.length", reloadedLive.context), liveCount, "reload never truncates a live workout");
+    assert.equal(vm.runInContext("state.activeWorkout.exercises.at(-1).sets[0].done", reloadedLive.context), true, "logged set on the last exercise survives reload");
+    // Watch "100." is accepted; garbage keeps the phone's typed value.
+    run15("cancelWorkout(); startWorkout('chest-density'); updateSet(0, 0, 'weight', '100.004'); updateSet(0, 0, 'reps', '8')");
+    assert.equal(run15("handleWatchCommand({ action: 'completeSet', exIndex: 0, setIndex: 0, weight: '100.', reps: '8', commandId: 'w-100' })"), true, "watch weight '100.' completes the set");
+    assert.equal(run15("state.activeWorkout.exercises[0].sets[0].weight"), "100", "trailing dot is normalized");
+    run15("updateSet(0, 1, 'weight', '95'); updateSet(0, 1, 'reps', '8')");
+    run15("handleWatchCommand({ action: 'completeSet', exIndex: 0, setIndex: 1, weight: {}, reps: '8', commandId: 'w-bad' })");
+    assert.equal(run15("state.activeWorkout.exercises[0].sets[1].weight"), "95", "an invalid watch weight never wipes the phone's value");
+  }
+  assert(read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes('#"\\.?0+$"#'), "Watch weight formatting must not leave a trailing decimal point");
+  assert(backupService.includes("private static let photoRestorePendingKey") && !backupService.includes("PeakSetAtomicFlag"), "Pending iCloud photo restores must persist across launches");
+  // Round 15 domain logic: what the app tells the athlete.
+  {
+    const volumeJs = read("volume.js");
+    const coachJs = read("coach.js");
+    const watchJs15 = read("watch.js");
+    assert(volumeJs.includes("low = high = Math.round(high * 0.5);"), "Deload target must be half the last build week, not half the minimum");
+    assert(toolkit.includes("function progressionRirLimit()") && volumeJs.includes("progressionRirLimit = function blockProgressionRirLimit()"), "Progression must use the block's weekly RIR target");
+    assert(coachJs.includes("const anchor = Number.isFinite(Date.parse(athlete.updatedAt))") && coachJs.includes("function athleteVolumeWeek(athlete)"), "Coach stats must anchor at the check-in and show a week with training");
+    assert(app.includes('<p class="label">${s.workouts === 1 ? "Workout" : "Workouts"}, last 7 days</p>') && app.includes('<p class="label">Measurement check-ins</p>') && app.includes("addReportSection(lines, `Summary (last ${days} days)`);"), "Stat labels must match what they count");
+    assert(app.includes("That weigh-in is already saved.") && toolkit.includes("workout.savedTemplateId"), "Double taps must not duplicate weigh-ins or templates");
+    assert(watchJs15.includes("const order = set?.dropSet ? [previousSet, lastDone, lastWorking] : [lastDone, previousSet];"), "Watch drop sets must be suggested from previous drops, then the working weight");
+    assert(read("health.js").includes("gapDays(point) >= 21 && gapDays(point) <= 35"), "Body composition must compare against a reading about four weeks before the latest");
+    assert(app.includes("const checklist = stageChecklist({ ...timeline, phase: timeline.goalDateRaw && timeline.phase === \"prep\" ? \"prep\" : chosenPhase });"), "Checklist must follow the athlete's chosen phase");
+    const r16 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run16 = (code) => vm.runInContext(code, r16.context);
+    assert.equal(run16("estimateOneRepMax(315, 1)"), 315, "a single's estimated 1RM is the weight lifted");
+    assert.equal(run16("estimateOneRepMax(400, 40)"), 0, "sets above 30 reps are not 1RM tests");
+    assert.equal(run16("estimatedOneRepMax(225, 10)"), run16("estimateOneRepMax(225, 10)"), "Library and History use one 1RM estimate");
+    assert.equal(run16("nextLoadableWeight('flat-db-press', 60)"), 65, "dumbbell progression jumps to the next 5 lb dumbbell");
+    run16("setUnits('metric')");
+    assert.equal(run16("nextLoadableWeight('barbell-bench', 124.74)"), 126.25, "kg progression adds one step and lands on a loadable 1.25 kg weight");
+    assert.equal(run16("nextLoadableWeight('barbell-bench', 100)"), 101.25, "on-grid kg weights add exactly one step");
+  }
+  // Round 15 native: camera rests ring, denied notifications explained, Health de-dup, Live Activity at workout start.
+  {
+    const appSwift = read("ios/PeakSet/PeakSetApp.swift");
+    const servicesSwift = read("ios/PeakSet/PeakSetNativeServices.swift");
+    const bridgeSwift = read("ios/PeakSet/PeakSetWatchBridge.swift");
+    const liveSwift = read("ios/PeakSet/PeakSetLiveActivity.swift");
+    assert(appSwift.includes("completionHandler(Self.webViewCoveredByFullScreenController() ? [.banner, .list, .sound] : [])"), "A rest ending under the full-screen camera must still ring");
+    assert(servicesSwift.includes("self.onAuthorizationDenied?()") && toolkit.includes("window.handleNativeTimerAuth = handleNativeTimerAuth;"), "Denied notifications must be reported to the athlete");
+    assert(servicesSwift.includes("metadata[HKMetadataKeySyncIdentifier]") && toolkit.includes("id: latestWeight?.id || null"), "Send Weight must replace, not duplicate, Health samples");
+    assert(servicesSwift.includes("(error as? HKError)?.code == .errorNoData"), "No step data must read as zero steps");
+    assert(liveSwift.includes("nonisolated func showReady(") && bridgeSwift.includes("if started { ensureLiveActivity() }") && appSwift.includes("PeakSetWatchBridge.shared.ensureLiveActivity()"), "The Lock Screen activity must start with the workout");
+    assert(bridgeSwift.includes("private let acknowledgedKey") && liveSwift.includes("if let target, abs(state.endsAt.timeIntervalSince(target)) > 5 { continue }"), "Late watch commands must not move or cancel a newer rest");
+    assert(bridgeSwift.includes("guard Thread.isMainThread else {\n            DispatchQueue.main.async { self.flushSnapshot() }"), "Snapshot flushes must be serialized");
+    assert(backupService.includes("private static let pendingMirrorDeletesKey") && backupService.includes('folder.appendingPathComponent(".\\(name).icloud")'), "Deleted photos must be removed from the iCloud mirror, including evicted copies");
+    assert(swiftWebView.includes("PeakSetIncomingFiles.shared.detach()\n        PeakSetWatchBridge.shared.detach()") && swiftWebView.includes("private var pendingPhotoReplies"), "Native replies must survive a page reload");
+    assert(read("ios/MassMethodWatch/WatchWorkoutView.swift").includes("WatchWorkoutModel.maxReps : WatchWorkoutModel.maxWeight"), "Watch crown range must match the clamps");
+  }
+  // Round 16: UX flows and the round-15 verification findings.
+  {
+    const r17 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run17 = (code) => vm.runInContext(code, r17.context);
+    run17("window.confirm = () => true; window.__scrolls = 0; window.scrollTo = () => { window.__scrolls += 1; }");
+    // Switching views and starting workouts open at the top.
+    run17("setView('plans')");
+    assert.ok(run17("window.__scrolls") >= 1, "changing view scrolls to the top");
+    run17("window.__scrolls = 0; startWorkout('chest-density')");
+    assert.ok(run17("window.__scrolls") >= 1, "starting a workout opens it at the top");
+    // Session header leads with Finish/Cancel; tools and a second Finish sit after the exercises.
+    const sessionHtml = run17("renderContent()");
+    assert.ok(sessionHtml.indexOf("Finish Workout") < sessionHtml.indexOf('id="exercise-card-0"'), "Finish Workout is in the header");
+    assert.ok(sessionHtml.indexOf('id="liveExerciseAdd"') > sessionHtml.indexOf('id="exercise-card-0"'), "Add exercise moved below the exercises");
+    assert.ok(!sessionHtml.includes("Save Session"), "the end-workout button says Finish Workout");
+    // Finishing with sets left asks first and says how many.
+    run17("updateSet(0, 0, 'weight', '100'); updateSet(0, 0, 'reps', '8'); completeSet(0, 0); stopTimer(); window.__confirmText = ''; window.confirm = (text) => { window.__confirmText = text; return false; }; finishWorkout()");
+    assert.match(run17("window.__confirmText"), /aren't marked Complete/, "finishing early asks for confirmation");
+    assert.ok(run17("Boolean(state.activeWorkout)"), "declining keeps the workout");
+    // The final set starts no rest and points at Finish.
+    run17("window.confirm = () => true; state.activeWorkout.exercises.forEach((exercise, e) => exercise.sets.forEach((set, i) => { if (!set.done && !(e === 0 && i === 1)) { set.weight = exercise.repsOnly ? '' : '50'; set.reps = '10'; set.done = true; } })); state.activeWorkout.exercises[0].sets[1].weight = '100'; state.activeWorkout.exercises[0].sets[1].reps = '8'; stopTimer(); completeSet(0, 1)");
+    assert.equal(run17("state.timer.running"), false, "no rest timer after the final set");
+    assert.ok(run17("renderContent()").includes("finish-banner"), "all sets logged shows the Finish banner");
+    // Implausible weight asks first.
+    run17("finishWorkout(); startWorkout('chest-density'); updateSet(0, 0, 'weight', '1000'); updateSet(0, 0, 'reps', '8'); window.__asked = false; window.confirm = () => { window.__asked = true; return false; }; completeSet(0, 0)");
+    assert.ok(run17("window.__asked") && !run17("state.activeWorkout.exercises[0].sets[0].done"), "a weight over double the best asks before logging");
+    // Logged entries can be deleted; profile weight follows.
+    run17("window.confirm = () => true; cancelWorkout(); state.weightLogs.unshift({ id: 'w-typo', date: new Date().toISOString(), bodyweight: 2000, note: '' }); state.profile.bodyweight = 2000; deleteLogEntry('weight', 'w-typo')");
+    assert.ok(!run17("state.weightLogs.some((entry) => entry.id === 'w-typo')") && run17("state.profile.bodyweight") !== 2000, "a mistyped weigh-in can be deleted");
+    run17("const id = state.workoutLogs[0].id; deleteLogEntry('workout', id)");
+    assert.equal(run17("state.workoutLogs.length"), 0, "a workout can be deleted");
+    // Verification findings.
+    assert.equal(run17("setUnits('imperial'); nextLoadableWeight('db-lateral-raise', 12.5)"), 15, "12.5 lb dumbbells progress to 15, not 20");
+    assert.equal(run17("nextLoadableWeight('barbell-squat', 137.5)"), 140, "137.5 lb squat progresses to 140");
+    assert.match(read("health.js"), /point !== latest && gapDays\(point\) >= 21/, "body-fat change never compares the latest reading with itself");
+    assert.match(read("coach.js"), /sinceDate: cleanDate\(e\.sinceDate\)/, "coach import keeps the merged-measurement date range");
+    assert.equal(run17("planRepsText('10/side')"), "10/side", "coach and builder reps stay free text");
+    assert.equal(run17("planRepsText(\"8-10 (don't lock out)\")"), "8-10 (don't lock out)", "apostrophes in reps are kept");
+    assert.equal(run17("nextLoadableWeight('chest-supported-row', 25)"), 30, "dumbbell-only movements listed after a bench use dumbbell jumps");
+    assert.equal(run17("plainReportText('\\u0966\\u0967 \\u09E9\\u09EF')"), "01 39", "Devanagari and Bengali digits map correctly");
+    assert.equal(run17("planRepsText('<b>8</b>')"), "8-12", "markup in reps is replaced");
+  }
+  // Round 16 storage: stored state stays 1 byte per character; typing saves after a pause; PDFs use Western digits.
+  {
+    const r18 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run18 = (code) => vm.runInContext(code, r18.context);
+    run18("state.weightLogs.unshift({ id: 'w-q', date: new Date().toISOString(), bodyweight: 200, note: 'Didn’t sleep 💤' }); saveState()");
+    const stored18 = r18.storage.get("stageforge-v1");
+    assert.ok(![...stored18].some((character) => character.charCodeAt(0) > 0x7f), "stored state is pure ASCII (WebKit keeps it 1 byte per character)");
+    assert.ok(app.includes("new TextDecoder().decode(new TextEncoder().encode(ascii))"), "stored string is rebuilt as an 8-bit string");
+    assert.equal(JSON.parse(stored18).weightLogs[0].note, "Didn’t sleep 💤", "escaped characters read back unchanged");
+    run18("startWorkout('chest-density'); saveState(); updateSet(0, 0, 'weight', '123')");
+    assert.notEqual(JSON.parse(r18.storage.get("stageforge-v1")).activeWorkout.exercises[0].sets[0].weight, "123", "typing does not rewrite storage on every keystroke");
+    run18("flushPendingSave()");
+    assert.equal(JSON.parse(r18.storage.get("stageforge-v1")).activeWorkout.exercises[0].sets[0].weight, "123", "a pending keystroke save is flushed");
+    assert.equal(run18("plainReportText('\u0661\u0662\u0663\u066B\u0665')"), "123.5", "native digits survive in the PDF");
+    assert.ok(read("health.js").includes("reportFormatting = true;") && app.includes("toLocaleDateString(reportLocale())") && app.includes('new Intl.Locale(base, { calendar: "gregory", numberingSystem: "latn" })'), "PDF lines keep the device date order with Western digits");
+    assert.ok(read("settings.js").includes("if (result === \"shared\") pendingBackupShare = filename;"), "a cancelled share sheet never unlocks archiving");
+    assert.ok(read("settings.js").includes("function archiveOldHistory()") && read("settings.js").includes("serializeForStorage(restored)"), "storage has a way out and restores use the compact form");
+  }
+  // Round 17: recommendation rotates; templates are editable, findable and pickable; every workout is reachable; coaches see loads.
+  {
+    const r19 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run19 = (code) => vm.runInContext(code, r19.context);
+    run19("window.confirm = () => true; window.scrollTo = () => {}");
+    const first = run19("todaysRecommendedPlan().muscle");
+    run19("startWorkout(todaysRecommendedPlan().id); state.activeWorkout.exercises.forEach((exercise) => exercise.sets.forEach((set) => { set.weight = exercise.repsOnly ? '' : '50'; set.reps = '10'; set.done = true; })); stopTimer(); finishWorkout()");
+    assert.notEqual(run19("todaysRecommendedPlan().muscle"), first, "the recommendation moves on after a workout");
+    run19("builderDraft = [{ id: 'barbell-bench', sets: 3, reps: '8', rest: 90, dropSets: 0, group: '', setType: 'standard' }]; state.builderFormDraft.title = 'Pusg A'; saveBuilderTemplate()");
+    const templateId = run19("state.customPlans[0].id");
+    run19(`editCustomPlan('${templateId}'); state.builderFormDraft.title = 'Push A'; builderDraft.push({ id: 'pec-deck', sets: 3, reps: '12', rest: 60, dropSets: 0, group: '', setType: 'standard' }); saveBuilderTemplate()`);
+    assert.equal(run19("state.customPlans.length"), 1, "editing a template replaces it");
+    assert.equal(run19("state.customPlans[0].id"), templateId, "an edited template keeps its id");
+    assert.equal(run19("state.customPlans[0].title + '|' + state.customPlans[0].exercises.length"), "Push A|2", "edits are saved");
+    assert.ok(run19("renderPlans()").indexOf("Push A") < run19("renderPlans()").indexOf("Chest: Density + Shape"), "saved templates come first in Plans");
+    run19(`chooseTodayWorkout('plan:${templateId}')`);
+    assert.equal(run19("todaysSelectedPlan().id"), templateId, "Today can pick a saved template");
+    run19("for (let i = 0; i < 40; i += 1) state.workoutLogs.push({ id: 'old-' + i, title: 'Old ' + i, date: new Date(Date.now() - (60 + i) * 86400000).toISOString(), sets: [{ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '100', reps: '5' }], volume: 500 }); setView('history')");
+    assert.ok(run19("renderContent()").includes("All workouts") && run19("renderContent()").includes("Show 15 more"), "every workout is reachable from History, 15 at a time");
+    run19("showMoreWorkouts(); showMoreWorkouts()");
+    assert.ok(run19("renderContent()").includes("Old 39") && !run19("renderContent()").includes("Show 15 more"), "paging reaches the oldest workout");
+    run19("deleteLogEntry('workout', 'old-39')");
+    assert.ok(!run19("state.workoutLogs.some((log) => log.id === 'old-39')"), "an old workout can be deleted from History");
+    const summary = run19("JSON.stringify(workoutExerciseSummary({ sets: [{ exercise: 'Bench', weight: '225', reps: '5' }, { exercise: 'Bench', weight: '245', reps: '3' }, { exercise: 'Plank', weight: '', reps: '60' }] }))");
+    assert.equal(summary, JSON.stringify([{ name: "Bench", sets: 2, weight: 245, reps: 3 }, { name: "Plank", sets: 1, weight: null, reps: 60 }]), "coach workout summary keeps the best set per exercise");
+    assert.ok(!app.includes("report.workouts.slice(0, 8)"), "Logbook lists every workout in range");
+    // Round 18 verification.
+    assert.ok(app.includes("toLocaleString(reportNumberLocale())") && !/toLocaleString\(reportLocale\(\)\)/.test(app + toolkit), "PDF numbers use one format; only dates follow the device locale");
+    run19("builderDraft = [{ id: 'barbell-bench', sets: 3, reps: '8', rest: 90, dropSets: 0, group: '', setType: 'standard' }]; state.builderFormDraft.title = 'Keep Me'; saveBuilderTemplate()");
+    const keepId = run19("state.customPlans[0].id");
+    run19(`state.customPlans[0].phase = 'prep'; state.customPlans[0].rest = 150; editCustomPlan('${keepId}'); cancelWorkout(); startCustomWorkout(); cancelWorkout()`);
+    assert.equal(run19("state.builderEditingPlanId"), null, "starting a workout from the Builder ends template editing");
+    run19(`editCustomPlan('${keepId}'); saveBuilderTemplate()`);
+    assert.equal(run19("state.customPlans.find((plan) => plan.id === '" + keepId + "').phase + '|' + state.customPlans.find((plan) => plan.id === '" + keepId + "').rest"), "prep|150", "editing keeps the template's phase and rest");
+    run19("state.phase = 'prep'; state.workoutLogs = []; state.customPlans = []");
+    const prepSeen = new Set();
+    for (let i = 0; i < 12; i += 1) {
+      prepSeen.add(run19(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'rot-${i}', title: plan.title, date: new Date(Date.now() + ${i} * 60000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); return plan.id; })()`));
+    }
+    assert.ok(prepSeen.size >= 5, `prep rotation reaches the prep plans (saw ${[...prepSeen].join(", ")})`);
+    // Round 18 simulation findings.
+    run19("state.phase = 'offseason'; state.workoutLogs = []; const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-US', { weekday: 'long' }); state.customPlans = [{ id: 'custom-legs', title: 'Legs DS', muscle: 'legs', phase: 'offseason', rest: 120, note: '', scheduleDay: tomorrow, exercises: [['barbell-squat', 3, '8', 120, 0, {}]] }]");
+    assert.notEqual(run19("todaysRecommendedPlan().muscle"), "legs", "today avoids the muscle tomorrow's scheduled template trains");
+    assert.ok(read("coach.js").includes("const pruneMissing = (list, incoming, apply = true, key = \"\") =>"), "coach copies mirror deletions inside each check-in's range");
+    assert.ok(read("coach.js").includes("item.sourceId === plan.sourceId"), "re-opening a program doesn't duplicate templates");
+    assert.ok(read("health.js").includes("saveWeight = function saveWeightReplacingHealthDay"), "a hand weigh-in replaces the day's Health reading");
+    assert.ok(read("watch.js").includes("command.unit !== weightUnit()") && read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes('"unit": current.unit'), "watch weights carry their unit");
+    run19("state.workoutLogs = [{ id: 'gone-1', title: 'Old', date: new Date().toISOString(), sets: [] }]; deleteLogEntry('workout', 'gone-1')");
+    assert.ok(run19("state.deletedLogs.some((item) => item.kind === 'workout' && item.id === 'gone-1')"), "deletions are remembered for the coach");
+    assert.ok(read("coach.js").includes("deleted: (Array.isArray(state.deletedLogs) ? state.deletedLogs : []).filter(") && read("coach.js").includes("const tombstones = deletedByKind[kindOf[key]];"), "coach check-ins carry and apply deletions");
+    // A re-sent program: identical templates are skipped, edited ones update in place.
+    run19("window.confirm = () => true; state.customPlans = []");
+    const program = (reps) => JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", plans: [{ id: "custom-coach-1", title: "Push A", muscle: "chest", phase: "offseason", rest: 120, note: "x", scheduleDay: "Monday", exercises: [["barbell-bench", 3, reps, 120, 0, {}]] }] });
+    run19(`handleIncomingFileText(${JSON.stringify(program("8"))})`);
+    run19(`handleIncomingFileText(${JSON.stringify(program("8"))})`);
+    assert.equal(run19("state.customPlans.length"), 1, "the same program opened twice doesn't duplicate");
+    const firstId = run19("state.customPlans[0].id");
+    run19(`handleIncomingFileText(${JSON.stringify(program("6-8"))})`);
+    assert.equal(run19("state.customPlans.length + '|' + state.customPlans[0].exercises[0][2] + '|' + (state.customPlans[0].id === '" + firstId + "')"), "1|6-8|true", "an edited, re-sent template updates in place");
+    // Round 19: weekly re-sends carry messages and schedule changes; legacy coach templates match.
+    const program19 = (extra = {}, plan = {}) => JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", ...extra, plans: [{ id: "custom-coach-1", title: "Push A", muscle: "chest", phase: "offseason", rest: 120, note: "x", scheduleDay: "Monday", exercises: [["barbell-bench", 3, "6-8", 120, 0, {}]], ...plan }] });
+    run19(`handleIncomingFileText(${JSON.stringify(program19({ message: "Week 2: push the top sets." }))})`);
+    assert.equal(run19("state.customPlans.length + '|' + (state.coachMessage && state.coachMessage.message)"), "1|Week 2: push the top sets.", "a re-send with only a new message still delivers it");
+    run19(`handleIncomingFileText(${JSON.stringify(program19({}, { scheduleDay: "Tuesday" }))})`);
+    assert.equal(run19("state.customPlans.length + '|' + state.customPlans[0].scheduleDay"), "1|Tuesday", "a schedule-only change arrives");
+    run19("state.customPlans.push({ id: 'coach-legacy', title: 'Pull B', muscle: 'back', phase: 'offseason', rest: 120, note: '', scheduleDay: '', fromCoach: 'Coach Kim', exercises: [['lat-pulldown', 3, '10', 90, 0, {}]] })");
+    run19(`handleIncomingFileText(${JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", plans: [{ id: "custom-coach-2", title: "Pull B", muscle: "back", phase: "offseason", rest: 120, note: "", exercises: [["lat-pulldown", 3, "10", 90, 0, {}]] }] }))})`);
+    assert.equal(run19("state.customPlans.filter((plan) => plan.title === 'Pull B').length + '|' + state.customPlans.find((plan) => plan.title === 'Pull B').sourceId"), "1|custom-coach-2", "coach templates from before source ids are matched, not duplicated");
+    assert.ok(run19("renderToday()").includes("1 updated workout in Plans"), "the coach note says a workout was updated, not added");
+    // Editing a template to or from Road Gym changes its phase.
+    run19("state.customPlans = []; builderDraft = [{ id: 'incline-db-press', sets: 3, reps: '12', rest: 60, dropSets: 0, group: '', setType: 'standard' }]; state.builderFormDraft.title = 'Hotel'; state.builderFormDraft.muscle = 'chest'; saveBuilderTemplate()");
+    const hotelId = run19("state.customPlans[0].id");
+    run19(`editCustomPlan('${hotelId}'); state.builderFormDraft.muscle = 'travel'; saveBuilderTemplate()`);
+    assert.equal(run19("state.customPlans[0].phase"), "travel", "a template edited to Road Gym becomes a Road Gym template");
+    run19(`editCustomPlan('${hotelId}'); state.builderFormDraft.muscle = 'chest'; saveBuilderTemplate()`);
+    assert.notEqual(run19("state.customPlans[0].phase"), "travel", "a template edited away from Road Gym leaves the travel phase");
+    // Removing an exercise keeps the open Edit panel on its own card.
+    run19("startWorkout('chest-density'); openExerciseOptions = 2; removeLiveExercise(0)");
+    assert.equal(run19("openExerciseOptions"), 1, "the open Edit panel follows its exercise after a removal");
+    run19("state.activeWorkout.exercises[0].sets[0].weight = '100'; state.activeWorkout.exercises[0].sets[0].reps = '8'; window.confirm = () => false; openExerciseOptions = 2; removeLiveExercise(0); window.confirm = () => true");
+    assert.equal(run19("openExerciseOptions"), 2, "a cancelled removal leaves the panel alone");
+    run19("cancelWorkout()");
+    // Road Gym: Today recommends a plan the profile can run.
+    run19("state.customPlans = []; state.workoutLogs = []; state.phase = 'offseason'; state.activeEquipmentProfileId = 'road-gym'");
+    assert.ok(run19("(() => { const profile = activeEquipmentProfile(); return todaysRecommendedPlan().exercises.every(([id]) => exerciseMatchesEquipmentProfile(exerciseById(id), profile)); })()"), "Today's pick fits the active equipment profile");
+    run19("state.activeEquipmentProfileId = 'all-equipment'");
+    // Overnight workouts are logged when the sets were done.
+    run19("startWorkout('chest-density'); const ex19 = state.activeWorkout.exercises[0]; ex19.sets[0].weight = '100'; ex19.sets[0].reps = '8'; completeSet(0, 0); stopTimer(); state.activeWorkout.startedAt = new Date(Date.now() - 20 * 3600000).toISOString(); state.activeWorkout.lastSetAt = Date.now() - 19 * 3600000; finishWorkout()");
+    assert.ok(Math.abs(run19("Date.parse(state.workoutLogs[0].date)") - (Date.now() - 19 * 3600000)) < 5 * 60000, "a workout finished the next morning is dated by its last set");
+    // Archiving keeps the start weigh-in.
+    run19("state.profile.createdAt = new Date(Date.now() - 500 * 86400000).toISOString(); state.weightLogs = [{ id: 'now', date: new Date().toISOString(), bodyweight: 205 }, { id: 'mid', date: new Date(Date.now() - 400 * 86400000).toISOString(), bodyweight: 202 }, { id: 'start', date: new Date(Date.now() - 499 * 86400000).toISOString(), bodyweight: 195, note: 'Starting profile' }]; lastBackupExportAt = Date.now(); archiveOldHistory()");
+    assert.equal(run19("state.weightLogs.map((entry) => entry.id).join(',') + '|' + stats().weightDelta"), "now,start|10.0", "archiving keeps the start weigh-in and the change from start");
+  // Round 19: a day-old rest screen is not shown again; coach copies never resurrect deletions.
+  {
+    const stale = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, running: true, fullscreen: true, startedAt: Date.now() - 86400000 - 90000, endsAt: Date.now() - 86400000 } });
+    assert.equal(vm.runInContext("state.timer.fullscreen", stale.context), false, "a rest that ended a day ago doesn't reopen its overlay");
+    const recent = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, running: true, fullscreen: true, startedAt: Date.now() - 120000, endsAt: Date.now() - 30000 } });
+    assert.equal(vm.runInContext("state.timer.fullscreen", recent.context), true, "a rest that just ended still shows Rest complete");
+    const day = 86400000;
+    const base19 = { ...pkg, rangeDays: 14, weightLogs: [], weeklyCheckIns: [], prepLogs: [], photos: [] };
+    const keepLog = { id: "keep-1", title: "Kept", date: new Date(Date.now() - 2 * day).toISOString(), sets: [] };
+    const goneLog = { id: "gone-19", title: "Mistake", date: new Date(Date.now() - 6 * day).toISOString(), sets: [] };
+    const older = { ...base19, generatedAt: new Date(Date.now() - 5 * day).toISOString(), workoutLogs: [goneLog], deleted: [] };
+    const newerPkg = { ...base19, generatedAt: new Date().toISOString(), workoutLogs: [keepLog], deleted: [{ kind: "workout", id: "gone-19" }] };
+    const coachA = makeContext({ profile: { bodyweight: 210 }, coach: { enabled: true, name: "Kim", athletes: {} } });
+    await vm.runInContext(`importCoachPackage(${JSON.stringify({ ...newerPkg, deleted: [] })})`, coachA.context);
+    await vm.runInContext(`importCoachPackage(${JSON.stringify(older)})`, coachA.context);
+    assert.equal(vm.runInContext("coachAthletes()[0].workoutLogs.map((log) => log.id).join(',')", coachA.context), "keep-1", "an older check-in opened after a newer one doesn't bring back a deleted workout");
+    const coachB = makeContext({ profile: { bodyweight: 210 }, coach: { enabled: true, name: "Kim", athletes: {} } });
+    await vm.runInContext(`importCoachPackage(${JSON.stringify(older)})`, coachB.context);
+    await vm.runInContext(`importCoachPackage(${JSON.stringify(newerPkg)})`, coachB.context);
+    await vm.runInContext(`importCoachPackage(${JSON.stringify(older)})`, coachB.context);
+    assert.equal(vm.runInContext("coachAthletes()[0].workoutLogs.map((log) => log.id).join(',')", coachB.context), "keep-1", "re-opening an old check-in doesn't bring back a deleted workout");
+    const reload = makeContext(JSON.parse(coachB.storage.get("stageforge-v1")));
+    assert.equal(vm.runInContext("coachAthletes()[0].deleted.length", reload.context), 1, "the coach keeps the athlete's deletions across reloads");
+    // Round 20: rotation still covers every muscle on a limited profile; packages' own lists beat stale deletions.
+    {
+      const rot = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() }, activeEquipmentProfileId: "road-gym" });
+      const runRot = (code) => vm.runInContext(code, rot.context);
+      runRot("window.confirm = () => true; state.activeEquipmentProfileId = 'road-gym'; state.workoutLogs = []");
+      const seen = new Set();
+      for (let i = 0; i < 10; i += 1) {
+        seen.add(runRot(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'rg-${i}', title: plan.title, date: new Date(Date.now() - (20 - ${i}) * 86400000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); return plan.title; })()`));
+      }
+      assert.ok(seen.size >= 4, `Road Gym recommendations rotate (saw ${[...seen].join(", ")})`);
+      const hkPkg = { ...base19, generatedAt: new Date().toISOString(), workoutLogs: [], weightLogs: [{ id: "hk-day-2026-10-05", date: new Date(Date.now() - day).toISOString(), bodyweight: 180 }], deleted: [{ kind: "weight", id: "hk-day-2026-10-05" }] };
+      const coachC = makeContext({ profile: { bodyweight: 210 }, coach: { enabled: true, name: "Kim", athletes: {} } });
+      await vm.runInContext(`importCoachPackage(${JSON.stringify(hkPkg)})`, coachC.context);
+      assert.equal(vm.runInContext("coachAthletes()[0].weightLogs.length", coachC.context), 1, "a package's own entries beat its stale deletion records");
+      const athlete20 = makeContext({ profile: { bodyweight: 200 }, weightLogs: [{ id: "hk-day-x", date: new Date().toISOString(), bodyweight: 180 }], deletedLogs: [{ kind: "weight", id: "hk-day-x", at: new Date().toISOString() }] });
+      const msg = makeContext({ profile: { bodyweight: 200 } });
+      const runMsg = (code) => vm.runInContext(code, msg.context);
+      let asked = 0;
+      msg.context.window.confirm = () => { asked += 1; return true; };
+      const prog20 = (message) => JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", message, plans: [{ id: "p1", title: "Push A", muscle: "chest", phase: "offseason", rest: 120, note: "x", exercises: [["barbell-bench", 3, "8", 120, 0, {}]] }] }));
+      runMsg(`handleIncomingFileText(${prog20("Week 1")})`);
+      runMsg(`handleIncomingFileText(${prog20("Week 2")})`);
+      assert.equal(runMsg("state.view + '|' + state.coachMessage.message"), "today|Week 2", "a message-only re-send opens Today, where the note is shown");
+      runMsg("dismissCoachMessage()");
+      const before = asked;
+      runMsg(`handleIncomingFileText(${prog20("Week 2")})`);
+      assert.equal(asked, before, "a dismissed note is not offered again as new");
+      assert.equal(JSON.parse(JSON.stringify(await vm.runInContext("buildCoachPackage(14)", athlete20.context))).deleted.length, 0, "check-ins don't list entries the athlete still has as deleted");
+    }
+    // Round 20 simulations: restore errors are visible; file restores bring photos back; deload preview.
+    {
+      const nb = makeContext({ profile: { bodyweight: 200 }, backupStatus: { message: "Backed up to iCloud.", at: new Date().toISOString() } });
+      const runNb = (code) => vm.runInContext(code, nb.context);
+      runNb("var posts20 = []; var toasts20 = []; window.webkit = { messageHandlers: { peaksetBackup: { postMessage(m) { posts20.push(m); } } } }; window.location = { reload() {} }; toast = (m) => toasts20.push(m)");
+      runNb("handleNativeBackup({ status: 'error', kind: 'restore', message: 'The backup is still downloading.' })");
+      assert.ok(runNb("toasts20.some((m) => m.startsWith('Restore failed'))") && runNb("state.backupStatus.message") === "Backed up to iCloud.", "a failed restore is shown and leaves the backup status alone");
+      runNb("restoreBackupPayload({ format: BACKUP_FORMAT, state: { profile: { bodyweight: 200 }, progressPhotos: [{ id: 'p1', pose: 'front-relaxed', date: new Date().toISOString(), storage: 'native' }] } })");
+      assert.ok(runNb("posts20.some((m) => m.action === 'restorePhotos')"), "restoring a backup file asks iOS to bring the photos back from iCloud Drive");
+      assert.ok(read("photos.js").includes('onerror="photoMissing(this)"') && read("ios/PeakSet/PeakSetWebView.swift").includes('case "restorePhotos":'), "missing photo files show a placeholder, and native handles restorePhotos");
+      const dl = makeContext({ profile: { bodyweight: 200 } });
+      vm.runInContext("state.trainingBlock = { id: 'b', name: 'B', startDate: dateKey(addDays(startOfWeek(), -21)), accumulationWeeks: 3, deload: true, focus: [], createdAt: new Date().toISOString() }", dl.context);
+      assert.equal(vm.runInContext("blockWeekInfo().deload && todayPreviewPlan(planTemplates.find((plan) => plan.id === 'chest-density')).exercises[0][1] === Math.ceil(normalizePlanExercise(planTemplates.find((plan) => plan.id === 'chest-density').exercises[0]).sets / 2)", dl.context), true, "Today shows the halved deload sets that Start will load");
+    }
+    // Round 21: garage profiles rotate; quarter-step loads stay exact; legacy matching is order-independent.
+    {
+      const g = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+      const runG = (code) => vm.runInContext(code, g.context);
+      runG("state.equipmentProfiles.push({ id: 'garage', name: 'Garage', equipment: ['Barbell', 'Dumbbells', 'Bench', 'Rack', 'Plates', 'Pull-up bar', 'Bodyweight'] }); state.activeEquipmentProfileId = 'garage'; state.workoutLogs = []; state.phase = 'offseason'");
+      const garageSeen = new Set();
+      for (let i = 0; i < 10; i += 1) {
+        garageSeen.add(runG(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'g-${i}', title: plan.title, date: new Date(Date.now() - (20 - ${i}) * 86400000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); return plan.muscle; })()`));
+      }
+      assert.ok(garageSeen.size >= 4, `a garage profile rotates muscles (saw ${[...garageSeen].join(", ")})`);
+      assert.ok(read("toolkit.js").includes("Number.isInteger(Math.round(bestWeight * 400) / 100) ? 2 : 1"), "progression copy keeps quarter-step loads like 61.25 exact");
+      const lg = makeContext({ profile: { bodyweight: 200 } });
+      const runLg = (code) => vm.runInContext(code, lg.context);
+      runLg("window.confirm = () => true; state.customPlans = [{ id: 'mon', title: 'Push', muscle: 'chest', phase: 'offseason', rest: 120, note: 'From Coach Kim', scheduleDay: 'Monday', fromCoach: 'Coach Kim', exercises: [['barbell-bench', 4, '8', 120, 0, { group: '', setType: 'standard' }]] }, { id: 'thu', title: 'Push', muscle: 'chest', phase: 'offseason', rest: 120, note: 'From Coach Kim', scheduleDay: 'Thursday', fromCoach: 'Coach Kim', exercises: [['barbell-bench', 3, '8', 120, 0, { group: '', setType: 'standard' }]] }]");
+      const legacyPlan = (id, sets, day) => ({ id, title: "Push", muscle: "chest", phase: "offseason", rest: 120, note: "", scheduleDay: day, exercises: [["barbell-bench", sets, "8", 120, 0, {}]] });
+      runLg(`handleIncomingFileText(${JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", plans: [legacyPlan("c-thu", 5, "Thursday"), legacyPlan("c-mon", 4, "Monday")] }))})`);
+      assert.equal(runLg("state.customPlans.map((plan) => plan.id + ':' + plan.exercises[0][1]).join(',')"), "mon:4,thu:5", "an unchanged legacy template keeps its slot when another same-titled one changes");
+    }
+    // Round 22: storage failures outrank "saved" toasts; restore screen says when nothing is found; clock skew.
+    {
+      const sf = makeContext({ profile: { bodyweight: 200 } });
+      const runSf = (code) => vm.runInContext(code, sf.context);
+      runSf("var shown22 = []; document.querySelector = (sel) => (sel === '.toast' ? shown22[shown22.length - 1] || null : null); document.createElement = () => { const el = { dataset: {}, className: '', textContent: '', setAttribute() {}, remove() { shown22 = shown22.filter((item) => item !== el); } }; return el; }; document.body.appendChild = (el) => shown22.push(el); localStorage.setItem = () => { throw new Error('QuotaExceededError'); }");
+      assert.equal(runSf("saveState()"), false, "saveState reports a failed write");
+      runSf("toast('Workout saved.')");
+      assert.ok(runSf("shown22[shown22.length - 1].textContent").startsWith("Storage is full"), "a storage-full warning is not replaced by a success toast");
+      runSf("shown22.forEach((el) => el.remove()); toast('Workout saved.')");
+      assert.equal(runSf("shown22.length"), 0, "no 'saved' message is shown while saves are failing");
+      const rs = makeContext(null);
+      const runRs = (code) => vm.runInContext(code, rs.context);
+      runRs("window.webkit = { messageHandlers: { peaksetBackup: { postMessage() {} } } }; openOnboardingRestore(true); handleNativeBackup({ status: 'list', backups: [] })");
+      assert.ok(runRs("renderOnboarding()").includes("No backups found") && !runRs("renderOnboarding()").includes("Back Up Now"), "a new phone with no backups is told so, without backup-only buttons");
+      const sk = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, total: 90, running: true, fullscreen: false, startedAt: Date.now(), endsAt: Date.now() + 86400000 } });
+      const sk2 = makeContext({ profile: { bodyweight: 200 }, timer: { seconds: 90, total: 90, left: 30, running: true, fullscreen: false, startedAt: Date.now(), endsAt: Date.now() + 86400000 } });
+      assert.ok(vm.runInContext("state.timer.left", sk2.context) <= 30, "the clock-skew clamp keeps the time that was left");
+      assert.ok(vm.runInContext("state.timer.left", sk.context) <= 90, "a rest saved before the clock moved back stays within its length");
+    }
+    // Round 23: a "Drop set" typed working row is a drop; finished picks give way; undo cancels its rest.
+    {
+      const d = makeContext({ profile: { bodyweight: 200 } });
+      const runD = (code) => vm.runInContext(code, d.context);
+      runD("window.confirm = () => true; window.scrollTo = () => {}; state.workoutLogs = [{ id: 'b1', title: 'Bench', date: new Date(Date.now() - 2 * 86400000).toISOString(), sets: [1, 2, 3].map((n) => ({ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '225', reps: '12', rir: '1', setType: 'standard', label: String(n), targetReps: '8-12' })).concat([{ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '165', reps: '7', rir: '', setType: 'drop', label: '4', targetReps: '8-12' }]) }]");
+      assert.ok(runD("progressionSuggestion({ id: 'barbell-bench', name: 'Barbell Bench Press', targetReps: '8-12', sets: [] })").includes("Try "), "a working row typed as a drop set doesn't block progression");
+      runD("state.workoutLogs = [{ id: 'b2', title: 'Bench', date: new Date(Date.now() - 2 * 86400000).toISOString(), sets: [1, 2, 3].map((n) => ({ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '225', reps: '12', rir: '1', setType: 'drop', label: String(n), targetReps: '8-12' })) }]");
+      assert.ok(runD("progressionSuggestion({ id: 'barbell-bench', name: 'Barbell Bench Press', targetReps: '8-12', sets: [] })").includes("Try "), "a template whose rows are all typed Drop set still progresses");
+      assert.equal(runD("setHardSetValue({ setType: 'drop' })"), 1, "a working row typed Drop set is a full hard set (only D rows count half)");
+      runD("chooseTodayWorkout('plan:chest-density'); startWorkout(todaysSelectedPlan().id); state.activeWorkout.exercises.forEach((exercise) => exercise.sets.forEach((set) => { set.weight = exercise.repsOnly ? '' : '50'; set.reps = '10'; set.done = true; })); stopTimer(); finishWorkout()");
+      assert.equal(runD("state.todayWorkoutPick + '|' + (state.todayPlanId === null) + '|' + (todaysSelectedPlan().id !== 'chest-density')"), "recommended|true|true", "after a picked workout is finished, Today's picker and card both move on");
+      runD("chooseTodayWorkout('plan:chest-density')");
+      assert.equal(runD("todaysSelectedPlan().id"), "chest-density", "the same workout can be picked again for a second session");
+      runD("startWorkout('back-thickness'); const ex23 = state.activeWorkout.exercises[0]; ex23.sets[0].weight = '100'; ex23.sets[0].reps = '8'; completeSet(0, 0)");
+      assert.equal(runD("state.timer.running"), true, "completing a set starts its rest");
+      runD("completeSet(0, 0)");
+      assert.equal(runD("state.timer.running"), false, "undoing that set cancels its rest");
+      runD("const exB = state.activeWorkout.exercises[0]; exB.sets[0].weight = '100'; exB.sets[0].reps = '8'; completeSet(0, 0); var firstEnd = state.timer.endsAt; exB.sets[1].weight = '100'; exB.sets[1].reps = '8'; completeSet(0, 1); completeSet(0, 1)");
+      assert.ok(runD("state.timer.running && Math.abs(state.timer.endsAt - firstEnd) < 1500"), "undoing a mis-tapped set brings back the rest it replaced");
+    }
+    // Round 24: same-day templates, body fat from weigh-ins, every entry deletable.
+    {
+      const sd = makeContext({ profile: { bodyweight: 200, createdAt: new Date().toISOString() } });
+      const runSd = (code) => vm.runInContext(code, sd.context);
+      runSd("window.confirm = () => true; var today24 = new Date().toLocaleDateString('en-US', { weekday: 'long' }); state.customPlans = [{ id: 'pull', title: 'Pull', muscle: 'back', phase: 'offseason', rest: 90, note: '', scheduleDay: today24, scheduledAt: Date.now() - 60000, exercises: [['lat-pulldown', 3, '10', 90, 0, {}]] }, { id: 'push', title: 'Push', muscle: 'chest', phase: 'offseason', rest: 90, note: '', scheduleDay: '', exercises: [['barbell-bench', 3, '8', 120, 0, {}]] }]; updateCustomPlanSchedule('push', today24)");
+      assert.equal(runSd("todaysRecommendedPlan().id"), "push", "the template just scheduled for today is the one Today shows");
+      runSd("state.workoutLogs.unshift({ id: 'done-push', title: 'Push', date: new Date().toISOString(), sets: [] })");
+      assert.equal(runSd("todaysRecommendedPlan().id"), "pull", "after it is done, the other template scheduled today is offered");
+      runSd("state.measurements = [{ id: 'm1', date: new Date(Date.now() - 30 * 86400000).toISOString(), bodyFat: 16 }]; state.weightLogs = [{ id: 'hk-day-x', date: new Date().toISOString(), bodyweight: 190, bodyFat: 12.4, source: 'healthkit' }]");
+      assert.equal(runSd("latestMeasurementValue('bodyFat')"), 12.4, "the Body Fat % tile uses the newest reading, including smart-scale weigh-ins");
+      runSd("state.weightLogs = Array.from({ length: 12 }, (_, i) => ({ id: 'w' + i, date: new Date(Date.now() - i * 86400000).toISOString(), bodyweight: 200 - i })); toggleAllRecentEntries(); setView('progress')");
+      assert.ok(runSd("renderContent()").includes("deleteLogEntry('weight', 'w11')") || runSd("renderContent()").includes("'w11'"), "Show all entries reaches the oldest weigh-in's Delete");
+    }
+    // Round 25: a coach-scheduled workout for today wins over an older athlete schedule; failure toasts still show.
+    {
+      const cs = makeContext({ profile: { bodyweight: 200, createdAt: new Date().toISOString() } });
+      const runCs = (code) => vm.runInContext(code, cs.context);
+      runCs("window.confirm = () => true; var day25 = new Date().toLocaleDateString('en-US', { weekday: 'long' }); state.customPlans = [{ id: 'mine', title: 'My Push', muscle: 'chest', phase: 'offseason', rest: 90, note: '', scheduleDay: '', exercises: [['barbell-bench', 3, '8', 120, 0, {}]] }]; updateCustomPlanSchedule('mine', day25)");
+      runCs(`handleIncomingFileText(JSON.stringify({ format: 'mass-method-program', version: 1, from: 'Coach Kim', plans: [{ id: 'c-legs', title: 'Coach Legs', muscle: 'legs', phase: 'offseason', rest: 120, note: '', scheduleDay: day25, exercises: [['barbell-squat', 3, '8', 120, 0, {}]] }] }))`);
+      assert.equal(runCs("todaysRecommendedPlan().title"), "Coach Legs", "the coach's newly scheduled workout is today's workout");
+      runCs("var shown25 = []; document.querySelector = (sel) => null; document.createElement = () => ({ dataset: {}, setAttribute() {}, remove() {} }); document.body.appendChild = (el) => shown25.push(el.textContent); localStorage.setItem = () => { throw new Error('full'); }; saveState(); shown25 = []; toast('The photo could not be saved.'); toast('That weigh-in is already saved.'); toast('Workout saved.')");
+      assert.equal(runCs("shown25.join('|')"), "The photo could not be saved.|That weigh-in is already saved.", "failure and guard messages still show while saves fail; success claims don't");
+    }
+    // Round 27: a deleted tape measurement leaves the coach's "latest"; a re-opened program doesn't re-queue its block.
+    {
+      const at = makeContext({ profile: { bodyweight: 200, gender: "Female", age: 30 }, athleteName: "Ana", measurements: [{ id: "m-good", date: new Date(Date.now() - 8 * 86400000).toISOString(), waist: 27 }] });
+      const runAt = (code) => vm.runInContext(code, at.context);
+      const coach27 = makeContext({ profile: { bodyweight: 210 }, coach: { enabled: true, name: "Kim", athletes: {} } });
+      const send = async () => vm.runInContext(`importCoachPackage(${JSON.stringify(JSON.parse(JSON.stringify(await vm.runInContext("buildCoachPackage(14)", at.context))))})`, coach27.context);
+      await send();
+      runAt("window.confirm = () => true; state.measurements.unshift({ id: 'm-typo', date: new Date(Date.now() - 86400000).toISOString(), waist: 2.65 })");
+      await send();
+      assert.equal(vm.runInContext("coachAthletes()[0].measurements[0].waist", coach27.context), 2.65, "the coach first sees the newest measurement");
+      runAt("deleteLogEntry('measurement', 'm-typo')");
+      await send();
+      assert.equal(vm.runInContext("coachAthletes()[0].measurements[0].waist", coach27.context), 27, "a deleted tape measurement is no longer the coach's latest");
+      const pb = makeContext({ profile: { bodyweight: 200 } });
+      let asks = 0;
+      pb.context.window.confirm = () => { asks += 1; return true; };
+      const prog27 = JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", block: { name: "Kim block", accumulationWeeks: 4, focus: ["chest"], start: "now" }, plans: [{ id: "p27", title: "Push", muscle: "chest", phase: "offseason", rest: 120, note: "x", exercises: [["barbell-bench", 3, "8", 120, 0, {}]] }] }));
+      vm.runInContext(`handleIncomingFileText(${prog27})`, pb.context);
+      const blockId = vm.runInContext("state.trainingBlock && state.trainingBlock.id", pb.context);
+      const before27 = asks;
+      vm.runInContext(`handleIncomingFileText(${prog27})`, pb.context);
+      assert.equal(vm.runInContext("state.trainingBlock.id", pb.context) + "|" + (asks - before27), blockId + "|0", "re-opening the same program doesn't replace or re-queue its block");
+    }
+    // Round 28: per-set watch suggestions; a new block with the same settings is queued; latest summary first.
+    {
+      const ws = makeContext({ profile: { bodyweight: 200 }, workoutLogs: [{ id: 'prev', title: 'Bench', date: new Date(Date.now() - 3 * 86400000).toISOString(), sets: [1, 2, 3].map((n) => ({ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '100', reps: '10', label: String(n) })).concat([{ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '60', reps: '10', label: 'D1', dropSet: true }]) }] });
+      const runWs = (code) => vm.runInContext(code, ws.context);
+      runWs("window.confirm = () => true; startWorkout('chest-density'); state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'barbell-bench', name: 'Barbell Bench Press', sets: [{ set: 1, label: '1', weight: '105', reps: '8', done: true }, { set: 2, label: '2', weight: '', reps: '', done: false }, { set: 3, label: 'D1', weight: '', reps: '', done: false, dropSet: true }] }");
+      const snap = JSON.parse(runWs("JSON.stringify(buildWatchSnapshot())"));
+      const sets28 = snap.exercises[0].sets;
+      assert.equal(sets28[1].suggestedWeight + "|" + sets28[2].suggestedWeight, "105|60", "each open set carries its own watch pre-fill (working follows today's set; drop follows last drop)");
+      assert.ok(read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes("let lastDone = set.flatMap { target in exercise.sets.last { $0.done && $0.drop == target.drop } }"), "the watch pre-fills from the set just done, and drops from their own history");
+      const nb = makeContext({ profile: { bodyweight: 200 } });
+      const blockProg = (createdAt) => JSON.stringify(JSON.stringify({ format: "mass-method-program", version: 1, from: "Coach Kim", createdAt, block: { name: "Coach Kim block", accumulationWeeks: 4, focus: [], start: "next" }, plans: [] }));
+      vm.runInContext(`window.confirm = () => true; handleIncomingFileText(${blockProg("2026-10-01T00:00:00.000Z")})`, nb.context);
+      vm.runInContext(`state.trainingBlock = state.pendingTrainingBlock || state.trainingBlock; state.pendingTrainingBlock = null; handleIncomingFileText(${blockProg("2026-11-05T00:00:00.000Z")})`, nb.context);
+      assert.ok(vm.runInContext("Boolean(state.pendingTrainingBlock) || (state.trainingBlock && state.trainingBlock.sourceKey.includes('2026-11-05'))", nb.context), "the coach's next block with the same settings is accepted");
+      assert.equal(vm.runInContext("mergeById([{ id: 'm-good', date: '2026-10-01T00:00:00.000Z' }], [{ id: 'latest-2026-10-01T00:00:00.000Z', date: '2026-10-01T00:00:00.000Z' }], 100000)[0].id", nb.context), "latest-2026-10-01T00:00:00.000Z", "the latest summary sorts before a tape entry with the same date");
+    }
+    console.log("Audit round 19 checks passed.");
+  }
+  }
+  // Round 17 App Store readiness.
+  assert(read("settings.js").includes("<h2>Privacy policy</h2>"), "A privacy policy must be reachable in the app (5.1.1)");
+  assert(read("index.html").includes("maximum-scale=1.0, user-scalable=no"), "The app must not pinch-zoom like a web page");
+  assert(styles.includes("-webkit-touch-callout: none;") && styles.includes("-webkit-tap-highlight-color: transparent;"), "No text-selection callouts or tap flash on UI chrome");
+  assert(infoPlist.includes("<key>UIUserInterfaceStyle</key>\n\t<string>Dark</string>"), "System dialogs must match the dark app");
+  assert(!/cardioType \|\| "Activity"\)/.test(toolkit.replace(/cardioType === "HealthKit" \? "Apple Health steps" : entry\.cardioType \|\| "Activity"/g, "")), "Users see Apple Health, not HealthKit");
   console.log("Audit round 12 checks passed.");
 }
 }

@@ -47,6 +47,10 @@ struct PeakSetWebView: UIViewRepresentable {
         }
         uiView.stopLoading()
         uiView.navigationDelegate = nil
+        // Queue opened files and watch commands until a new page attaches.
+        PeakSetIncomingFiles.shared.detach()
+        PeakSetWatchBridge.shared.detach()
+        PeakSetTimerService.shared.onAuthorizationDenied = nil
         coordinator.webView = nil
     }
 
@@ -138,6 +142,14 @@ struct PeakSetWebView: UIViewRepresentable {
                     if applied { acknowledge() }
                 }
             }
+            PeakSetTimerService.shared.onAuthorizationDenied = { [weak self] in
+                self?.callJavaScript("handleNativeTimerAuth", argument: ["granted": false])
+            }
+            // A photo saved while the page was reloading (content process killed
+            // under camera memory pressure) would otherwise be an orphan file.
+            let queuedPhotoReplies = pendingPhotoReplies
+            pendingPhotoReplies.removeAll()
+            queuedPhotoReplies.forEach(reportPhoto)
             #if DEBUG
             // Simulator smoke tests: `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='...' xcrun simctl launch ...`
             if let script = ProcessInfo.processInfo.environment["MASSMETHOD_DEBUG_JS"], !script.isEmpty {
@@ -197,15 +209,27 @@ struct PeakSetWebView: UIViewRepresentable {
             webView.reload()
         }
 
+        /// "saved" replies that could not reach the page; replayed on the next load.
+        private var pendingPhotoReplies: [[String: Any]] = []
+
+        private func reportPhoto(_ result: [String: Any]) {
+            callJavaScript("handleNativePhoto", argument: result) { [weak self] delivered in
+                guard !delivered, (result["status"] as? String) == "saved" else { return }
+                self?.pendingPhotoReplies.append(result)
+            }
+        }
+
         private func handlePhoto(_ body: Any) {
             guard let payload = body as? [String: Any], let action = payload["action"] as? String else { return }
             let pose = payload["pose"] as? String ?? ""
             let report: ([String: Any]) -> Void = { [weak self] result in
-                self?.callJavaScript("handleNativePhoto", argument: result)
+                DispatchQueue.main.async { self?.reportPhoto(result) }
             }
             switch action {
             case "capture", "library":
-                guard let presenter = Self.topViewController() else { return }
+                // Always answer: the page waits for a reply before treating the
+                // camera as closed.
+                guard let presenter = Self.topViewController() else { return report(["status": "cancelled"]) }
                 if action == "library" {
                     photoCoordinator.pickFromLibrary(pose: pose, from: presenter, completion: report)
                 } else {
@@ -262,14 +286,23 @@ struct PeakSetWebView: UIViewRepresentable {
                 }
             case "restore":
                 guard let name = payload["name"] as? String,
-                      let location = PeakSetBackupService.Location(rawValue: payload["location"] as? String ?? "") else { return }
+                      let location = PeakSetBackupService.Location(rawValue: payload["location"] as? String ?? "") else {
+                    // The web app waits for a reply before re-enabling Restore.
+                    callJavaScript("handleNativeBackup", argument: ["status": "error", "kind": "restore", "message": "That backup could not be found."])
+                    return
+                }
                 service.read(name: name, location: location) { [weak self] result in
                     switch result {
                     case .success(let (json, date)):
                         self?.callJavaScript("handleNativeBackup", argument: ["status": "restore", "json": json, "location": location.rawValue, "date": ISO8601DateFormatter().string(from: date)])
                     case .failure(let error):
-                        self?.callJavaScript("handleNativeBackup", argument: ["status": "error", "message": error.localizedDescription])
+                        self?.callJavaScript("handleNativeBackup", argument: ["status": "error", "kind": "restore", "message": error.localizedDescription])
                     }
+                }
+            case "restorePhotos":
+                service.requestPhotoRestore { [weak self] copied in
+                    guard copied > 0 else { return }
+                    self?.callJavaScript("handleNativeBackup", argument: ["status": "photosRestored", "count": copied])
                 }
             default:
                 break
@@ -312,14 +345,20 @@ struct PeakSetWebView: UIViewRepresentable {
             if payload["liveActivity"] as? Bool == true,
                let endsAtMs {
                 let endsAt = Date(timeIntervalSince1970: endsAtMs / 1000)
+                // The rest's real start keeps the Lock Screen bar in step with
+                // the app after +15 s or a watch catch-up.
+                let startedAtMs = (payload["startedAt"] as? NSNumber)?.doubleValue
+                let pageStart = startedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }.flatMap { $0 < endsAt && $0 <= Date().addingTimeInterval(1) ? $0 : nil }
+                let startedAt = pageStart ?? Date()
                 PeakSetLiveActivityManager.shared.show(.init(
-                    startedAt: Date(),
+                    startedAt: startedAt,
                     endsAt: endsAt,
                     workoutTitle: payload["workoutTitle"] as? String ?? "Mass Method",
                     exerciseName: payload["exerciseName"] as? String ?? "Next set",
                     nextSetLabel: payload["nextSetLabel"] as? String ?? "",
                     completedSets: (payload["completedSets"] as? NSNumber)?.intValue ?? 0,
-                    totalSets: (payload["totalSets"] as? NSNumber)?.intValue ?? 0
+                    totalSets: (payload["totalSets"] as? NSNumber)?.intValue ?? 0,
+                    startedAtFromPage: pageStart != nil
                 ))
             } else {
                 PeakSetLiveActivityManager.shared.end()
@@ -357,7 +396,7 @@ struct PeakSetWebView: UIViewRepresentable {
                     return
                 }
                 let kilograms = (payload["unit"] as? String) == "kg"
-                service.saveWeight(value: weight, kilograms: kilograms, date: date) { [weak self] result in
+                service.saveWeight(value: weight, kilograms: kilograms, date: date, syncID: payload["id"] as? String) { [weak self] result in
                     self?.sendHealthKitResult(action: action, result.map { value -> [String: Any] in ["status": "weightSaved", "message": value] })
                 }
             case "saveWorkout":
@@ -411,8 +450,12 @@ struct PeakSetWebView: UIViewRepresentable {
                   let data = Data(base64Encoded: base64) else { return }
 
             let safeFilename = filename.replacingOccurrences(of: "/", with: "-")
-            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(safeFilename)
+            // A folder per share: two quick shares of the same filename must
+            // not overwrite (or, on completion, delete) each other's file.
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let fileURL = folder.appendingPathComponent(safeFilename)
             do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 try data.write(to: fileURL, options: .atomic)
                 presentShareSheet(for: fileURL)
             } catch {
@@ -437,15 +480,24 @@ struct PeakSetWebView: UIViewRepresentable {
             }
         }
 
+        /// Removes a shared temp file and its per-share folder.
+        static func removeSharedFile(_ fileURL: URL) {
+            try? FileManager.default.removeItem(at: fileURL)
+            let folder = fileURL.deletingLastPathComponent()
+            if UUID(uuidString: folder.lastPathComponent) != nil {
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
+
         private func presentShareSheet(for fileURL: URL) {
             DispatchQueue.main.async { [weak self] in
                 let activityController = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
                 guard let presenter = Self.topViewController() else {
-                    try? FileManager.default.removeItem(at: fileURL)
+                    Self.removeSharedFile(fileURL)
                     return
                 }
                 activityController.completionWithItemsHandler = { _, completed, _, _ in
-                    try? FileManager.default.removeItem(at: fileURL)
+                    Self.removeSharedFile(fileURL)
                     // Lets the web app tell a sent check-in from a cancelled share.
                     self?.callJavaScript("handleNativeShare", argument: ["filename": fileURL.lastPathComponent, "completed": completed])
                 }

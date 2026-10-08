@@ -68,7 +68,31 @@ function photoSrc(photo) {
 function photoImg(photo, className = "", extra = "") {
   if (!photo) return "";
   const alt = `${poseLabel(photo.pose)}, ${formatShortDate(photo.date)}`;
-  return `<img class="${className}" data-photo-id="${escapeHtml(photo.id)}" src="${escapeHtml(photoSrc(photo))}" alt="${escapeHtml(alt)}" loading="lazy" ${extra} />`;
+  return `<img class="${className}" data-photo-id="${escapeHtml(photo.id)}" src="${escapeHtml(photoSrc(photo))}" alt="${escapeHtml(alt)}" loading="lazy" onerror="photoMissing(this)" ${extra} />`;
+}
+
+// A photo record whose file is not on this iPhone (restored from a backup
+// file, still downloading from iCloud, or deleted) shows a labelled tile
+// instead of a broken image.
+let photoSnapshotTimer = null;
+// The full-screen camera hides the page too; that is not the app leaving.
+let nativeCaptureOpen = false;
+// A pending photo backup runs before the app may be suspended or killed.
+document.addEventListener?.("visibilitychange", () => {
+  if (!document.hidden || !photoSnapshotTimer || nativeCaptureOpen) return;
+  clearTimeout(photoSnapshotTimer);
+  photoSnapshotTimer = null;
+  if (typeof requestAutomaticSnapshot === "function") requestAutomaticSnapshot("photo", true);
+});
+
+function photoMissing(img, force = false) {
+  if (!img || img.dataset.missing) return;
+  // A browser-stored photo renders with an empty src until its file is read.
+  if (!force && !img.getAttribute("src")) return;
+  img.dataset.missing = "1";
+  img.classList.add("photo-missing");
+  img.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400"><rect width="300" height="400" fill="#16213a"/><text x="150" y="190" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">Photo not on</text><text x="150" y="222" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">this iPhone</text></svg>')}`;
+  img.alt = `${img.alt}: photo not on this iPhone`;
 }
 
 function setPhotoPose(pose) {
@@ -88,6 +112,13 @@ function addPhotoRecord(record) {
   saveState();
   toast(`${poseLabel(record.pose)} photo saved.`);
   render();
+  // Photos are weekly, high-value records: back up now, not tomorrow.
+  // One backup after a photo session, not one per pose.
+  clearTimeout(photoSnapshotTimer);
+  photoSnapshotTimer = setTimeout(() => {
+    photoSnapshotTimer = null;
+    if (typeof requestAutomaticSnapshot === "function") requestAutomaticSnapshot("photo", true);
+  }, 5000);
 }
 
 function capturePhoto(source = "camera") {
@@ -95,6 +126,7 @@ function capturePhoto(source = "camera") {
   const bridge = nativePhotoBridge();
   if (bridge) {
     const ghost = latestPhotoForPose(pose);
+    nativeCaptureOpen = true;
     bridge.postMessage({ action: source === "library" ? "library" : "capture", pose, poseLabel: poseLabel(pose), ghostId: ghost?.storage === "native" ? ghost.id : "" });
     return;
   }
@@ -103,6 +135,8 @@ function capturePhoto(source = "camera") {
 
 function handleNativePhoto(payload) {
   if (!payload || typeof payload !== "object") return;
+  // Any reply (saved, cancelled, error) means the camera or picker closed.
+  if (payload.status !== "thumbnail") nativeCaptureOpen = false;
   if (payload.status === "saved" && /^[A-Za-z0-9-]+$/.test(String(payload.id || ""))) {
     addPhotoRecord({ id: payload.id, pose: PHOTO_POSES.some(([key]) => key === payload.pose) ? payload.pose : state.photoPose, date: payload.date || new Date().toISOString(), storage: "native" });
   } else if (payload.status === "imported") {
@@ -195,7 +229,10 @@ async function hydrateBrowserPhotos() {
     try {
       if (!browserPhotoUrls.has(id)) {
         const blob = await photoDbRequest("readonly", (store) => store.get(id));
-        if (!blob) continue;
+        if (!blob) {
+          document.querySelectorAll(`img[data-photo-id="${CSS.escape(id)}"]`).forEach((img) => photoMissing(img, true));
+          continue;
+        }
         browserPhotoUrls.set(id, URL.createObjectURL(blob));
       }
       document.querySelectorAll(`img[data-photo-id="${CSS.escape(id)}"]`).forEach((img) => { img.src = browserPhotoUrls.get(id); });
@@ -352,8 +389,8 @@ function renderPhotoSection() {
         <div><p class="eyebrow">Progress photos</p><h2>${escapeHtml(poseLabel(pose))}</h2></div>
         <span class="badge blue">${progressPhotoList().length} total</span>
       </div>
-      <div class="pose-strip" role="list">
-        ${PHOTO_POSES.map(([key, label]) => `<button role="listitem" class="chip ${key === pose ? "active" : ""}" onclick="setPhotoPose('${key}')">${escapeHtml(label)}${counts[key] ? ` · ${counts[key]}` : ""}</button>`).join("")}
+      <div class="pose-strip" role="group" aria-label="Pose">
+        ${PHOTO_POSES.map(([key, label]) => `<button class="chip ${key === pose ? "active" : ""}" aria-pressed="${key === pose}" onclick="setPhotoPose('${key}')">${escapeHtml(label)}${counts[key] ? ` · ${counts[key]}` : ""}</button>`).join("")}
       </div>
       <p class="muted compact-note">${native ? "Your last photo of this pose appears as a faded guide in the camera so lighting, distance, and angle match." : "Same spot, same light, same distance each week makes the comparison honest."}</p>
       <div class="actions">

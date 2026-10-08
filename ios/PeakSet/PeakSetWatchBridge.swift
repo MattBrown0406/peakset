@@ -16,6 +16,11 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
 
     private let lock = NSLock()
     private let storeKey = "MassMethodPendingWatchCommands"
+    /// Commands the page already applied. A transferUserInfo copy can arrive
+    /// after the sendMessage copy was acknowledged; it must not be applied
+    /// natively again (it would cancel the rest notification the page
+    /// rescheduled).
+    private let acknowledgedKey = "MassMethodAcknowledgedWatchCommands"
     private var commandHandler: CommandHandler?
     private var pendingSnapshot: String?
     private var lastSentSnapshot = ""
@@ -60,6 +65,7 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
               let text = String(data: data, encoding: .utf8) else { return false }
         lock.lock()
         defer { lock.unlock() }
+        if (UserDefaults.standard.stringArray(forKey: acknowledgedKey) ?? []).contains(id) { return false }
         var stored = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
         if stored.contains(where: { $0.contains("\"commandId\":\"\(id)\"") }) { return false }
         stored.append(text)
@@ -72,6 +78,8 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
         defer { lock.unlock() }
         let stored = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
         UserDefaults.standard.set(stored.filter { !$0.contains("\"commandId\":\"\(id)\"") }, forKey: storeKey)
+        let acknowledged = (UserDefaults.standard.stringArray(forKey: acknowledgedKey) ?? []).filter { $0 != id } + [id]
+        UserDefaults.standard.set(Array(acknowledged.suffix(200)), forKey: acknowledgedKey)
     }
 
     private func deliver(_ command: [String: Any]) {
@@ -91,6 +99,9 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
     /// handled while the web app is paused.
     private static let liveActivityKey = "MassMethodLiveActivityEnabled"
 
+    /// The latest active-workout snapshot, for the ready-state Live Activity.
+    @MainActor private var activeSnapshot: [String: Any]?
+
     @MainActor func publish(snapshotJSON: String) {
         let parsed = snapshotJSON.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
         let active = parsed?["active"] as? Bool ?? false
@@ -99,14 +110,40 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
         }
         // The Lock Screen activity lives for the whole workout.
         if workoutActive, !active { PeakSetLiveActivityManager.shared.end() }
+        let started = active && !workoutActive
         workoutActive = active
+        activeSnapshot = active ? parsed : nil
+        if started { ensureLiveActivity() }
         lock.lock()
         pendingSnapshot = snapshotJSON
         lock.unlock()
         flushSnapshot()
     }
 
+    /// Shows the workout's Lock Screen activity in its ready state if none is
+    /// running (foreground only; a no-op when one already exists).
+    @MainActor func ensureLiveActivity() {
+        guard workoutActive, let snapshot = activeSnapshot,
+              UIApplication.shared.applicationState == .active,
+              UserDefaults.standard.object(forKey: Self.liveActivityKey) as? Bool ?? true else { return }
+        let exercises = snapshot["exercises"] as? [[String: Any]] ?? []
+        let current = (snapshot["currentExercise"] as? NSNumber)?.intValue ?? 0
+        let exerciseName = exercises.indices.contains(current) ? exercises[current]["name"] as? String ?? "Next set" : "Next set"
+        PeakSetLiveActivityManager.shared.showReady(
+            workoutTitle: snapshot["title"] as? String ?? "Mass Method",
+            exerciseName: exerciseName,
+            completedSets: (snapshot["completedSets"] as? NSNumber)?.intValue ?? 0,
+            totalSets: (snapshot["totalSets"] as? NSNumber)?.intValue ?? 0
+        )
+    }
+
     private func flushSnapshot() {
+        // Delegate callbacks and publish() both flush; one queue keeps an older
+        // snapshot from landing after a newer one.
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.flushSnapshot() }
+            return
+        }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         lock.lock()
@@ -155,7 +192,17 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
             PeakSetLiveActivityManager.shared.settle()
         case "completeSet":
             let endsAtMs = (command["restEndsAt"] as? NSNumber)?.doubleValue ?? 0
-            guard endsAtMs > 0 else { return }
+            guard endsAtMs > 0 else {
+                // The watch logged the workout's last set: no rest alert or
+                // countdown should outlive it.
+                let done = (command["completedSets"] as? NSNumber)?.intValue ?? 0
+                let total = (command["totalSets"] as? NSNumber)?.intValue ?? 0
+                if total > 0 && done >= total {
+                    PeakSetTimerService.shared.cancel()
+                    PeakSetLiveActivityManager.shared.settle()
+                }
+                return
+            }
             let endsAt = Date(timeIntervalSince1970: endsAtMs / 1000)
             guard endsAt > Date() else { return }
             // This rest replaces any phone rest still pending, so its
@@ -164,8 +211,11 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
             guard UserDefaults.standard.object(forKey: liveActivityKey) as? Bool ?? true else { return }
             // The watch alerts for its own rests, so only the Lock Screen
             // countdown is updated here (no phone notification).
+            // The rest began when the set was finished on the watch.
+            let completedAtMs = (command["completedAt"] as? NSNumber)?.doubleValue ?? 0
+            let completedAt = Date(timeIntervalSince1970: completedAtMs / 1000)
             PeakSetLiveActivityManager.shared.show(.init(
-                startedAt: Date(),
+                startedAt: completedAtMs > 0 && completedAt <= Date() && completedAt < endsAt ? completedAt : Date(),
                 endsAt: endsAt,
                 workoutTitle: command["workoutTitle"] as? String ?? "Mass Method",
                 exerciseName: command["exerciseName"] as? String ?? "Next set",
@@ -179,8 +229,9 @@ final class PeakSetWatchBridge: NSObject, WCSessionDelegate {
             // Only move the phone's notification if it belongs to the rest the
             // watch adjusted.
             let targetMs = (command["restEndsAt"] as? NSNumber)?.doubleValue ?? 0
-            PeakSetTimerService.shared.shift(by: seconds, ifEndingAt: targetMs > 0 ? Date(timeIntervalSince1970: targetMs / 1000) : nil)
-            PeakSetLiveActivityManager.shared.shift(by: seconds)
+            let target = targetMs > 0 ? Date(timeIntervalSince1970: targetMs / 1000) : nil
+            PeakSetTimerService.shared.shift(by: seconds, ifEndingAt: target)
+            PeakSetLiveActivityManager.shared.shift(by: seconds, ifEndingAt: target)
         default:
             break
         }
