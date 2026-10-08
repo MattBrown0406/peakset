@@ -584,6 +584,7 @@ function builderPlanFromForm() {
 function editCustomPlan(id) {
   const plan = state.customPlans.find((item) => item.id === id);
   if (!plan) return;
+  if (builderDraft.length && !state.builderEditingPlanId && !window.confirm("Replace the unsaved workout in the Builder with this template?")) return;
   builderDraft = (plan.exercises || []).map(normalizePlanExercise).filter((spec) => exerciseLibrary.some((item) => item.id === spec.id));
   state.builderFormDraft = { ...defaultBuilderFormDraft(), title: plan.title || "", muscle: plan.muscle || "chest", note: plan.note || "", scheduleDay: plan.scheduleDay || "" };
   state.builderEditingPlanId = id;
@@ -606,7 +607,10 @@ function saveBuilderTemplate() {
   const plan = builderPlanFromForm();
   const editingIndex = state.builderEditingPlanId ? state.customPlans.findIndex((item) => item.id === state.builderEditingPlanId) : -1;
   if (editingIndex !== -1) {
-    state.customPlans[editingIndex] = { ...state.customPlans[editingIndex], ...plan, id: state.customPlans[editingIndex].id };
+    // The form doesn't show phase, plan-level rest or equipment profile; keep
+    // the template's own (a coach's prep template stays a prep template).
+    const existing = state.customPlans[editingIndex];
+    state.customPlans[editingIndex] = { ...existing, ...plan, id: existing.id, phase: existing.phase ?? plan.phase, rest: existing.rest ?? plan.rest, equipmentProfileId: existing.equipmentProfileId ?? plan.equipmentProfileId };
   } else {
     state.customPlans.unshift(plan);
   }
@@ -624,6 +628,8 @@ startCustomWorkout = function startToolkitCustomWorkout() {
   if (!beginWorkoutFromPlan(plan)) return;
   builderDraft = [];
   state.builderFormDraft = defaultBuilderFormDraft();
+  // The draft is gone; a later "Save Changes" must not overwrite the template.
+  state.builderEditingPlanId = null;
   saveState();
   toast("Workout started.");
 };
@@ -826,11 +832,22 @@ function addLiveExercise() {
 
 function removeLiveExercise(index) {
   // app.js protects entered sets and keeps the rest timer attached correctly.
-  return removeActiveWorkoutExercise(index);
+  const count = state.activeWorkout?.exercises?.length;
+  const result = removeActiveWorkoutExercise(index);
+  if (state.activeWorkout?.exercises?.length !== count) {
+    if (openExerciseOptions === index) openExerciseOptions = null;
+    else if (openExerciseOptions !== null && openExerciseOptions > index) openExerciseOptions -= 1;
+  }
+  return result;
 }
 
 function moveLiveExercise(index, direction) {
-  if (openExerciseOptions === index) openExerciseOptions = index + direction;
+  const destination = index + direction;
+  const count = state.activeWorkout?.exercises?.length ?? 0;
+  if (destination >= 0 && destination < count) {
+    if (openExerciseOptions === index) openExerciseOptions = destination;
+    else if (openExerciseOptions === destination) openExerciseOptions = index;
+  }
   return moveActiveWorkoutExercise(index, direction);
 }
 
@@ -1015,6 +1032,7 @@ function deleteEntryButton(kind, entry) {
 const baseBeginWorkoutForScroll = beginWorkoutFromPlan;
 beginWorkoutFromPlan = function beginWorkoutAtTop(plan) {
   // Wrappers in later modules (deload in volume.js) use the return value.
+  if (!state.activeWorkout) openExerciseOptions = null;
   const started = baseBeginWorkoutForScroll(plan);
   scrollToTop();
   return started;
@@ -1266,7 +1284,7 @@ buildCoachReportLines = function buildToolkitCoachReportLines(days, coachNote = 
   addReportSection(lines, "Cardio, Steps, and Posing");
   if (report.prepLogs.length) {
     report.prepLogs.forEach((entry) => {
-      lines.push({ text: `${formatShortDate(entry.date)} - ${entry.cardioType === "HealthKit" ? "Apple Health steps" : entry.cardioType || "Activity"} - ${entry.cardioMinutes || 0} cardio min - ${(entry.steps || 0).toLocaleString(reportLocale())} steps - ${entry.posingMinutes || 0} posing min${entry.notes ? ` - ${entry.notes}` : ""}`, size: 9 });
+      lines.push({ text: `${formatShortDate(entry.date)} - ${entry.cardioType === "HealthKit" ? "Apple Health steps" : entry.cardioType || "Activity"} - ${entry.cardioMinutes || 0} cardio min - ${(entry.steps || 0).toLocaleString(reportNumberLocale())} steps - ${entry.posingMinutes || 0} posing min${entry.notes ? ` - ${entry.notes}` : ""}`, size: 9 });
     });
   } else lines.push({ text: "No prep activity in this range.", size: 10 });
   return lines.map((line) => ({ ...line, text: plainReportText(line.text) }));

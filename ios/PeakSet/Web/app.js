@@ -12,6 +12,12 @@ let storageNearlyFullWarned = false;
 // Gregorian calendar: the PDF only carries Latin-1 text, so Arabic-Indic or
 // Bengali digits (and Hijri dates) would print as blanks.
 let reportFormatting = false;
+// Numbers in a coach PDF: one format throughout (en-US), so a German PDF
+// never mixes "201,4" with "201.4" or prints 1.025 for 1,025.
+function reportNumberLocale() {
+  return reportFormatting ? "en-US" : undefined;
+}
+
 function reportLocale() {
   if (!reportFormatting) return undefined;
   // The athlete's own date order (UK coaches read 07/10/2026 as 7 October),
@@ -796,7 +802,7 @@ function formatWeight(value, digits = 1) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   // `+ 0` turns -0 into 0 so tiny negative changes never read "-0".
-  return (Number(number.toFixed(digits)) + 0).toLocaleString(reportLocale());
+  return (Number(number.toFixed(digits)) + 0).toLocaleString(reportNumberLocale());
 }
 
 function plural(count, singular, pluralForm = `${singular}s`) {
@@ -1561,17 +1567,20 @@ function todaysRecommendedPlan() {
   const fallback = planTemplates.find((plan) => plan.id === (phase === "prep" ? "prep-upper-pump" : phase === "bulking" ? "back-width" : "chest-density"));
   if (!candidates.length) return fallback;
   const lastTrained = Object.fromEntries(rotation.map((muscle) => [muscle, -Infinity]));
+  const lastByTitle = {};
+  const { byId } = exerciseIndexes();
   (state.workoutLogs || []).forEach((log) => {
     const time = Date.parse(log?.date);
     if (!Number.isFinite(time)) return;
-    new Set(workoutLogSets(log).map((set) => exerciseLibrary.find((item) => item.id === loggedExerciseId(set))?.muscle)).forEach((muscle) => {
+    if (log.title) lastByTitle[log.title] = Math.max(lastByTitle[log.title] ?? -Infinity, time);
+    new Set(workoutLogSets(log).map((set) => byId.get(loggedExerciseId(set))?.muscle)).forEach((muscle) => {
       if (muscle in lastTrained) lastTrained[muscle] = Math.max(lastTrained[muscle], time);
     });
   });
-  const lastTitle = state.workoutLogs?.[0]?.title;
   const muscle = rotation.filter((item) => candidates.some((plan) => plan.muscle === item)).sort((a, b) => lastTrained[a] - lastTrained[b] || rotation.indexOf(a) - rotation.indexOf(b))[0];
-  const forMuscle = candidates.filter((plan) => plan.muscle === muscle);
-  return forMuscle.find((plan) => plan.title !== lastTitle) || forMuscle[0] || fallback;
+  // Within the muscle group, the plan done least recently (each plan gets its turn).
+  const forMuscle = candidates.filter((plan) => plan.muscle === muscle).sort((a, b) => (lastByTitle[a.title] ?? -Infinity) - (lastByTitle[b.title] ?? -Infinity));
+  return forMuscle[0] || fallback;
 }
 
 function todaysSelectedPlan() {
@@ -1936,7 +1945,7 @@ function buildCoachReportLines(days, coachNote = "") {
 
   addReportSection(lines, `Summary (last ${days} days)`);
   lines.push({ text: `Workouts: ${report.workouts.length}`, size: 10 });
-  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString(reportLocale())} ${weightUnit()}`, size: 10 });
+  lines.push({ text: `Training volume: ${Math.round(report.volume).toLocaleString(reportNumberLocale())} ${weightUnit()}`, size: 10 });
   lines.push({ text: `Body weight logs: ${report.weights.length}`, size: 10 });
   lines.push({ text: `Weight change in range: ${report.weightDelta === null ? "Needs 2 weigh-ins" : `${report.weightDelta} ${weightUnit()}`}`, size: 10 });
   lines.push({ text: `Measurement check-ins: ${report.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).length}`, size: 10 });
@@ -1964,7 +1973,7 @@ function buildCoachReportLines(days, coachNote = "") {
   if (report.workouts.length) {
     report.workouts.forEach((log) => {
       lines.push({ text: `${formatShortDate(log.date)} - ${log.title || "Workout"}`, size: 11, bold: true });
-      lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString(reportLocale())} ${weightUnit()} volume`, size: 10 });
+      lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString(reportNumberLocale())} ${weightUnit()} volume`, size: 10 });
       // Null-prototype: an exercise named "constructor" must not hit Object.prototype.
       const grouped = (log.sets || []).reduce((groups, set) => {
         const key = String(set.exercise ?? "Exercise");

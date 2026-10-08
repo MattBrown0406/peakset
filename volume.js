@@ -453,7 +453,9 @@ renderPlans = function renderPlansWithVolume() {
   // Plans first: the block form and volume chart (13 bars) pushed the first
   // plan two screens down. A running block keeps a one-line status on top.
   const info = blockWeekInfo();
-  const status = info && info.status !== "complete" ? `<div class="block-banner ${info.deload ? "deload" : ""}">${escapeHtml(renderBlockStatusLine(info))} <a href="#training-block" class="inline-link">Block details</a></div>` : "";
+  const status = info && info.status !== "complete"
+    ? `<div class="block-banner ${info.deload ? "deload" : ""}">${escapeHtml(renderBlockStatusLine(info))} <a href="#training-block" class="inline-link">Block details</a></div>`
+    : `<p class="muted compact-note"><a href="#training-block" class="inline-link">Plan a training block and check weekly volume</a> (below the plans)</p>`;
   return `${html.slice(0, insertAt)}${status}${html.slice(insertAt)}<div class="grid volume-stack" id="training-block" style="margin-top:16px">${renderTrainingBlockCard()}${renderVolumeCard()}</div>`;
 };
 

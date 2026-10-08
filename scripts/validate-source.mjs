@@ -1341,6 +1341,20 @@ console.log("Audit round 8 checks passed.");
     const summary = run19("JSON.stringify(workoutExerciseSummary({ sets: [{ exercise: 'Bench', weight: '225', reps: '5' }, { exercise: 'Bench', weight: '245', reps: '3' }, { exercise: 'Plank', weight: '', reps: '60' }] }))");
     assert.equal(summary, JSON.stringify([{ name: "Bench", sets: 2, weight: 245, reps: 3 }, { name: "Plank", sets: 1, weight: null, reps: 60 }]), "coach workout summary keeps the best set per exercise");
     assert.ok(!app.includes("report.workouts.slice(0, 8)"), "Logbook lists every workout in range");
+    // Round 18 verification.
+    assert.ok(app.includes("toLocaleString(reportNumberLocale())") && !/toLocaleString\(reportLocale\(\)\)/.test(app + toolkit), "PDF numbers use one format; only dates follow the device locale");
+    run19("builderDraft = [{ id: 'barbell-bench', sets: 3, reps: '8', rest: 90, dropSets: 0, group: '', setType: 'standard' }]; state.builderFormDraft.title = 'Keep Me'; saveBuilderTemplate()");
+    const keepId = run19("state.customPlans[0].id");
+    run19(`state.customPlans[0].phase = 'prep'; state.customPlans[0].rest = 150; editCustomPlan('${keepId}'); cancelWorkout(); startCustomWorkout(); cancelWorkout()`);
+    assert.equal(run19("state.builderEditingPlanId"), null, "starting a workout from the Builder ends template editing");
+    run19(`editCustomPlan('${keepId}'); saveBuilderTemplate()`);
+    assert.equal(run19("state.customPlans.find((plan) => plan.id === '" + keepId + "').phase + '|' + state.customPlans.find((plan) => plan.id === '" + keepId + "').rest"), "prep|150", "editing keeps the template's phase and rest");
+    run19("state.phase = 'prep'; state.workoutLogs = []; state.customPlans = []");
+    const prepSeen = new Set();
+    for (let i = 0; i < 12; i += 1) {
+      prepSeen.add(run19(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'rot-${i}', title: plan.title, date: new Date(Date.now() + ${i} * 60000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); return plan.id; })()`));
+    }
+    assert.ok(prepSeen.size >= 5, `prep rotation reaches the prep plans (saw ${[...prepSeen].join(", ")})`);
   }
   // Round 17 App Store readiness.
   assert(read("settings.js").includes("<h2>Privacy policy</h2>"), "A privacy policy must be reachable in the app (5.1.1)");

@@ -312,6 +312,7 @@ function convertAthleteHistory(athlete, targetUnits) {
       if (!["id", "date", "bodyFat"].includes(key) && typeof entry[key] === "number") entry[key] = scale(entry[key], lengthFactor);
     });
   });
+  safeArray(athlete.workoutLogs).forEach((log) => safeArray(log.exercises).forEach((item) => { item.weight = scale(item.weight, weightFactor); }));
 }
 
 function mergeById(existing, incoming, limitDays = COACH_HISTORY_DAYS) {
@@ -367,7 +368,9 @@ async function importCoachPackage(pkg) {
     updatedAt: newer ? generatedAt : existing.updatedAt,
     weightLogs: mergeById(existing.weightLogs, incomingUnitsMatch ? cleanList(pkg.weightLogs, CLEAN.weight) : []),
     measurements: mergeById(existing.measurements, incomingUnitsMatch ? cleanList(pkg.measurements, CLEAN.measurement) : [], 365).slice(0, 30),
-    workoutLogs: mergeById(existing.workoutLogs, cleanList(pkg.workoutLogs, CLEAN.workout)).slice(0, 60),
+    // Exercise summaries are shown for the newest workouts only; dropping
+    // them from older entries keeps a full roster inside the storage budget.
+    workoutLogs: mergeById(existing.workoutLogs, cleanList(pkg.workoutLogs, CLEAN.workout)).slice(0, 60).map((log, index) => (index < 15 ? log : (({ exercises, ...rest }) => rest)(log))),
     weeklyCheckIns: mergeById(existing.weeklyCheckIns, cleanList(pkg.weeklyCheckIns, CLEAN.checkIn)).slice(0, 40),
     prepLogs: mergeById(existing.prepLogs, cleanList(pkg.prepLogs, CLEAN.prep)).slice(0, 120),
     volumeWeeks: newer ? cleanVolumeWeeks(pkg.volumeWeeks) : safeArray(existing.volumeWeeks),
@@ -660,7 +663,7 @@ function renderAthleteDetail(athlete) {
     <section class="card pad" style="margin-top:12px"><div class="card-head"><div><p class="eyebrow">Weekly volume</p><h2>${athleteVolumeWeek(athlete)?.weekStart ? `Hard sets, week of ${escapeHtml(formatShortDate(athleteVolumeWeek(athlete).weekStart))}` : "Hard sets"}</h2></div>${athlete.trainingBlock ? `<span class="badge blue">${escapeHtml(athlete.trainingBlock.statusLine || athlete.trainingBlock.name || "")}</span>` : ""}</div><div class="volume-list">${renderAthleteVolume(athlete)}</div></section>
     ${safeArray(athlete.photos).length ? `<section class="card pad" style="margin-top:12px"><p class="eyebrow">Progress photos</p><div class="photo-strip">${safeArray(athlete.photos).map((photo) => `<figure class="photo-thumb">${photoImg(photo)}<figcaption>${escapeHtml(poseLabel(photo.pose))}<br />${formatShortDate(photo.date)}</figcaption></figure>`).join("")}</div></section>` : ""}
     <div class="grid two" style="margin-top:12px">
-      <section class="card pad"><h2>Recent workouts</h2><div class="exercise-list">${safeArray(athlete.workoutLogs).slice(0, 8).map((log) => `<div class="exercise-row"><div><strong>${escapeHtml(log.title || "Workout")}</strong><p class="muted" style="margin:2px 0 0">${formatShortDate(log.date)} · ${plural(Number(log.setCount ?? workoutLogSets(log).length) || 0, "set")}</p>${safeArray(log.exercises).length ? `<p class="muted compact-note" style="margin:2px 0 0">${safeArray(log.exercises).map((item) => `${escapeHtml(item.name)} ${item.sets}×${item.weight ? ` best ${escapeHtml(formatWeight(item.weight))}${athlete.profile?.units === "metric" ? "kg" : "lb"}` : ""}${item.reps ? ` × ${escapeHtml(String(item.reps))}` : ""}`).join(" · ")}</p>` : ""}</div></div>`).join("") || '<p class="muted">No workouts in range.</p>'}</div></section>
+      <section class="card pad"><h2>Recent workouts</h2><div class="exercise-list">${safeArray(athlete.workoutLogs).slice(0, 8).map((log) => `<div class="exercise-row"><div><strong>${escapeHtml(log.title || "Workout")}</strong><p class="muted" style="margin:2px 0 0">${formatShortDate(log.date)} · ${plural(Number(log.setCount ?? workoutLogSets(log).length) || 0, "set")}</p>${safeArray(log.exercises).length ? `<p class="muted compact-note" style="margin:2px 0 0">${safeArray(log.exercises).map((item) => `${escapeHtml(item.name)}: ${plural(Number(item.sets) || 0, "set")}${item.weight ? `, best ${escapeHtml(formatWeight(item.weight))} ${athlete.profile?.units === "metric" ? "kg" : "lb"}${item.reps ? ` × ${escapeHtml(String(item.reps))}` : ""}` : item.reps ? `, best ${escapeHtml(String(item.reps))} reps` : ""}`).join(" · ")}</p>` : ""}</div></div>`).join("") || '<p class="muted">No workouts in range.</p>'}</div></section>
       <section class="card pad"><h2>Recovery check-ins</h2><div class="exercise-list">${safeArray(athlete.weeklyCheckIns).slice(0, 6).map((entry) => `<div class="exercise-row"><span>${formatShortDate(entry.date)} · Sleep ${escapeHtml(entry.sleep ?? "--")}h</span><strong>Energy ${escapeHtml(entry.energy ?? "--")} · Recovery ${escapeHtml(entry.recovery ?? "--")}/5</strong></div>${entry.notes ? `<p class="muted compact-note">${escapeHtml(entry.notes)}</p>` : ""}`).join("") || '<p class="muted">No check-ins in range.</p>'}</div></section>
     </div>
     <section class="card pad" style="margin-top:12px">

@@ -1888,7 +1888,12 @@ img {
 }
 
 .exercise-row:has(> span + strong + .compact-btn) {
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.exercise-row:has(> span + strong + .compact-btn) > strong {
+  white-space: normal;
+  text-align: right;
 }
 
 .exercise-row > .compact-btn {
