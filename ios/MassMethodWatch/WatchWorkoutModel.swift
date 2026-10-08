@@ -69,6 +69,8 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
 
     private var followCurrent = true
     private var restAlertTask: Task<Void, Never>?
+    /// End time of the rest whose alert is currently scheduled or delivered.
+    private var lastScheduledRestEnd: Date?
     private var loadingDraft = false
     private var draftEdited = false
     /// Sets completed here that the phone has not confirmed yet.
@@ -371,8 +373,13 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         // (the phone may be locked), so the watch schedules its own; it fires
         // even with the wrist down when the app is suspended.
         // Clear the previous rest's delivered alert so they don't pile up in
-        // Notification Center.
-        center.removeDeliveredNotifications(withIdentifiers: [restNotificationID])
+        // Notification Center, but only when a different rest starts: a late
+        // phone snapshot for the same rest must not dismiss the alert that
+        // just fired before the athlete has seen it.
+        if let previous = lastScheduledRestEnd, previous != endsAt {
+            center.removeDeliveredNotifications(withIdentifiers: [restNotificationID])
+        }
+        lastScheduledRestEnd = endsAt
         if localRestStartedOnWatch, let localRest, localRest.end == endsAt {
             let content = UNMutableNotificationContent()
             content.title = "Rest complete"

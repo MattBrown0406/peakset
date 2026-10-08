@@ -205,8 +205,10 @@ function applyWatchCommand(command) {
     }
     const set = exercise?.sets?.[setIndex];
     if (!set || set.done) return false;
-    if (!isRepsOnlyExercise(exercise)) updateSet(exIndex, setIndex, "weight", String(command.weight ?? ""));
-    updateSet(exIndex, setIndex, "reps", String(command.reps ?? ""));
+    // The watch sends plain numbers; anything else is dropped before it is stored.
+    const numericText = (value) => { const text = String(value ?? "").trim(); return /^\d{1,6}(\.\d{1,3})?$/.test(text) ? text : ""; };
+    if (!isRepsOnlyExercise(exercise)) updateSet(exIndex, setIndex, "weight", numericText(command.weight));
+    updateSet(exIndex, setIndex, "reps", numericText(command.reps));
     // startTimer replaces the timer object, so identity tells whether this
     // completion started a new rest (start times can match to the millisecond).
     const timerObjectBefore = state.timer;

@@ -38,11 +38,14 @@ function defaultBuilderFormDraft() {
 
 // Sets saved by early builds carry only a name, and some exercises were
 // renamed since (e.g. "Seated Calf Raise" -> "Seated Calf Raises").
+let loggedNameIndex = null;
 function exerciseForLoggedName(name) {
   const normalize = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/s$/, "");
   const wanted = normalize(name);
   if (!wanted) return null;
-  return exerciseLibrary.find((item) => normalize(item.name) === wanted) || null;
+  // One index instead of a library scan per set (runs on every launch).
+  if (!loggedNameIndex) loggedNameIndex = new Map(exerciseLibrary.map((item) => [normalize(item.name), item]));
+  return loggedNameIndex.get(wanted) || null;
 }
 
 function toolkitMigrateState() {
@@ -67,8 +70,19 @@ function toolkitMigrateState() {
   if (!state.equipmentProfiles.length) state.equipmentProfiles = [{ id: "all-equipment", name: "Commercial Gym", equipment: [] }];
   if (!state.equipmentProfiles.some((profile) => profile.id === state.activeEquipmentProfileId)) state.activeEquipmentProfileId = state.equipmentProfiles[0].id;
   const objectsOnly = (value) => (Array.isArray(value) ? value.filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry)) : []);
-  state.weeklyCheckIns = objectsOnly(state.weeklyCheckIns);
-  state.prepLogs = objectsOnly(state.prepLogs);
+  // Restored numbers can be "1e400" or objects; the Progress tab prints them.
+  const finiteOr = (value, fallback) => { const number = finiteOrNull(value); return number === null ? fallback : number; };
+  state.weeklyCheckIns = objectsOnly(state.weeklyCheckIns).map((entry) => ({
+    ...entry,
+    sleep: finiteOrNull(entry.sleep), energy: finiteOrNull(entry.energy), hunger: finiteOrNull(entry.hunger), digestion: finiteOrNull(entry.digestion), recovery: finiteOrNull(entry.recovery),
+    notes: typeof entry.notes === "string" ? entry.notes : ""
+  }));
+  state.prepLogs = objectsOnly(state.prepLogs).map((entry) => ({
+    ...entry,
+    cardioType: typeof entry.cardioType === "string" ? entry.cardioType : "",
+    cardioMinutes: finiteOr(entry.cardioMinutes, 0), steps: finiteOr(entry.steps, 0), posingMinutes: finiteOr(entry.posingMinutes, 0),
+    notes: typeof entry.notes === "string" ? entry.notes : ""
+  }));
   if (typeof state.librarySearch !== "string") state.librarySearch = "";
   if (!state.libraryEquipmentFilter) state.libraryEquipmentFilter = "all";
   if (!state.measurementTrendKey) state.measurementTrendKey = "waist";
@@ -87,8 +101,9 @@ function toolkitMigrateState() {
   state.customPlans = (state.customPlans || []).filter((plan) => plan && typeof plan === "object" && !String(plan.id || "").startsWith("quick-")).map((plan) => ({
     ...plan,
     id: safeId.test(String(plan.id)) ? plan.id : `custom-${crypto.randomUUID()}`,
-    exercises: (Array.isArray(plan?.exercises) ? plan.exercises : []).map((draft) => {
-      if (Array.isArray(draft)) return draft;
+    // Every row goes through normalizePlanExercise so a restored array row
+    // with an object in the reps slot cannot render "[object Object] x 8".
+    exercises: (Array.isArray(plan?.exercises) ? plan.exercises : []).slice(0, MAX_PLAN_EXERCISES).map((draft) => {
       const spec = normalizePlanExercise(draft);
       return [spec.id, spec.sets, spec.reps, spec.rest, spec.dropSets, { group: spec.group, setType: spec.setType }];
     })
@@ -97,7 +112,17 @@ function toolkitMigrateState() {
     ...log,
     sets: workoutLogSets(log).filter((set) => set && typeof set === "object").map((set) => {
       const exercise = exerciseLibrary.find((item) => item.id === set.exerciseId) || exerciseForLoggedName(set.exercise);
-      return { setType: "standard", rir: "", ...set, exerciseId: set.exerciseId || exercise?.id || "" };
+      const text = (value) => (typeof value === "string" || typeof value === "number") && Number.isFinite(Number(value)) ? String(value) : "";
+      // Set fields are rendered as text everywhere; an object here printed "[object Object] RIR".
+      return {
+        ...set,
+        exercise: typeof set.exercise === "string" ? set.exercise : String(exercise?.name || ""),
+        weight: text(set.weight), reps: text(set.reps),
+        rir: set.rir === "failure" ? "failure" : text(set.rir),
+        setType: typeof set.setType === "string" ? set.setType : "standard",
+        label: typeof set.label === "string" || typeof set.label === "number" ? String(set.label) : "",
+        exerciseId: set.exerciseId || exercise?.id || ""
+      };
     })
   }));
   state.measurements = (state.measurements || []).map((entry) => ({
@@ -120,16 +145,22 @@ function clampDropSetCount(value) {
   return Math.max(0, Math.min(4, Math.trunc(Number(value)) || 0));
 }
 
+// Reps are display text ("8-12", "20 sec", "12 each"); anything else is noise.
+function planRepsText(value) {
+  const text = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
+  return /^[0-9A-Za-z .\-–]{1,20}$/.test(text) ? text : "8-12";
+}
+
 function normalizePlanExercise(spec) {
   if (!spec || typeof spec !== "object") return { id: "", sets: 3, reps: "8-12", rest: DEFAULT_REST_SECONDS, dropSets: 0, group: "", setType: "standard" };
   if (Array.isArray(spec)) {
     const [id, sets, reps, rest, dropSets = 0, metadata = {}] = spec;
-    return { id, sets: clampSetCount(sets), reps: String(reps || "8-12"), rest: clampRestSeconds(rest), dropSets: clampDropSetCount(dropSets), group: metadata?.group || "", setType: metadata?.setType || "standard" };
+    return { id, sets: clampSetCount(sets), reps: planRepsText(reps), rest: clampRestSeconds(rest), dropSets: clampDropSetCount(dropSets), group: String(metadata?.group ?? ""), setType: String(metadata?.setType ?? "standard") };
   }
   return {
     id: spec.id,
     sets: clampSetCount(spec.sets),
-    reps: String(spec.reps || "8-12"),
+    reps: planRepsText(spec.reps),
     rest: clampRestSeconds(spec.rest),
     dropSets: clampDropSetCount(spec.dropSets),
     group: spec.group || "",
@@ -629,7 +660,7 @@ beginWorkoutFromPlan = function beginToolkitWorkout(plan) {
     toast("Finish or cancel your current workout before starting another.");
     return false;
   }
-  const specs = (Array.isArray(plan?.exercises) ? plan.exercises : []).map(normalizePlanExercise).filter((spec) => exerciseLibrary.some((item) => item.id === spec.id));
+  const specs = (Array.isArray(plan?.exercises) ? plan.exercises : []).map(normalizePlanExercise).filter((spec) => exerciseLibrary.some((item) => item.id === spec.id)).slice(0, MAX_PLAN_EXERCISES);
   const planIds = new Set(specs.map((spec) => spec.id));
   const usedIds = new Set();
   const quickLog = String(plan?.id || "").startsWith("quick-");
@@ -1051,7 +1082,8 @@ renderProgress = function renderToolkitProgress() {
 const baseCoachReportData = coachReportData;
 coachReportData = function toolkitCoachReport(days) {
   const report = baseCoachReportData(days);
-  const cutoff = Date.now() - Number(days) * 86400000;
+  // The base already coerced junk ranges; reuse its day count for the cutoff.
+  const cutoff = Date.now() - Number(report.days) * 86400000;
   return { ...report, weeklyCheckIns: state.weeklyCheckIns.filter((entry) => new Date(entry.date).getTime() >= cutoff), prepLogs: state.prepLogs.filter((entry) => new Date(entry.date).getTime() >= cutoff) };
 };
 

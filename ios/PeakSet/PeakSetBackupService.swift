@@ -41,6 +41,11 @@ final class PeakSetBackupService {
     private let downloadTimeout: TimeInterval = 30
     private let fileManager = FileManager.default
     private let keepCount = 30
+    /// Set once a restore from iCloud succeeded this launch; only then do
+    /// later list() calls keep copying photos that were still downloading.
+    /// Without it, opening the More tab on a fresh install would pull every
+    /// mirrored photo for an account the athlete has not restored.
+    private let restoredFromICloud = PeakSetAtomicFlag()
 
     private init() {}
 
@@ -105,7 +110,9 @@ final class PeakSetBackupService {
             }
             completion(files.sorted { $0.date > $1.date })
             // Photos still downloading when a restore ran are copied as they land.
-            self.photoQueue.async { self.restorePhotosFromICloud() }
+            if self.restoredFromICloud.isSet {
+                self.photoQueue.async { self.restorePhotosFromICloud() }
+            }
         }
     }
 
@@ -130,6 +137,7 @@ final class PeakSetBackupService {
                 guard let text = String(data: data, encoding: .utf8) else { throw BackupError.invalidPayload }
                 completion(.success((text, date)))
                 if location == .iCloud {
+                    self.restoredFromICloud.set()
                     self.photoQueue.async { self.restorePhotosFromICloud() }
                 }
             } catch {
@@ -250,6 +258,22 @@ final class PeakSetBackupService {
     static func safeFilename(_ name: String) -> String {
         let cleaned = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: "..", with: "-")
         return cleaned.isEmpty ? "mass-method-backup.json" : cleaned
+    }
+}
+
+/// A set-once flag readable from any queue.
+final class PeakSetAtomicFlag {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
+    func set() {
+        lock.lock(); defer { lock.unlock() }
+        value = true
     }
 }
 

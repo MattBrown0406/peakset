@@ -23,9 +23,27 @@ function coachMigrateState() {
   if (!state.coach.athletes || typeof state.coach.athletes !== "object" || Array.isArray(state.coach.athletes)) state.coach.athletes = {};
   // Ids end up inside inline handlers; drop anything a crafted backup could abuse.
   Object.entries(state.coach.athletes).forEach(([key, athlete]) => {
-    if (!SAFE_ID.test(key) || athlete?.id !== key) delete state.coach.athletes[key];
+    if (!SAFE_ID.test(key) || key in Object.prototype || athlete?.id !== key) delete state.coach.athletes[key];
   });
-  if (typeof state.coach.selectedAthleteId !== "string") state.coach.selectedAthleteId = "";
+  if (typeof state.coach.selectedAthleteId !== "string" || !athleteById(state.coach.selectedAthleteId)) state.coach.selectedAthleteId = "";
+  // Restored roster entries skip the import-time caps; keep the fields the UI graphs finite.
+  const objects = (value) => safeArray(value).filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry));
+  const textOr = (value, fallback = "") => (typeof value === "string" ? value : fallback);
+  Object.values(state.coach.athletes).forEach((athlete) => {
+    if (!athlete || typeof athlete !== "object") return;
+    athlete.name = textOr(athlete.name).slice(0, 60);
+    athlete.notes = textOr(athlete.notes).slice(0, 5000);
+    if (!athlete.profile || typeof athlete.profile !== "object") athlete.profile = {};
+    athlete.weightLogs = objects(athlete.weightLogs).map((entry) => ({ ...entry, bodyweight: finiteOrNull(entry.bodyweight), note: textOr(entry.note) }));
+    athlete.measurements = objects(athlete.measurements);
+    athlete.workoutLogs = objects(athlete.workoutLogs).map((entry) => ({ ...entry, title: textOr(entry.title, "Workout"), setCount: finiteOrNull(entry.setCount) ?? 0, volume: finiteOrNull(entry.volume) ?? 0, sets: safeArray(entry.sets) }));
+    athlete.weeklyCheckIns = objects(athlete.weeklyCheckIns).map((entry) => ({ ...entry, sleep: finiteOrNull(entry.sleep), energy: finiteOrNull(entry.energy), hunger: finiteOrNull(entry.hunger), digestion: finiteOrNull(entry.digestion), recovery: finiteOrNull(entry.recovery), notes: textOr(entry.notes) }));
+    athlete.prepLogs = objects(athlete.prepLogs).map((entry) => ({ ...entry, cardioType: textOr(entry.cardioType), cardioMinutes: finiteOrNull(entry.cardioMinutes) ?? 0, steps: finiteOrNull(entry.steps) ?? 0, posingMinutes: finiteOrNull(entry.posingMinutes) ?? 0 }));
+    athlete.volumeWeeks = objects(athlete.volumeWeeks).map((week) => ({ ...week, totals: Object.fromEntries(Object.entries(week.totals && typeof week.totals === "object" ? week.totals : {}).map(([key, value]) => [key, finiteOrNull(value) ?? 0])) }));
+    athlete.photos = objects(athlete.photos).filter((photo) => /^[A-Za-z0-9-]+$/.test(String(photo.id || "")));
+    athlete.packages = objects(athlete.packages);
+    if (athlete.trainingBlock && typeof athlete.trainingBlock !== "object") athlete.trainingBlock = null;
+  });
   if (state.coachMessage && typeof state.coachMessage !== "object") state.coachMessage = null;
   if (!state.lastCoachPackageAt) state.lastCoachPackageAt = null;
 }
@@ -38,6 +56,11 @@ function coachAthletes() {
 
 function safeArray(value) {
   return Array.isArray(value) ? value.filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry)) : [];
+}
+
+function athleteById(id) {
+  const athletes = state.coach?.athletes;
+  return athletes && typeof id === "string" && Object.hasOwn(athletes, id) ? athletes[id] : undefined;
 }
 
 function athleteDisplayName(athlete) {
@@ -270,7 +293,7 @@ function mergeById(existing, incoming, limitDays = COACH_HISTORY_DAYS) {
 
 async function importCoachPackage(pkg) {
   const athleteId = String(pkg?.athlete?.id || "");
-  if (!/^[A-Za-z0-9-]{8,64}$/.test(athleteId)) {
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(athleteId) || athleteId in Object.prototype) {
     toast("That check-in is missing an athlete id.");
     return false;
   }
@@ -284,7 +307,7 @@ async function importCoachPackage(pkg) {
   }
   const generatedAt = cleanDate(pkg.generatedAt) || new Date().toISOString();
   const profile = cleanAthleteProfile(pkg.athlete);
-  const before = state.coach.athletes[athleteId];
+  const before = athleteById(athleteId);
   const storedPhotos = [];
   for (const photo of safeArray(pkg.photos).slice(0, COACH_PHOTOS_PER_PACKAGE)) {
     const date = cleanDate(photo.date);
@@ -294,7 +317,7 @@ async function importCoachPackage(pkg) {
     if (stored) storedPhotos.push({ ...stored, pose, date });
   }
   // Re-read after the awaits so a concurrent change is not overwritten.
-  const existing = state.coach.athletes[athleteId] || { id: athleteId, notes: "", photos: [], packages: [] };
+  const existing = athleteById(athleteId) || { id: athleteId, notes: "", photos: [], packages: [] };
   const newer = !existing.updatedAt || new Date(generatedAt) >= new Date(existing.updatedAt);
   if (newer) {
     convertAthleteHistory(existing, profile.units);
@@ -320,7 +343,7 @@ async function importCoachPackage(pkg) {
     photos: photos.slice(0, COACH_PHOTOS_PER_ATHLETE),
     packages: [{ generatedAt, rangeDays: cleanNumber(pkg.rangeDays, 1, 366) }, ...safeArray(existing.packages)].slice(0, 30)
   };
-  const previous = state.coach.athletes[athleteId];
+  const previous = athleteById(athleteId);
   state.coach.athletes[athleteId] = athlete;
   if (JSON.stringify(state.coach).length > COACH_STORAGE_BUDGET) {
     // Never let coach data crowd out the coach's own logbook.
@@ -352,6 +375,7 @@ function sanitizePlan(plan, from) {
   const exercises = (Array.isArray(plan?.exercises) ? plan.exercises : [])
     .map((spec) => normalizePlanExercise(spec))
     .filter((spec) => exerciseLibrary.some((exercise) => exercise.id === spec.id))
+    .slice(0, MAX_PLAN_EXERCISES)
     .map((spec) => [
       spec.id,
       spec.sets,
@@ -377,7 +401,7 @@ function sanitizePlan(plan, from) {
 
 function importProgram(program) {
   const from = String(program?.from || "your coach").slice(0, 60);
-  const plans = (Array.isArray(program?.plans) ? program.plans : []).map((plan) => sanitizePlan(plan, from)).filter(Boolean);
+  const plans = (Array.isArray(program?.plans) ? program.plans : []).slice(0, 50).map((plan) => sanitizePlan(plan, from)).filter(Boolean);
   const block = program?.block && typeof program.block === "object" ? program.block : null;
   if (!plans.length && !block) {
     toast("That program has no workouts this app can load.");
@@ -443,7 +467,7 @@ function toggleProgramFocus(key) {
 }
 
 async function sendProgramToAthlete(athleteId) {
-  const athlete = state.coach.athletes[athleteId];
+  const athlete = athleteById(athleteId);
   const plans = state.customPlans.filter((plan) => coachProgramDraft.planIds.includes(plan.id));
   if (!plans.length && !coachProgramDraft.blockWeeks) {
     toast("Pick at least one saved template or a training block.");
@@ -477,7 +501,7 @@ function saveCoachName(value) {
 }
 
 function openAthlete(id) {
-  state.coach.selectedAthleteId = state.coach.athletes[id] ? id : "";
+  state.coach.selectedAthleteId = athleteById(id) ? id : "";
   coachProgramDraft = { planIds: [], message: "", blockWeeks: 0, focus: [] };
   state.view = "coach";
   saveState();
@@ -486,13 +510,13 @@ function openAthlete(id) {
 }
 
 function saveAthleteNotes(id, value) {
-  if (!state.coach.athletes[id]) return;
+  if (!athleteById(id)) return;
   state.coach.athletes[id].notes = String(value || "").slice(0, 5000);
   saveState();
 }
 
 function removeAthlete(id) {
-  const athlete = state.coach.athletes[id];
+  const athlete = athleteById(id);
   if (!athlete || !window.confirm(`Remove ${athleteDisplayName(athlete)} and their check-ins from your roster?`)) return;
   safeArray(athlete.photos).forEach(deletePhotoFile);
   delete state.coach.athletes[id];
@@ -605,7 +629,7 @@ function renderAthleteDetail(athlete) {
 }
 
 function renderCoach() {
-  const selected = state.coach.athletes[state.coach.selectedAthleteId];
+  const selected = athleteById(state.coach.selectedAthleteId);
   return selected ? renderAthleteDetail(selected) : renderRoster();
 }
 

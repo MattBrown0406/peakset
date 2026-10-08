@@ -295,7 +295,7 @@ registerMoreSection(28, () => `
     <p class="muted">Import body weight, body fat %, lean body mass, and waist from Apple Health (smart scales, tape apps, DEXA, and more). Mass Method keeps the first reading each day, and anything you log by hand always wins.</p>
     <label class="toggle-row"><input type="checkbox" ${state.healthBody?.enabled ? "checked" : ""} onchange="setHealthBodyEnabled(this.checked)" /> <span>Import body data from Apple Health automatically</span></label>
     ${state.healthBody?.enabled ? `
-      <p class="muted compact-note">${escapeHtml(state.healthBody.lastResult || "Waiting for the first sync.")}${state.healthBody.lastSyncAt ? ` Last checked ${new Date(state.healthBody.lastSyncAt).toLocaleString()}.` : ""}</p>
+      <p class="muted compact-note">${escapeHtml(state.healthBody.lastResult || "Waiting for the first sync.")}${Number.isFinite(Date.parse(state.healthBody.lastSyncAt)) ? ` Last checked ${new Date(state.healthBody.lastSyncAt).toLocaleString()}.` : ""}</p>
       <div class="actions"><button class="secondary-btn" onclick="syncHealthNow()">Sync Now</button><button class="ghost-btn danger" onclick="removeHealthImports()">Remove Imported Data</button></div>
     ` : ""}
     <p class="muted compact-note">If nothing imports, allow Mass Method under Settings › Health › Data Access &amp; Devices.</p>

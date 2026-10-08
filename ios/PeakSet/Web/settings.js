@@ -16,8 +16,12 @@ let nativeBackups = [];
 function settingsMigrateState() {
   if (state.units !== "metric") state.units = "imperial";
   if (typeof state.athleteName !== "string") state.athleteName = "";
-  if (!state.athleteId) state.athleteId = crypto.randomUUID();
+  // The id names the athlete in coach rosters and snapshot filenames: keep it a
+  // plain token and never an Object.prototype key.
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(String(state.athleteId || "")) || state.athleteId in Object.prototype) state.athleteId = crypto.randomUUID();
   if (!state.backupStatus || typeof state.backupStatus !== "object") state.backupStatus = { message: "No automatic backup yet.", at: null };
+  if (typeof state.backupStatus.message !== "string") state.backupStatus.message = "No automatic backup yet.";
+  if (!Number.isFinite(Date.parse(state.backupStatus.at))) state.backupStatus.at = null;
 }
 
 settingsMigrateState();
@@ -134,11 +138,16 @@ function nativeBackupPayload() {
   });
   // Unit-switch memory can hold a Health value; it only affects exact
   // lb<->kg round-trips, so leave it out of snapshots entirely.
-  const dropOrigins = (value) => {
-    if (Array.isArray(value)) value.forEach(dropOrigins);
-    else if (value && typeof value === "object") {
-      delete value[UNIT_ORIGIN_KEY];
-      Object.values(value).forEach(dropOrigins);
+  // Iterative: a deeply nested value in a restored backup must not blow the stack here.
+  const dropOrigins = (rootValue) => {
+    const stack = [rootValue];
+    while (stack.length) {
+      const value = stack.pop();
+      if (!value || typeof value !== "object") continue;
+      if (!Array.isArray(value)) delete value[UNIT_ORIGIN_KEY];
+      for (const child of Array.isArray(value) ? value : Object.values(value)) {
+        if (child && typeof child === "object") stack.push(child);
+      }
     }
   };
   dropOrigins(copy);
@@ -192,12 +201,18 @@ function restoreBackupPayload(payload, sourceLabel = "this backup") {
   const confirmed = window.confirm(`Replace everything on this device with ${sourceLabel} (${backupSummary(payload.state)})? ${native ? "Your current data is saved to your backups first, so you can switch back." : "Export a backup first if you might want your current data back."}`);
   if (!confirmed) return false;
   if (native && state.profile) {
-    // A separately named file, never overwritten by the daily snapshot.
-    nativeBackupBridge().postMessage({ action: "snapshot", reason: "before-restore", filename: `mass-method-before-restore-${new Date().toISOString().replace(/[:.]/g, "-")}.json`, json: JSON.stringify(nativeBackupPayload()) });
+    // A separately named file, never overwritten by the daily snapshot. A
+    // failure to serialize the current (possibly damaged) state must not
+    // block restoring a good backup over it.
+    try {
+      nativeBackupBridge().postMessage({ action: "snapshot", reason: "before-restore", filename: `mass-method-before-restore-${new Date().toISOString().replace(/[:.]/g, "-")}.json`, json: JSON.stringify(nativeBackupPayload()) });
+    } catch {
+      toast("Current data could not be backed up first; restoring anyway.");
+    }
   }
   // The restored data's old backup time must not trigger an immediate
   // snapshot that overwrites today's backup with older data.
-  const restored = { ...payload.state, backupStatus: { message: `Restored ${sourceLabel}.`, at: new Date().toISOString() } };
+  const restored = { ...pruneDeepObjects(payload.state), backupStatus: { message: `Restored ${sourceLabel}.`, at: new Date().toISOString() } };
   try {
     Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-before-restore-`)).forEach((key) => localStorage.removeItem(key));
     restoringState = true;
@@ -227,7 +242,8 @@ function handleIncomingFileText(text) {
     toast("That file could not be read.");
     return false;
   }
-  const handler = incomingFileHandlers[payload?.format];
+  const format = typeof payload?.format === "string" ? payload.format : "";
+  const handler = Object.hasOwn(incomingFileHandlers, format) ? incomingFileHandlers[format] : null;
   if (!handler) {
     toast("That file is not a Mass Method file.");
     return false;
@@ -277,7 +293,8 @@ function restoreNativeBackup(index) {
 function handleNativeBackup(payload) {
   if (!payload || typeof payload !== "object") return;
   if (payload.status === "saved") {
-    state.backupStatus = { message: `Backed up to ${payload.location || "this iPhone"}.`, at: new Date().toISOString(), location: payload.location || "" };
+    const location = typeof payload.location === "string" ? payload.location : "";
+    state.backupStatus = { message: `Backed up to ${location || "this iPhone"}.`, at: new Date().toISOString(), location };
     saveState();
     if (state.view === "more") render();
   } else if (payload.status === "list") {
@@ -288,7 +305,7 @@ function handleNativeBackup(payload) {
     try { parsed = JSON.parse(payload.json || ""); } catch {}
     restoreBackupPayload(parsed, `the ${payload.location || "saved"} backup from ${formatShortDate(payload.date)}`);
   } else if (payload.status === "error") {
-    state.backupStatus = { ...state.backupStatus, message: payload.message || "Automatic backup failed." };
+    state.backupStatus = { ...state.backupStatus, message: typeof payload.message === "string" && payload.message ? payload.message : "Automatic backup failed." };
     saveState();
     if (state.view === "more") render();
   }

@@ -1148,6 +1148,41 @@ console.log("Audit round 8 checks passed.");
   assert(read("photos.js").includes("if (state.progressPhotos.some((photo) => photo.id === record.id)) return;"), "Redelivered photo saves must not duplicate records");
   assert(toolkit.includes('return state.exerciseSettings[id] || { note: "", pain: "none" };'), "exerciseSetting must be read-only");
   assert(app.includes("const filename = `mass-method-coach-log-${localDateStamp()}.pdf`;"), "PDF filename must use the local day");
+  // Verification follow-ups.
+  assert(app.includes("    weeklyCheckIns: [],\n    prepLogs: [],\n    timer: { ...defaultState.timer }"), "freshDefaultState must not alias defaultState arrays");
+  assert(toolkit.includes("const cutoff = Date.now() - Number(report.days) * 86400000;"), "Toolkit report cutoff must reuse the coerced day count");
+  assert(backupService.includes("if self.restoredFromICloud.isSet {"), "Backup list must not pull iCloud photos before a restore happened");
+  assert(read("ios/MassMethodWatch/WatchWorkoutModel.swift").includes("if let previous = lastScheduledRestEnd, previous != endsAt {"), "Watch must not dismiss a just-delivered alert on a same-rest snapshot");
+  // Adversarial inputs: bounded plans, bounded depth, own-property lookups, O(1) name resolution.
+  assert(app.includes("const MAX_PLAN_EXERCISES = 30;") && toolkit.includes(".slice(0, MAX_PLAN_EXERCISES)") && read("coach.js").includes(".slice(0, MAX_PLAN_EXERCISES)"), "Plan exercise counts must be capped everywhere plans enter");
+  assert(read("coach.js").includes(".slice(0, 50).map((plan) => sanitizePlan(plan, from))"), "Imported programs must cap the number of plans");
+  assert(app.includes("function pruneDeepObjects(root, maxDepth = MAX_STATE_DEPTH)") && app.includes("pruneDeepObjects(parsed)") && read("settings.js").includes("...pruneDeepObjects(payload.state)"), "Loaded and restored state must be depth-pruned");
+  assert(read("settings.js").includes("const stack = [rootValue];"), "dropOrigins must be iterative");
+  assert(read("settings.js").includes("Object.hasOwn(incomingFileHandlers, format)"), "File dispatcher must not resolve formats through Object.prototype");
+  assert(read("coach.js").includes("function athleteById(id)") && !/state\.coach\.athletes\[(?!athleteId\] = athlete|id\]\.notes|athleteId\] = previous|athleteId\];\n    else|key\])/.test(read("coach.js").replace(/delete state\.coach\.athletes\[[a-zA-Z]+\];/g, "")), "Coach roster reads must go through athleteById");
+  assert(app.includes("}, Object.create(null));"), "PDF exercise grouping must use a null-prototype object");
+  assert(app.includes("function exerciseIndexes()") && toolkit.includes("loggedNameIndex = new Map("), "Logged-set exercise resolution must use an index, not a library scan");
+  assert(app.includes('next.workoutLogs = next.workoutLogs.map((log) => ("volume" in log ? { ...log, volume: finiteOrNull(log.volume) ?? 0 } : log));'), "Stored workout volume must be finite");
+  assert(toolkit.includes("function planRepsText(value)"), "Plan reps must be validated text");
+  {
+    // Runtime: a 5k-exercise program is capped and the session still renders; prototype-key names are safe.
+    const r12 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run12 = (code) => vm.runInContext(code, r12.context);
+    run12("window.confirm = () => true; handleIncomingFileText(JSON.stringify({ format: 'mass-method-program', version: 1, from: 'X', plans: [{ title: 'Huge', exercises: Array.from({ length: 5000 }, () => ['barbell-bench', 10, '8', 90, 4]) }] }))");
+    assert.equal(run12("state.customPlans[0].exercises.length"), 30, "imported program capped at 30 exercises");
+    run12("startWorkout(state.customPlans[0].id)");
+    assert.equal(run12("state.activeWorkout.exercises.length"), 30, "started workout capped at 30 exercises");
+    assert.ok(run12("renderContent().length") > 1000, "capped session renders");
+    run12("cancelWorkout(); state.workoutLogs.unshift({ id: 'c', title: 'T', date: new Date().toISOString(), sets: [{ exercise: 'constructor', exerciseId: '', weight: '100', reps: '5' }] })");
+    assert.ok(run12("buildCoachReportLines(7, '').some((line) => line.text.startsWith('constructor:'))"), "PDF groups a set named constructor");
+    assert.equal(run12("handleIncomingFileText('{\"format\":\"constructor\"}')"), false, "prototype-key format is not a Mass Method file");
+    let deep = { a: 1 }; for (let i = 0; i < 2000; i += 1) deep = { a: deep };
+    const stored12 = JSON.parse(r12.storage.get("stageforge-v1"));
+    stored12.junk = deep;
+    const r12b = makeContext(stored12);
+    assert.ok(vm.runInContext("JSON.stringify(nativeBackupPayload()).length", r12b.context) > 0, "snapshot survives a deeply nested stored value");
+    assert.ok(vm.runInContext("JSON.stringify(state.junk).length", r12b.context) < 400, "deeply nested stored values are pruned on load");
+  }
   console.log("Audit round 12 checks passed.");
 }
 }

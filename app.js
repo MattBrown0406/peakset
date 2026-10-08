@@ -3,6 +3,30 @@ const APP_NAME = "Mass Method";
 const DEFAULT_REST_SECONDS = 180;
 // Declared before loadState() runs: sanitizeStoredState reads it at script load.
 const LOGBOOK_RANGES = [7, 14, 30];
+// A plan or live workout from an imported program/backup must stay renderable:
+// 50k exercises froze the session view and persisted across launches.
+const MAX_PLAN_EXERCISES = 30;
+const MAX_PLAN_SETS = 14;
+const MAX_STATE_DEPTH = 16;
+
+// Replaces objects nested deeper than `maxDepth` with null, iteratively (no
+// recursion), so a crafted backup with thousands of nested levels cannot blow
+// the stack in the snapshot/restore paths that walk the whole state.
+function pruneDeepObjects(root, maxDepth = MAX_STATE_DEPTH) {
+  if (!root || typeof root !== "object") return root;
+  const stack = [[root, 0]];
+  while (stack.length) {
+    const [node, depth] = stack.pop();
+    const keys = Array.isArray(node) ? node.keys() : Object.keys(node);
+    for (const key of keys) {
+      const child = node[key];
+      if (!child || typeof child !== "object") continue;
+      if (depth + 1 >= maxDepth) node[key] = null;
+      else stack.push([child, depth + 1]);
+    }
+  }
+  return root;
+}
 
 const muscles = ["chest", "back", "shoulders", "arms", "legs"];
 const divisionOptions = [
@@ -690,6 +714,8 @@ function freshDefaultState() {
     workoutLogs: [],
     weightLogs: [],
     measurements: [],
+    weeklyCheckIns: [],
+    prepLogs: [],
     timer: { ...defaultState.timer }
   };
 }
@@ -760,7 +786,7 @@ function clampRestSeconds(value) {
 function loadState() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORE_KEY));
-    const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    const stored = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? pruneDeepObjects(parsed) : {};
     const next = { ...freshDefaultState(), ...stored };
     ["customPlans", "workoutLogs", "weightLogs", "measurements"].forEach((key) => {
       // Drop malformed entries instead of throwing: a throw here falls back to
@@ -889,12 +915,14 @@ function sanitizeStoredState(next) {
       ? { from: String(message.from ?? "your coach").slice(0, 60), message: String(message.message ?? "").slice(0, 2000), planCount: Math.max(0, Math.min(100, Math.trunc(finiteOrNull(message.planCount) ?? 0))), receivedAt: String(message.receivedAt ?? "") }
       : null;
   }
+  // A stored volume of "1e400" rendered as ∞; 0 makes readers recompute it.
+  next.workoutLogs = next.workoutLogs.map((log) => ("volume" in log ? { ...log, volume: finiteOrNull(log.volume) ?? 0 } : log));
   // A malformed live workout would crash every screen, including the one
   // used to restore a good backup; rebuild it from known-good parts.
   const workout = next.activeWorkout;
   if (workout !== null && workout !== undefined) {
     const exercises = isObject(workout) && Array.isArray(workout.exercises)
-      ? workout.exercises.filter((exercise) => isObject(exercise) && Array.isArray(exercise.sets) && exerciseLibrary.some((item) => item.id === exercise.id)).map((exercise) => ({
+      ? workout.exercises.filter((exercise) => isObject(exercise) && Array.isArray(exercise.sets) && exerciseLibrary.some((item) => item.id === exercise.id)).slice(0, MAX_PLAN_EXERCISES).map((exercise) => ({
           ...exercise,
           name: String(exercise.name ?? exerciseById(exercise.id).name),
           targetSets: Math.max(1, Math.min(12, Math.trunc(finiteOrNull(exercise.targetSets) ?? 3))),
@@ -902,7 +930,7 @@ function sanitizeStoredState(next) {
           targetReps: String(exercise.targetReps ?? "8-12"),
           rest: clampRestSeconds(exercise.rest),
           group: String(exercise.group ?? ""),
-          sets: exercise.sets.filter(isObject).map((set) => ({
+          sets: exercise.sets.filter(isObject).slice(0, MAX_PLAN_SETS + 4).map((set) => ({
             ...set,
             set: Math.trunc(finiteOrNull(set.set) ?? 1),
             label: String(set.label ?? set.set ?? ""),
@@ -1462,11 +1490,23 @@ function normalizedExerciseName(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+let exerciseIdIndex = null;
+let exerciseNameIndex = null;
+
+function exerciseIndexes() {
+  if (!exerciseIdIndex) {
+    exerciseIdIndex = new Map(exerciseLibrary.map((exercise) => [exercise.id, exercise]));
+    exerciseNameIndex = new Map(exerciseLibrary.map((exercise) => [normalizedExerciseName(exercise.name), exercise]));
+  }
+  return { byId: exerciseIdIndex, byName: exerciseNameIndex };
+}
+
+// Called per logged set on every launch and History render; a per-set scan of
+// the library made a 40k-set backup freeze for seconds.
 function loggedExerciseId(set) {
-  const stableMatch = exerciseLibrary.find((exercise) => exercise.id === set?.exerciseId);
-  if (stableMatch) return stableMatch.id;
-  const loggedName = normalizedExerciseName(set?.exercise);
-  return exerciseLibrary.find((exercise) => normalizedExerciseName(exercise.name) === loggedName)?.id || null;
+  const { byId, byName } = exerciseIndexes();
+  if (byId.has(set?.exerciseId)) return set.exerciseId;
+  return byName.get(normalizedExerciseName(set?.exercise))?.id || null;
 }
 
 function workoutLogSets(log) {
@@ -1772,11 +1812,13 @@ function buildCoachReportLines(days, coachNote = "") {
     report.workouts.forEach((log) => {
       lines.push({ text: `${formatShortDate(log.date)} - ${log.title || "Workout"}`, size: 11, bold: true });
       lines.push({ text: `${plural((log.sets || []).length, "set")} - ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume`, size: 10 });
+      // Null-prototype: an exercise named "constructor" must not hit Object.prototype.
       const grouped = (log.sets || []).reduce((groups, set) => {
-        if (!groups[set.exercise]) groups[set.exercise] = [];
-        groups[set.exercise].push(setLogSummary(set));
+        const key = String(set.exercise ?? "Exercise");
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(setLogSummary(set));
         return groups;
-      }, {});
+      }, Object.create(null));
       Object.entries(grouped).forEach(([exercise, sets]) => {
         lines.push({ text: `${exercise}: ${sets.join(", ")}`, size: 9 });
       });
