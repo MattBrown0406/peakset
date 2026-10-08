@@ -196,11 +196,16 @@ final class PeakSetBackupService {
         guard let urls = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
         // Offloaded iCloud backups appear as ".name.json.icloud" stand-ins and
         // still count toward the limit (deleting the stand-in deletes the file).
-        let sorted = urls.filter { Self.realName(of: $0)?.hasSuffix(".json") == true }.sorted {
-            let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            return lhs > rhs
+        // Date each backup through its logical name, as list() does: a stand-in
+        // reports its own (recent) date, which would sort old backups first
+        // and prune the newest real ones.
+        let backupDate: (URL) -> Date = { url in
+            let logical = Self.realName(of: url).map { directory.appendingPathComponent($0) } ?? url
+            return (try? logical.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? .distantPast
         }
+        let sorted = urls.filter { Self.realName(of: $0)?.hasSuffix(".json") == true }.sorted { backupDate($0) > backupDate($1) }
         for url in sorted.dropFirst(keepCount) {
             try? fileManager.removeItem(at: url)
         }
@@ -359,7 +364,7 @@ final class PeakSetIncomingFiles {
             // Documents/Inbox (visible in Files); remove the copy once read.
             if url.deletingLastPathComponent().lastPathComponent == "Inbox",
                let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
-               url.standardizedFileURL.path.hasPrefix(documents.appendingPathComponent("Inbox").standardizedFileURL.path) {
+               url.resolvingSymlinksInPath().path.hasPrefix(documents.appendingPathComponent("Inbox").resolvingSymlinksInPath().path) {
                 try? FileManager.default.removeItem(at: url)
             }
             DispatchQueue.main.async { self.enqueue(text) }

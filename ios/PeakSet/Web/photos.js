@@ -80,8 +80,8 @@ function photoMissing(img, force = false) {
   if (!force && !img.getAttribute("src")) return;
   img.dataset.missing = "1";
   img.classList.add("photo-missing");
-  img.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400"><rect width="300" height="400" fill="#16213a"/><text x="150" y="190" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">Photo not on</text><text x="150" y="222" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">this iPhone yet</text></svg>')}`;
-  img.alt = `${img.alt}: photo not on this iPhone yet`;
+  img.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400"><rect width="300" height="400" fill="#16213a"/><text x="150" y="190" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">Photo not on</text><text x="150" y="222" fill="#9fb0d0" font-family="-apple-system,sans-serif" font-size="22" text-anchor="middle">this iPhone</text></svg>')}`;
+  img.alt = `${img.alt}: photo not on this iPhone`;
 }
 
 function setPhotoPose(pose) {
@@ -101,6 +101,8 @@ function addPhotoRecord(record) {
   saveState();
   toast(`${poseLabel(record.pose)} photo saved.`);
   render();
+  // Photos are weekly, high-value records: back up now, not tomorrow.
+  if (typeof requestAutomaticSnapshot === "function") requestAutomaticSnapshot("photo", true);
 }
 
 function capturePhoto(source = "camera") {

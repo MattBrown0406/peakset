@@ -610,8 +610,10 @@ function cancelTemplateEdit() {
   render();
 }
 
+let builderScheduleNote = "";
 function saveBuilderTemplate() {
   if (!builderDraft.length) return toast("Add at least one exercise.");
+  builderScheduleNote = "";
   const plan = builderPlanFromForm();
   const editingIndex = state.builderEditingPlanId ? state.customPlans.findIndex((item) => item.id === state.builderEditingPlanId) : -1;
   if (editingIndex !== -1) {
@@ -623,7 +625,7 @@ function saveBuilderTemplate() {
     if (plan.scheduleDay) {
       plan.scheduledAt = Date.now();
       const others = state.customPlans.filter((item) => item.scheduleDay === plan.scheduleDay);
-      if (others.length) toast(`${others.map((item) => item.title).join(", ")} ${others.length === 1 ? "is" : "are"} also on ${plan.scheduleDay}. Today shows ${plan.title} first.`);
+      if (others.length) builderScheduleNote = ` ${others.map((item) => item.title).join(", ")} ${others.length === 1 ? "is" : "are"} also on ${plan.scheduleDay}; Today shows this one first.`;
     }
     state.customPlans.unshift(plan);
   }
@@ -631,7 +633,9 @@ function saveBuilderTemplate() {
   builderDraft = [];
   state.builderFormDraft = defaultBuilderFormDraft();
   saveState();
-  toast(editingIndex !== -1 ? "Template updated." : "Workout template saved.");
+  // Only when the save worked: the note mentions "first", which would let a
+  // false "saved" through the storage-full filter.
+  toast((editingIndex !== -1 ? "Template updated." : "Workout template saved.") + (lastSaveSucceeded ? builderScheduleNote : ""));
   render();
 }
 
@@ -1023,7 +1027,11 @@ completeSet = function completeToolkitSet(exIndex, setIndex) {
       if (state.timer.running) stopTimer();
       toast("All sets logged. Tap Finish Workout to save it.");
     } else if (!groupPending) startTimer(exercise.rest, state.view === "session", exIndex);
-    else toast(`Complete the remaining ${group} exercise before resting.`);
+    else {
+      toast(`Complete the remaining ${group} exercise before resting.`);
+      // The Lock Screen shows the next set: refresh it for the running rest.
+      if (state.timer.running && window.webkit?.messageHandlers?.peaksetTimer) window.webkit.messageHandlers.peaksetTimer.postMessage({ action: "start", seconds: timerTotalSeconds(), endsAt: state.timer.endsAt, ...(typeof restTimerContext === "function" ? restTimerContext() : {}) });
+    }
     render();
     if (!fromWatch && state.view === "session") {
       if (allDone) scrollToTop();
@@ -1071,7 +1079,10 @@ finishWorkout = function finishToolkitWorkout() {
   // The workout picked on Today is done: Today goes back to the
   // recommendation (picking it again starts a second session).
   const pickedPlan = state.todayPlanId ? allPlans().find((plan) => plan.id === state.todayPlanId) : null;
-  if (state.todayPlanId && (state.todayPlanId === workout.planId || pickedPlan?.title === workout.title)) {
+  // A Builder start of the picked template gets its own ad-hoc id; match it
+  // by title only then, so a different plan with the same title doesn't.
+  const adHocStart = !allPlans().some((plan) => plan.id === workout.planId);
+  if (state.todayPlanId && (state.todayPlanId === workout.planId || (adHocStart && pickedPlan?.title === workout.title))) {
     state.todayPlanId = null;
     state.todayWorkoutPick = "recommended";
   }
@@ -1359,7 +1370,7 @@ renderProgress = function renderToolkitProgress() {
     <div class="grid three"><article class="card stat"><p class="value">${average ? average.toFixed(1) : "--"}</p><p class="label">7-day average weight (${weightUnit()})</p></article><article class="card stat"><p class="value">${state.prepLogs.find((entry) => Number(entry.steps) > 0)?.steps?.toLocaleString() || "--"}</p><p class="label">Latest steps</p></article><article class="card stat"><p class="value">${checkIn?.recovery || "--"}</p><p class="label">Latest recovery / 5</p></article></div>
     <div class="grid two progress-grid" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Frequent log</p><h2>Body Weight</h2><div class="grid two"><div class="field"><label for="logWeight">Scale weight</label><input id="logWeight" type="number" inputmode="decimal" step="0.1" value="${latestManualWeight?.bodyweight || ""}" /></div><div class="field"><label for="logWeightNote">Note</label><input id="logWeightNote" placeholder="Morning fasted..." /></div></div><button class="primary-btn" onclick="saveWeight()">Save Weight</button><div class="actions" style="margin-top:10px"><button class="secondary-btn" onclick="requestHealthKit('authorize')">Connect Apple Health</button><button class="secondary-btn" onclick="requestHealthKit('readSteps')">Import Steps</button><button class="secondary-btn" onclick="requestHealthKit('syncWeight')">Send Weight</button></div><p class="muted">${escapeHtml(state.healthKitStatus)}</p></section><section class="card pad"><h2>Body Weight Trend</h2>${weights.length > 1 ? sparkline(weights) : '<div class="empty"><p class="muted">Add two weigh-ins.</p></div>'}</section></div>
     <div class="grid two progress-grid" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Physique check-in</p><h2>Expanded Measurements</h2><div class="measurement-grid">${measurementFields("measure")}</div><button class="primary-btn" onclick="saveMeasurement()">Save Measurements</button></section><section class="card pad"><div class="card-head"><h2>Measurement Trend</h2><select onchange="setMeasurementTrend(this.value)">${measurementDefinitions.map(([key,label]) => `<option value="${key}" ${key === trendKey ? "selected" : ""}>${label}</option>`).join("")}</select></div>${trendValues.length > 1 ? sparkline(trendValues) : '<div class="empty"><p class="muted">Add two measurements for this marker.</p></div>'}${latestMeasurement ? `<div class="measurement-grid" style="margin-top:12px">${measurementDefinitions.map(([key,label]) => `<div class="stat card"><p class="value">${latestMeasurementValue(key) ?? "--"}</p><p class="label">${label}</p></div>`).join("")}</div>` : ""}</section></div>
-    <div class="grid two" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Weekly check-in</p><h2>Recovery and readiness</h2><div class="grid three">${[["checkSleep","Sleep (hours)","0.5"],["checkEnergy","Energy / 5","1"],["checkHunger","Hunger / 5","1"],["checkDigestion","Digestion / 5","1"],["checkRecovery","Recovery / 5","1"]].map(([id,label,step]) => `<div class="field"><label for="${id}">${label}</label><input id="${id}" type="number" inputmode="decimal" min="1" max="${id === "checkSleep" ? 24 : 5}" step="${step}" /></div>`).join("")}</div><div class="field"><label for="checkNotes">Notes</label><textarea id="checkNotes" rows="3" placeholder="Sleep, joints, appetite, stress..."></textarea></div><button class="primary-btn" onclick="saveWeeklyCheckIn()">Save Weekly Check-In</button></section><section class="card pad"><p class="eyebrow">Contest-prep adherence</p><h2>Cardio, Steps, and Posing</h2><div class="grid two"><div class="field"><label for="prepCardioType">Cardio type</label><input id="prepCardioType" placeholder="Incline treadmill" /></div><div class="field"><label for="prepCardioMinutes">Minutes</label><input id="prepCardioMinutes" type="number" inputmode="decimal" min="0" /></div><div class="field"><label for="prepSteps">Steps</label><input id="prepSteps" type="number" inputmode="decimal" min="0" /></div><div class="field"><label for="prepPosing">Posing minutes</label><input id="prepPosing" type="number" inputmode="decimal" min="0" /></div></div><div class="field"><label for="prepNotes">Notes</label><input id="prepNotes" placeholder="Coach-prescribed work and adherence..." /></div><button class="primary-btn" onclick="savePrepLog()">Save Prep Activity</button></section></div>
+    <div class="grid two" style="margin-top:12px"><section class="card pad"><p class="eyebrow">Weekly check-in</p><h2>Recovery and readiness</h2><div class="grid three">${[["checkSleep","Sleep (hours)","0.5"],["checkEnergy","Energy / 5","1"],["checkHunger","Hunger / 5","1"],["checkDigestion","Digestion / 5","1"],["checkRecovery","Recovery / 5","1"]].map(([id,label,step]) => `<div class="field"><label for="${id}">${label}</label><input id="${id}" type="number" inputmode="decimal" min="${id === "checkSleep" ? 0.5 : 1}" max="${id === "checkSleep" ? 24 : 5}" step="${step}" /></div>`).join("")}</div><div class="field"><label for="checkNotes">Notes</label><textarea id="checkNotes" rows="3" placeholder="Sleep, joints, appetite, stress..."></textarea></div><button class="primary-btn" onclick="saveWeeklyCheckIn()">Save Weekly Check-In</button></section><section class="card pad"><p class="eyebrow">Contest-prep adherence</p><h2>Cardio, Steps, and Posing</h2><div class="grid two"><div class="field"><label for="prepCardioType">Cardio type</label><input id="prepCardioType" placeholder="Incline treadmill" /></div><div class="field"><label for="prepCardioMinutes">Minutes</label><input id="prepCardioMinutes" type="number" inputmode="decimal" min="0" /></div><div class="field"><label for="prepSteps">Steps</label><input id="prepSteps" type="number" inputmode="decimal" min="0" /></div><div class="field"><label for="prepPosing">Posing minutes</label><input id="prepPosing" type="number" inputmode="decimal" min="0" /></div></div><div class="field"><label for="prepNotes">Notes</label><input id="prepNotes" placeholder="Coach-prescribed work and adherence..." /></div><button class="primary-btn" onclick="savePrepLog()">Save Prep Activity</button></section></div>
     <section class="card pad" style="margin-top:12px"><h2>Recent Check-Ins</h2><div class="grid two"><div>${state.weeklyCheckIns.slice(0,6).map((entry) => `<div class="exercise-row"><span><span class="row-date">${formatShortDate(entry.date)}</span> · Sleep ${entry.sleep || "--"}h</span><strong>Recovery ${entry.recovery || "--"}/5</strong>${deleteEntryButton("checkIn", entry)}</div>`).join("") || '<p class="muted">No weekly check-ins.</p>'}</div><div>${state.prepLogs.slice(0,6).map((entry) => `<div class="exercise-row"><span><span class="row-date">${formatShortDate(entry.date)}</span> · ${escapeHtml(entry.cardioType === "HealthKit" ? "Apple Health steps" : entry.cardioType || "Activity")}</span><strong>${entry.cardioMinutes || 0} min · ${(entry.steps || 0).toLocaleString()} steps · ${entry.posingMinutes || 0} posing</strong>${entry.cardioType === "HealthKit" ? "" : deleteEntryButton("prep", entry)}</div>`).join("") || '<p class="muted">No prep activity.</p>'}</div></div></section>
     <section class="card pad" style="margin-top:12px"><h2>Recent Entries</h2><p class="muted compact-note">Delete a mistyped entry here. Apple Health readings are managed in Apple Health.</p><button class="ghost-btn" onclick="toggleAllRecentEntries()">${showAllRecentEntries ? "Show recent only" : "Show all entries"}</button><div class="grid two"><div><h3>Weigh-ins</h3>${state.weightLogs.filter((entry) => !String(entry.id || "").startsWith("hk-")).slice(0, recentEntriesLimit(8)).map((entry) => `<div class="exercise-row"><span class="row-date">${formatShortDate(entry.date)}</span><strong>${formatWeight(entry.bodyweight)} ${weightUnit()}</strong>${deleteEntryButton("weight", entry)}</div>`).join("") || '<p class="muted">No weigh-ins yet.</p>'}</div><div><h3>Measurements</h3>${state.measurements.filter((entry) => !String(entry.id || "").startsWith("hk-")).slice(0, recentEntriesLimit(5)).map((entry) => `<div class="exercise-row"><span class="row-date">${formatShortDate(entry.date)}</span><strong>${((count) => `${count} measurement${count === 1 ? "" : "s"}`)(measurementDefinitions.filter(([key]) => Number(entry[key]) > 0).length)}</strong>${deleteEntryButton("measurement", entry)}</div>`).join("") || '<p class="muted">No measurements yet.</p>'}</div></div></section>`;
 };
