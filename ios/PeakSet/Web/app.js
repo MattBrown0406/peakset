@@ -2595,10 +2595,10 @@ function renderToday() {
           ${["offseason", "bulking", "prep"].map((phase) => `
             <button class="phase-btn ${state.phase === phase ? "active" : ""}" onclick="setPhase('${phase}')">${phaseLabel(phase)}</button>
           `).join("")}
-          <button class="phase-btn" onclick="startWorkout('road-gym-full')">Start Road Gym</button>
         </div>
         <div class="actions">
-          <button class="primary-btn" onclick="startWorkout('${plan.id}')">Start ${escapeHtml(plan.title)}</button>
+          <button class="primary-btn" onclick="startWorkout('${plan.id}')">Start ${escapeHtml(plan.title.length > 32 ? `${plan.title.slice(0, 31).trimEnd()}…` : plan.title)}</button>
+          <button class="secondary-btn" onclick="startWorkout('road-gym-full')">Start Road Gym</button>
           <button class="secondary-btn" onclick="setView('plans')">Browse Plans</button>
         </div>
       </div>
@@ -3462,7 +3462,7 @@ function renderSession() {
               ${exercise.sets.map((set, setIndex) => `
                 <div class="set-row ${isRepsOnlyExercise(exercise) ? "reps-only" : ""}">
                   <div class="set-number ${set.dropSet ? "drop" : ""}">${escapeHtml(set.label || set.set)}</div>
-                  ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
+                  ${isRepsOnlyExercise(exercise) ? "" : `<input type="number" inputmode="decimal" min="0" placeholder="Weight (${weightUnit()})" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} weight" value="${escapeHtml(set.weight)}" oninput="updateSet(${exIndex}, ${setIndex}, 'weight', this.value)" />`}
                   <input type="number" inputmode="numeric" min="1" step="1" placeholder="Reps" aria-label="${escapeHtml(exercise.name)} set ${escapeHtml(set.label || set.set)} reps" value="${escapeHtml(set.reps)}" oninput="updateSet(${exIndex}, ${setIndex}, 'reps', this.value)" />
                   <button class="${set.done ? "secondary-btn" : "primary-btn"}" data-set-button="${exIndex}-${setIndex}" onclick="completeSet(${exIndex}, ${setIndex})">${set.done ? "Done" : "Complete"}</button>
                 </div>
@@ -3641,7 +3641,7 @@ function renderLogbook() {
             </div>
             ${isSafeRowId(log.id) ? `<button class="ghost-btn danger compact-btn" aria-label="Delete ${escapeHtml(log.title)} from ${formatShortDate(log.date)}" onclick="deleteLogEntry('workout','${log.id}')">Delete workout</button>` : ""}
             <p class="muted">${plural((log.sets || []).length, "set")}, ${Math.round(Number(log.volume) || totalVolume(log)).toLocaleString()} ${weightUnit()} volume</p>
-            <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}</p>
+            <p class="muted">${(log.sets || []).slice(0, 4).map((set) => `${escapeHtml(set.exercise)} ${escapeHtml(setLogSummary(set))}`).join(" / ")}${(log.sets || []).length > 4 ? ` <span class="muted">+${(log.sets || []).length - 4} more sets</span>` : ""}</p>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No workouts logged in this range.</p></div>'}
       </div>

@@ -242,10 +242,12 @@ window.handleNativeHealthKit = function handleNativeHealthKitWithBody(payload) {
 // ---------- Display ----------
 
 function bodyFatSeries() {
-  const points = [
-    ...state.weightLogs.filter((entry) => Number(entry.bodyFat) > 0).map((entry) => ({ date: entry.date, value: Number(entry.bodyFat) })),
-    ...state.measurements.filter((entry) => Number(entry.bodyFat) > 0).map((entry) => ({ date: entry.date, value: Number(entry.bodyFat) }))
-  ];
+  // Hand-logged values win over Apple Health on the same day.
+  const fromHealth = (entry) => isHealthEntry(entry) || (Array.isArray(entry?.healthFields) && entry.healthFields.includes("bodyFat"));
+  const withFat = (list) => list.filter((entry) => Number(entry.bodyFat) > 0);
+  const toPoint = (entry) => ({ date: entry.date, value: Number(entry.bodyFat) });
+  const all = [...withFat(state.measurements), ...withFat(state.weightLogs)];
+  const points = [...all.filter((entry) => !fromHealth(entry)), ...all.filter(fromHealth)].map(toPoint);
   const byDay = new Map();
   points.forEach((point) => {
     const day = localDayKey(point.date);
