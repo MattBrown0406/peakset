@@ -178,13 +178,30 @@ async function shareOrDownload(text, filename, mime = "application/json") {
 }
 
 let lastBackupExportAt = 0;
+let pendingBackupShare = null;
 
 async function exportBackupFile() {
-  const result = await shareOrDownload(JSON.stringify(backupPayload()), `mass-method-backup-${todayStamp()}.json`);
-  lastBackupExportAt = Date.now();
+  const filename = `mass-method-backup-${todayStamp()}.json`;
+  const result = await shareOrDownload(JSON.stringify(backupPayload()), filename);
+  // On iOS "shared" only means the share sheet opened; archiving unlocks when
+  // native reports the file was actually saved or sent.
+  if (result === "shared") pendingBackupShare = filename;
+  else lastBackupExportAt = Date.now();
   toast(result === "shared" ? "Backup ready. Save it to Files or iCloud Drive." : "Backup downloaded.");
   if (state.view === "more") render();
 }
+
+const baseHandleNativeShareForBackup = window.handleNativeShare;
+window.handleNativeShare = function handleNativeShareForBackup(payload) {
+  baseHandleNativeShareForBackup?.(payload);
+  if (pendingBackupShare && payload?.filename === pendingBackupShare) {
+    if (payload.completed) {
+      lastBackupExportAt = Date.now();
+      if (state.view === "more") render();
+    }
+    pendingBackupShare = null;
+  }
+};
 
 function storageUsedFraction() {
   let bytes = lastStoredBytes;
@@ -199,7 +216,8 @@ function storageUsedFraction() {
 function archiveOldHistory() {
   if (Date.now() - lastBackupExportAt > 30 * 60000) return toast("Export a backup first, so archived history stays in that file.");
   const cutoff = Date.now() - 365 * 86400000;
-  const isOld = (entry) => Number.isFinite(Date.parse(entry?.date)) && Date.parse(entry.date) < cutoff;
+  // Apple Health readings are not in exported backups; leave them in place.
+  const isOld = (entry) => Number.isFinite(Date.parse(entry?.date)) && Date.parse(entry.date) < cutoff && !String(entry?.id || "").startsWith("hk-") && entry?.cardioType !== "HealthKit";
   const keys = ["workoutLogs", "weightLogs", "measurements", "weeklyCheckIns", "prepLogs"];
   const counts = Object.fromEntries(keys.map((key) => [key, (state[key] || []).filter(isOld).length]));
   const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
@@ -385,7 +403,7 @@ function renderBackupCard() {
         <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app). Apple Health data is not included; it re-imports from Apple Health after a restore.</p>
         <div class="signal-card"><span class="badge green">Automatic</span><strong>${escapeHtml(state.backupStatus?.message || "")}</strong>${state.backupStatus?.at ? `<p class="muted" style="margin:4px 0 0">${new Date(state.backupStatus.at).toLocaleString()}</p>` : ""}</div>
         <div class="actions" style="margin-top:12px">
-          <button class="primary-btn" onclick="requestAutomaticSnapshot('manual', true)">Back Up Now</button>
+          <button class="primary-btn" onclick="requestAutomaticSnapshot('manual', true) || toast(state.profile ? 'Backups need the iPhone app.' : 'Finish setting up your profile first; there is nothing to back up yet.')">Back Up Now</button>
           <button class="secondary-btn" onclick="refreshNativeBackups()">Show Backups</button>
         </div>
         ${list ? `<div class="exercise-list" style="margin-top:12px">${list}</div>` : ""}
@@ -413,6 +431,25 @@ function registerMoreSection(order, renderSection) {
 
 registerMoreSection(10, renderUnitsCard);
 registerMoreSection(20, renderBackupCard);
+
+// App Review 5.1.1 requires the privacy policy to be reachable in the app.
+registerMoreSection(90, () => `
+  <section class="card pad privacy-policy">
+    <p class="eyebrow">Privacy</p>
+    <h2>Privacy policy</h2>
+    <details>
+      <summary class="ghost-btn">Read the privacy policy</summary>
+      <div class="policy-text">
+        <p><strong>Mass Method does not collect your data.</strong> There are no accounts, no analytics, no ads, and no servers. Everything you log stays on your iPhone and Apple Watch.</p>
+        <p><strong>Backups.</strong> If iCloud Drive is on, automatic backups are saved to your own iCloud Drive; otherwise they stay on this iPhone. Only you can read them. Apple Health readings are never included in automatic backups.</p>
+        <p><strong>Apple Health.</strong> With your permission, Mass Method reads body weight, body fat, lean body mass, waist and steps, and writes body weight and strength workouts. Health data is used only to show your progress in the app. It is never sold, used for advertising, or sent anywhere unless you share it.</p>
+        <p><strong>Sharing.</strong> Data leaves your device only when you choose to share it: exporting a backup file, exporting a PDF, or sending a check-in to your coach (which can include readings imported from Apple Health). You choose where those files go.</p>
+        <p><strong>Camera and photos.</strong> Progress photos you take or choose are stored on this iPhone and in your own iCloud Drive backup folder. They are never uploaded anywhere else.</p>
+        <p><strong>Deleting data.</strong> Delete individual entries in Progress, History and Logbook, or delete the app to remove everything on this device. Backups in iCloud Drive can be deleted from the Files app.</p>
+      </div>
+    </details>
+  </section>
+`);
 
 function renderMore() {
   return `

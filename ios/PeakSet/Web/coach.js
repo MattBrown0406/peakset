@@ -163,6 +163,8 @@ window.handleNativeShare = function handleNativeShareForCoach(payload) {
   if (pendingCoachShare && payload?.filename === pendingCoachShare.filename) {
     if (payload.completed) {
       state.lastCoachPackageAt = pendingCoachShare.at;
+      // The note went out with this check-in; don't resend it with the next.
+      coachNoteDraft = "";
       saveState();
       render();
     }
@@ -191,10 +193,9 @@ async function sendCheckInToCoach() {
     pendingCoachShare = { filename: name.replace(/\//g, "-"), at: sentAt };
   } else {
     state.lastCoachPackageAt = sentAt;
+    coachNoteDraft = "";
     saveState();
   }
-  // This note went out with this check-in; don't resend it with the next.
-  coachNoteDraft = "";
   toast(result === "shared" ? "Check-in ready. Send it to your coach by Messages, Mail, or AirDrop." : "Check-in file downloaded. Send it to your coach.");
   render();
 }
@@ -233,10 +234,35 @@ function cleanHealthFields(entry, allowed) {
 const CLEAN = {
   weight: (entry) => cleanEntry(entry, (e) => ({ bodyweight: cleanNumber(e.bodyweight, 0.1, 2000), bodyFat: cleanNumber(e.bodyFat, 1, 75), leanMass: cleanNumber(e.leanMass, 0.1, 2000), ...cleanHealthFields(e, ["bodyFat", "leanMass"]) })),
   measurement: (entry) => cleanEntry(entry, (e) => ({ ...Object.fromEntries([...measurementDefinitions.map(([key]) => key), "arm", "thigh"].map((key) => [key, cleanNumber(e[key], 0.1, key === "bodyFat" ? 75 : 400)])), ...cleanHealthFields(e, [...measurementDefinitions.map(([key]) => key), "arm", "thigh"]), ...(cleanDate(e.sinceDate) ? { sinceDate: cleanDate(e.sinceDate) } : {}) })),
-  workout: (entry) => cleanEntry(entry, (e) => ({ title: cleanText(e.title, 80) || "Workout", setCount: Array.isArray(e.sets) ? Math.min(e.sets.length, 500) : Math.max(0, Math.min(500, Math.trunc(Number(e.setCount)) || 0)) })),
+  workout: (entry) => cleanEntry(entry, (e) => ({ title: cleanText(e.title, 80) || "Workout", setCount: Array.isArray(e.sets) ? Math.min(e.sets.length, 500) : Math.max(0, Math.min(500, Math.trunc(Number(e.setCount)) || 0)), exercises: workoutExerciseSummary(e) })),
   checkIn: (entry) => cleanEntry(entry, (e) => ({ sleep: cleanNumber(e.sleep, 0, 24), energy: cleanNumber(e.energy, 1, 5), hunger: cleanNumber(e.hunger, 1, 5), digestion: cleanNumber(e.digestion, 1, 5), recovery: cleanNumber(e.recovery, 1, 5), notes: cleanText(e.notes, 500) })),
   prep: (entry) => cleanEntry(entry, (e) => ({ cardioType: cleanText(e.cardioType, 60), cardioMinutes: cleanNumber(e.cardioMinutes, 0, 1440), steps: cleanNumber(e.steps, 0, 200000), posingMinutes: cleanNumber(e.posingMinutes, 0, 1440) }))
 };
+
+// Per-exercise summary the coach can read (best set and set count). Built
+// from the athlete's sets on import, or kept from an earlier import.
+function workoutExerciseSummary(entry) {
+  if (!Array.isArray(entry?.sets)) {
+    return safeArray(entry?.exercises).slice(0, 15).map((item) => ({ name: cleanText(item?.name, 60), sets: cleanNumber(item?.sets, 0, 100) ?? 0, weight: cleanNumber(item?.weight, 0, 2000), reps: cleanNumber(item?.reps, 0, 500) })).filter((item) => item.name);
+  }
+  const byExercise = new Map();
+  entry.sets.slice(0, 500).forEach((set) => {
+    const name = cleanText(set?.exercise, 60);
+    if (!name) return;
+    const item = byExercise.get(name) || { name, sets: 0, weight: null, reps: null };
+    item.sets += 1;
+    const weight = cleanNumber(set?.weight, 0, 2000);
+    const reps = cleanNumber(set?.reps, 0, 500);
+    if (weight !== null && (item.weight === null || weight > item.weight || (weight === item.weight && (reps ?? 0) > (item.reps ?? 0)))) {
+      item.weight = weight;
+      item.reps = reps;
+    } else if (item.weight === null && reps !== null && reps > (item.reps ?? 0)) {
+      item.reps = reps;
+    }
+    byExercise.set(name, item);
+  });
+  return [...byExercise.values()].slice(0, 15);
+}
 
 function cleanList(list, cleaner) {
   return safeArray(list).map(cleaner).filter(Boolean);
@@ -634,7 +660,7 @@ function renderAthleteDetail(athlete) {
     <section class="card pad" style="margin-top:12px"><div class="card-head"><div><p class="eyebrow">Weekly volume</p><h2>${athleteVolumeWeek(athlete)?.weekStart ? `Hard sets, week of ${escapeHtml(formatShortDate(athleteVolumeWeek(athlete).weekStart))}` : "Hard sets"}</h2></div>${athlete.trainingBlock ? `<span class="badge blue">${escapeHtml(athlete.trainingBlock.statusLine || athlete.trainingBlock.name || "")}</span>` : ""}</div><div class="volume-list">${renderAthleteVolume(athlete)}</div></section>
     ${safeArray(athlete.photos).length ? `<section class="card pad" style="margin-top:12px"><p class="eyebrow">Progress photos</p><div class="photo-strip">${safeArray(athlete.photos).map((photo) => `<figure class="photo-thumb">${photoImg(photo)}<figcaption>${escapeHtml(poseLabel(photo.pose))}<br />${formatShortDate(photo.date)}</figcaption></figure>`).join("")}</div></section>` : ""}
     <div class="grid two" style="margin-top:12px">
-      <section class="card pad"><h2>Recent workouts</h2><div class="exercise-list">${safeArray(athlete.workoutLogs).slice(0, 8).map((log) => `<div class="exercise-row"><div><strong>${escapeHtml(log.title || "Workout")}</strong><p class="muted" style="margin:2px 0 0">${formatShortDate(log.date)} · ${plural(Number(log.setCount ?? workoutLogSets(log).length) || 0, "set")}</p></div></div>`).join("") || '<p class="muted">No workouts in range.</p>'}</div></section>
+      <section class="card pad"><h2>Recent workouts</h2><div class="exercise-list">${safeArray(athlete.workoutLogs).slice(0, 8).map((log) => `<div class="exercise-row"><div><strong>${escapeHtml(log.title || "Workout")}</strong><p class="muted" style="margin:2px 0 0">${formatShortDate(log.date)} · ${plural(Number(log.setCount ?? workoutLogSets(log).length) || 0, "set")}</p>${safeArray(log.exercises).length ? `<p class="muted compact-note" style="margin:2px 0 0">${safeArray(log.exercises).map((item) => `${escapeHtml(item.name)} ${item.sets}×${item.weight ? ` best ${escapeHtml(formatWeight(item.weight))}${athlete.profile?.units === "metric" ? "kg" : "lb"}` : ""}${item.reps ? ` × ${escapeHtml(String(item.reps))}` : ""}`).join(" · ")}</p>` : ""}</div></div>`).join("") || '<p class="muted">No workouts in range.</p>'}</div></section>
       <section class="card pad"><h2>Recovery check-ins</h2><div class="exercise-list">${safeArray(athlete.weeklyCheckIns).slice(0, 6).map((entry) => `<div class="exercise-row"><span>${formatShortDate(entry.date)} · Sleep ${escapeHtml(entry.sleep ?? "--")}h</span><strong>Energy ${escapeHtml(entry.energy ?? "--")} · Recovery ${escapeHtml(entry.recovery ?? "--")}/5</strong></div>${entry.notes ? `<p class="muted compact-note">${escapeHtml(entry.notes)}</p>` : ""}`).join("") || '<p class="muted">No check-ins in range.</p>'}</div></section>
     </div>
     <section class="card pad" style="margin-top:12px">
@@ -665,7 +691,7 @@ registerMoreSection(25, () => `
   <section class="card pad">
     <p class="eyebrow">Coaching</p>
     <h2>Work with a coach</h2>
-    <p class="muted">Send your coach a check-in with weight, measurements, workouts, recovery, volume, and your latest photos. ${state.lastCoachPackageAt ? `Last sent ${formatShortDate(state.lastCoachPackageAt)}.` : ""}</p>
+    <p class="muted">Send your coach a check-in with weight, measurements (including readings imported from Apple Health), workouts, recovery, volume, and your latest photos. ${state.lastCoachPackageAt ? `Last sent ${formatShortDate(state.lastCoachPackageAt)}.` : ""}</p>
     <button class="primary-btn" onclick="sendCheckInToCoach()">Send Check-In to Coach</button>
     <label class="toggle-row"><input type="checkbox" ${state.coach?.enabled ? "checked" : ""} onchange="setCoachEnabled(this.checked)" /> <span>I coach athletes (adds a roster of athlete check-ins)</span></label>
     ${state.coach?.enabled ? `<button class="secondary-btn" style="margin-top:10px" onclick="openAthlete('')">Open Coach Hub (${coachAthletes().length})</button>` : ""}

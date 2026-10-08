@@ -13,15 +13,30 @@ let storageNearlyFullWarned = false;
 // Bengali digits (and Hijri dates) would print as blanks.
 let reportFormatting = false;
 function reportLocale() {
-  return reportFormatting ? "en-US" : undefined;
+  if (!reportFormatting) return undefined;
+  // The athlete's own date order (UK coaches read 07/10/2026 as 7 October),
+  // with Latin digits and the Gregorian calendar the PDF can print.
+  try {
+    const base = new Intl.DateTimeFormat().resolvedOptions().locale.split("-u-")[0];
+    return new Intl.Locale(base, { calendar: "gregory", numberingSystem: "latn" }).toString();
+  } catch {
+    return "en-US";
+  }
 }
 
-// WebKit stores a string at 2 bytes per character as soon as it contains one
-// character above U+00FF (a curly apostrophe from Smart Punctuation, an
-// emoji), halving how much history fits. JSON escapes keep every stored
-// character at 1 byte; JSON.parse reads them back unchanged.
+// WebKit charges localStorage 2 bytes per character whenever the string is
+// held internally as 16-bit, which depends on how it was built, not on what
+// it contains: one curly apostrophe (Smart Punctuation) makes JSON.stringify
+// return a 16-bit string, and .replace() keeps it 16-bit. So escape every
+// non-ASCII character as \uXXXX (JSON.parse reads them back unchanged) and
+// rebuild the result through TextDecoder, which returns an 8-bit string for
+// ASCII input. Measured in WKWebView: the logbook then fits twice as much.
 function serializeForStorage(value) {
-  return JSON.stringify(value).replace(/[\u0100-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  const ascii = JSON.stringify(value).replace(/[\u0080-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  try {
+    if (typeof TextEncoder === "function" && typeof TextDecoder === "function") return new TextDecoder().decode(new TextEncoder().encode(ascii));
+  } catch {}
+  return ascii;
 }
 // A plan or live workout from an imported program/backup must stay renderable:
 // 50k exercises froze the session view and persisted across launches.
@@ -873,8 +888,8 @@ function loadState() {
     try {
       const raw = localStorage.getItem(STORE_KEY);
       if (raw) {
-        // Keep only the newest unreadable copy; older ones would fill the quota.
-        Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-recovery-`)).forEach((key) => localStorage.removeItem(key));
+        // Keep the two newest unreadable copies; more would fill the quota.
+        Object.keys(localStorage).filter((key) => key.startsWith(`${STORE_KEY}-recovery-`)).sort().slice(0, -1).forEach((key) => localStorage.removeItem(key));
         localStorage.setItem(`${STORE_KEY}-recovery-${Date.now()}`, raw);
       }
     } catch {}
@@ -1154,8 +1169,9 @@ function chooseTodayWorkout(pick) {
     return;
   }
 
-  const candidates = allPlans().filter((plan) => planMatchesTodayPick(plan, pick));
-  const selected = randomItem(candidates);
+  const chosenId = String(pick).startsWith("plan:") ? String(pick).slice(5) : null;
+  const candidates = chosenId ? allPlans().filter((plan) => plan.id === chosenId) : allPlans().filter((plan) => planMatchesTodayPick(plan, pick));
+  const selected = chosenId ? candidates[0] : randomItem(candidates);
   if (!selected) {
     toast("No workouts found for that pick.");
     return;
@@ -1535,10 +1551,27 @@ function muscleLabel(muscle) {
   return muscle[0].toUpperCase() + muscle.slice(1);
 }
 
+// Rotate through the phase's body-part plans: suggest the muscle group trained
+// least recently (never trained counts as oldest), and never the plan just
+// finished. A fixed plan per phase had a new athlete training chest every day.
 function todaysRecommendedPlan() {
-  if (state.phase === "prep") return planTemplates.find((p) => p.id === "prep-upper-pump");
-  if (state.phase === "bulking") return planTemplates.find((p) => p.id === "back-width");
-  return planTemplates.find((p) => p.id === "chest-density");
+  const phase = ["prep", "bulking"].includes(state.phase) ? state.phase : "offseason";
+  const rotation = ["chest", "back", "legs", "shoulders", "arms"];
+  const candidates = planTemplates.filter((plan) => plan.phase === phase && rotation.includes(plan.muscle) && !plan.id.startsWith("weak-point"));
+  const fallback = planTemplates.find((plan) => plan.id === (phase === "prep" ? "prep-upper-pump" : phase === "bulking" ? "back-width" : "chest-density"));
+  if (!candidates.length) return fallback;
+  const lastTrained = Object.fromEntries(rotation.map((muscle) => [muscle, -Infinity]));
+  (state.workoutLogs || []).forEach((log) => {
+    const time = Date.parse(log?.date);
+    if (!Number.isFinite(time)) return;
+    new Set(workoutLogSets(log).map((set) => exerciseLibrary.find((item) => item.id === loggedExerciseId(set))?.muscle)).forEach((muscle) => {
+      if (muscle in lastTrained) lastTrained[muscle] = Math.max(lastTrained[muscle], time);
+    });
+  });
+  const lastTitle = state.workoutLogs?.[0]?.title;
+  const muscle = rotation.filter((item) => candidates.some((plan) => plan.muscle === item)).sort((a, b) => lastTrained[a] - lastTrained[b] || rotation.indexOf(a) - rotation.indexOf(b))[0];
+  const forMuscle = candidates.filter((plan) => plan.muscle === muscle);
+  return forMuscle.find((plan) => plan.title !== lastTitle) || forMuscle[0] || fallback;
 }
 
 function todaysSelectedPlan() {
@@ -1561,9 +1594,11 @@ function todayWorkoutSelect() {
     ["prep", "Random Prep"],
     ["travel", "Random Road Gym"]
   ];
+  const saved = (state.customPlans || []).filter((plan) => isSafeRowId(plan.id));
   return `
     <select id="todayWorkoutPick" onchange="chooseTodayWorkout(this.value)">
       ${options.map(([value, label]) => `<option value="${value}" ${activePick === value ? "selected" : ""}>${label}</option>`).join("")}
+      ${saved.length ? `<optgroup label="My templates">${saved.map((plan) => `<option value="plan:${plan.id}" ${activePick === `plan:${plan.id}` ? "selected" : ""}>${escapeHtml(plan.title)}</option>`).join("")}</optgroup>` : ""}
     </select>
   `;
 }
@@ -1860,7 +1895,12 @@ function plainReportText(value) {
     .normalize("NFC")
     // Backstop for any locale-formatted number: map native digits (Arabic-Indic,
     // Persian, Devanagari, Bengali, Myanmar) to 0-9 instead of blanking them.
-    .replace(/[\u0660-\u0669\u06F0-\u06F9\u0966-\u096F\u09E6-\u09EF\u1040-\u1049]/g, (digit) => String(digit.charCodeAt(0) & 0xf))
+    .replace(/[\u200E\u200F\u061C\u202A-\u202E\u2066-\u2069]/g, "")
+    .replace(/[\u0660-\u0669\u06F0-\u06F9\u0966-\u096F\u09E6-\u09EF\u1040-\u1049]/g, (digit) => {
+      const code = digit.charCodeAt(0);
+      const zero = [0x0660, 0x06f0, 0x0966, 0x09e6, 0x1040].find((start) => code >= start && code <= start + 9);
+      return String(code - zero);
+    })
     .replace(/\u066B/g, ".")
     .replace(/\u066C/g, ",")
     .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
@@ -2493,7 +2533,7 @@ function renderToday() {
           ${["offseason", "bulking", "prep"].map((phase) => `
             <button class="phase-btn ${state.phase === phase ? "active" : ""}" onclick="setPhase('${phase}')">${phaseLabel(phase)}</button>
           `).join("")}
-          <button class="phase-btn" onclick="startWorkout('road-gym-full')">Road Gym</button>
+          <button class="phase-btn" onclick="startWorkout('road-gym-full')">Start Road Gym</button>
         </div>
         <div class="actions">
           <button class="primary-btn" onclick="startWorkout('${plan.id}')">Start ${escapeHtml(plan.title)}</button>
@@ -2558,7 +2598,8 @@ function allPlans() {
 
 function renderPlans() {
   const filters = ["all", "chest", "back", "shoulders", "arms", "legs", "prep", "travel"];
-  const plans = allPlans().filter((plan) => {
+  // Saved and coach-sent templates first: they are what the athlete is looking for.
+  const plans = [...(state.customPlans || []), ...planTemplates].filter((plan) => {
     if (state.activeFilter === "all") return true;
     if (state.activeFilter === "prep") return plan.phase === "prep";
     if (state.activeFilter === "travel") return plan.phase === "travel" || plan.muscle === "travel";
@@ -3530,7 +3571,7 @@ function renderLogbook() {
     <section class="card pad" style="margin-top: 16px;">
       <h2>Workout Detail</h2>
       <div class="grid two">
-        ${report.workouts.slice(0, 8).map((log) => `
+        ${report.workouts.map((log) => `
           <article class="log-card card">
             <div class="card-head">
               <strong>${escapeHtml(log.title)}</strong>

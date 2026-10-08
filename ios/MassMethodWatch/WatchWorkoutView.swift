@@ -62,7 +62,7 @@ private struct SetEntryView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("All sets done")
+                            Text("All sets done · Finish on iPhone")
                                 .font(.caption2)
                                 .foregroundStyle(teal)
                         }

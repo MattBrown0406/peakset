@@ -1292,6 +1292,9 @@ console.log("Audit round 8 checks passed.");
     assert.match(read("health.js"), /point !== latest && gapDays\(point\) >= 21/, "body-fat change never compares the latest reading with itself");
     assert.match(read("coach.js"), /sinceDate: cleanDate\(e\.sinceDate\)/, "coach import keeps the merged-measurement date range");
     assert.equal(run17("planRepsText('10/side')"), "10/side", "coach and builder reps stay free text");
+    assert.equal(run17("planRepsText(\"8-10 (don't lock out)\")"), "8-10 (don't lock out)", "apostrophes in reps are kept");
+    assert.equal(run17("nextLoadableWeight('chest-supported-row', 25)"), 30, "dumbbell-only movements listed after a bench use dumbbell jumps");
+    assert.equal(run17("plainReportText('\\u0966\\u0967 \\u09E9\\u09EF')"), "01 39", "Devanagari and Bengali digits map correctly");
     assert.equal(run17("planRepsText('<b>8</b>')"), "8-12", "markup in reps is replaced");
   }
   // Round 16 storage: stored state stays 1 byte per character; typing saves after a pause; PDFs use Western digits.
@@ -1300,16 +1303,51 @@ console.log("Audit round 8 checks passed.");
     const run18 = (code) => vm.runInContext(code, r18.context);
     run18("state.weightLogs.unshift({ id: 'w-q', date: new Date().toISOString(), bodyweight: 200, note: 'Didn’t sleep 💤' }); saveState()");
     const stored18 = r18.storage.get("stageforge-v1");
-    assert.ok(![...stored18].some((character) => character.charCodeAt(0) > 0xff), "stored state has no characters above U+00FF");
+    assert.ok(![...stored18].some((character) => character.charCodeAt(0) > 0x7f), "stored state is pure ASCII (WebKit keeps it 1 byte per character)");
+    assert.ok(app.includes("new TextDecoder().decode(new TextEncoder().encode(ascii))"), "stored string is rebuilt as an 8-bit string");
     assert.equal(JSON.parse(stored18).weightLogs[0].note, "Didn’t sleep 💤", "escaped characters read back unchanged");
     run18("startWorkout('chest-density'); saveState(); updateSet(0, 0, 'weight', '123')");
     assert.notEqual(JSON.parse(r18.storage.get("stageforge-v1")).activeWorkout.exercises[0].sets[0].weight, "123", "typing does not rewrite storage on every keystroke");
     run18("flushPendingSave()");
     assert.equal(JSON.parse(r18.storage.get("stageforge-v1")).activeWorkout.exercises[0].sets[0].weight, "123", "a pending keystroke save is flushed");
     assert.equal(run18("plainReportText('\u0661\u0662\u0663\u066B\u0665')"), "123.5", "native digits survive in the PDF");
-    assert.ok(read("health.js").includes("reportFormatting = true;") && app.includes("toLocaleDateString(reportLocale())"), "PDF lines are formatted with Western digits");
+    assert.ok(read("health.js").includes("reportFormatting = true;") && app.includes("toLocaleDateString(reportLocale())") && app.includes('new Intl.Locale(base, { calendar: "gregory", numberingSystem: "latn" })'), "PDF lines keep the device date order with Western digits");
+    assert.ok(read("settings.js").includes("if (result === \"shared\") pendingBackupShare = filename;"), "a cancelled share sheet never unlocks archiving");
     assert.ok(read("settings.js").includes("function archiveOldHistory()") && read("settings.js").includes("serializeForStorage(restored)"), "storage has a way out and restores use the compact form");
   }
+  // Round 17: recommendation rotates; templates are editable, findable and pickable; every workout is reachable; coaches see loads.
+  {
+    const r19 = makeContext({ profile: { gender: "Male", age: 30, bodyweight: 200, createdAt: new Date().toISOString() } });
+    const run19 = (code) => vm.runInContext(code, r19.context);
+    run19("window.confirm = () => true; window.scrollTo = () => {}");
+    const first = run19("todaysRecommendedPlan().muscle");
+    run19("startWorkout(todaysRecommendedPlan().id); state.activeWorkout.exercises.forEach((exercise) => exercise.sets.forEach((set) => { set.weight = exercise.repsOnly ? '' : '50'; set.reps = '10'; set.done = true; })); stopTimer(); finishWorkout()");
+    assert.notEqual(run19("todaysRecommendedPlan().muscle"), first, "the recommendation moves on after a workout");
+    run19("builderDraft = [{ id: 'barbell-bench', sets: 3, reps: '8', rest: 90, dropSets: 0, group: '', setType: 'standard' }]; state.builderFormDraft.title = 'Pusg A'; saveBuilderTemplate()");
+    const templateId = run19("state.customPlans[0].id");
+    run19(`editCustomPlan('${templateId}'); state.builderFormDraft.title = 'Push A'; builderDraft.push({ id: 'pec-deck', sets: 3, reps: '12', rest: 60, dropSets: 0, group: '', setType: 'standard' }); saveBuilderTemplate()`);
+    assert.equal(run19("state.customPlans.length"), 1, "editing a template replaces it");
+    assert.equal(run19("state.customPlans[0].id"), templateId, "an edited template keeps its id");
+    assert.equal(run19("state.customPlans[0].title + '|' + state.customPlans[0].exercises.length"), "Push A|2", "edits are saved");
+    assert.ok(run19("renderPlans()").indexOf("Push A") < run19("renderPlans()").indexOf("Chest: Density + Shape"), "saved templates come first in Plans");
+    run19(`chooseTodayWorkout('plan:${templateId}')`);
+    assert.equal(run19("todaysSelectedPlan().id"), templateId, "Today can pick a saved template");
+    run19("for (let i = 0; i < 40; i += 1) state.workoutLogs.push({ id: 'old-' + i, title: 'Old ' + i, date: new Date(Date.now() - (60 + i) * 86400000).toISOString(), sets: [{ exercise: 'Barbell Bench Press', exerciseId: 'barbell-bench', weight: '100', reps: '5' }], volume: 500 }); setView('history')");
+    assert.ok(run19("renderContent()").includes("All workouts") && run19("renderContent()").includes("Show 15 more"), "every workout is reachable from History, 15 at a time");
+    run19("showMoreWorkouts(); showMoreWorkouts()");
+    assert.ok(run19("renderContent()").includes("Old 39") && !run19("renderContent()").includes("Show 15 more"), "paging reaches the oldest workout");
+    run19("deleteLogEntry('workout', 'old-39')");
+    assert.ok(!run19("state.workoutLogs.some((log) => log.id === 'old-39')"), "an old workout can be deleted from History");
+    const summary = run19("JSON.stringify(workoutExerciseSummary({ sets: [{ exercise: 'Bench', weight: '225', reps: '5' }, { exercise: 'Bench', weight: '245', reps: '3' }, { exercise: 'Plank', weight: '', reps: '60' }] }))");
+    assert.equal(summary, JSON.stringify([{ name: "Bench", sets: 2, weight: 245, reps: 3 }, { name: "Plank", sets: 1, weight: null, reps: 60 }]), "coach workout summary keeps the best set per exercise");
+    assert.ok(!app.includes("report.workouts.slice(0, 8)"), "Logbook lists every workout in range");
+  }
+  // Round 17 App Store readiness.
+  assert(read("settings.js").includes("<h2>Privacy policy</h2>"), "A privacy policy must be reachable in the app (5.1.1)");
+  assert(read("index.html").includes("maximum-scale=1.0, user-scalable=no"), "The app must not pinch-zoom like a web page");
+  assert(styles.includes("-webkit-touch-callout: none;") && styles.includes("-webkit-tap-highlight-color: transparent;"), "No text-selection callouts or tap flash on UI chrome");
+  assert(infoPlist.includes("<key>UIUserInterfaceStyle</key>\n\t<string>Dark</string>"), "System dialogs must match the dark app");
+  assert(!/cardioType \|\| "Activity"\)/.test(toolkit.replace(/cardioType === "HealthKit" \? "Apple Health steps" : entry\.cardioType \|\| "Activity"/g, "")), "Users see Apple Health, not HealthKit");
   console.log("Audit round 12 checks passed.");
 }
 }

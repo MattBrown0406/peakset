@@ -1845,3 +1845,54 @@ textarea {
 .rest-overlay {
   overflow-y: auto;
 }
+
+.inline-link {
+  color: inherit;
+  text-decoration: underline;
+  margin-left: 6px;
+  font-weight: 600;
+}
+
+/* Native feel in the WKWebView: no text selection or long-press callouts on
+   UI chrome, no gray tap flash, no double-tap zoom, no page rubber-banding.
+   Fields stay selectable and editable. */
+html,
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  overscroll-behavior: none;
+}
+
+input,
+textarea,
+select,
+.policy-text {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+img {
+  -webkit-touch-callout: none;
+}
+
+.policy-text p {
+  margin: 10px 0 0;
+  line-height: 1.45;
+}
+
+.exercise-row:has(> .compact-btn) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.exercise-row:has(> span + strong + .compact-btn) {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.exercise-row > .compact-btn {
+  min-height: 44px;
+  min-width: 72px;
+  align-self: center;
+}

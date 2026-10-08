@@ -315,7 +315,7 @@ function peakWeekConflict(block = state.trainingBlock) {
 function renderBlockStatusLine(info = blockWeekInfo()) {
   if (!info) return "";
   if (info.status === "upcoming") return `Starts ${formatShortDate(state.trainingBlock.startDate)}`;
-  if (info.status === "complete") return "Block complete. Start the next one.";
+  if (info.status === "complete") return "Block complete. Archive it, then plan the next one.";
   if (info.deload) return `Week ${info.weekNumber} of ${info.length} · Deload: half the sets, 4+ RIR`;
   return `Week ${info.weekNumber} of ${info.length} · Aim for ${info.targetRir} RIR`;
 }
@@ -450,7 +450,11 @@ renderPlans = function renderPlansWithVolume() {
   const html = baseRenderPlansForVolume();
   const headerStart = html.indexOf("compact-page-header");
   const insertAt = headerStart === -1 ? 0 : html.indexOf("</div>", headerStart) + "</div>".length;
-  return `${html.slice(0, insertAt)}<div class="grid volume-stack">${renderTrainingBlockCard()}${renderVolumeCard()}</div>${html.slice(insertAt)}`;
+  // Plans first: the block form and volume chart (13 bars) pushed the first
+  // plan two screens down. A running block keeps a one-line status on top.
+  const info = blockWeekInfo();
+  const status = info && info.status !== "complete" ? `<div class="block-banner ${info.deload ? "deload" : ""}">${escapeHtml(renderBlockStatusLine(info))} <a href="#training-block" class="inline-link">Block details</a></div>` : "";
+  return `${html.slice(0, insertAt)}${status}${html.slice(insertAt)}<div class="grid volume-stack" id="training-block" style="margin-top:16px">${renderTrainingBlockCard()}${renderVolumeCard()}</div>`;
 };
 
 const baseRenderTodayForVolume = renderToday;
