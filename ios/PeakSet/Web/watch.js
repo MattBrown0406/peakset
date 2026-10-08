@@ -268,8 +268,13 @@ function applyWatchCommand(command) {
     // A set that arrives late must not replace a rest started by a newer set.
     if (startedNewRest && timerBefore.running && Number.isFinite(completedAt) && Number(timerBefore.startedAt) >= completedAt) {
       const remaining = Math.ceil((Number(timerBefore.endsAt) - Date.now()) / 1000);
-      if (remaining > 0) startTimer(remaining, Boolean(timerBefore.fullscreen), timerBefore.exerciseIndex, false);
-      else stopTimer();
+      if (remaining > 0) {
+        startTimer(remaining, Boolean(timerBefore.fullscreen), timerBefore.exerciseIndex, false);
+        // Same rest as before: keep its start and length (ring, Lock Screen).
+        if (Number(timerBefore.startedAt) > 0) state.timer.startedAt = Number(timerBefore.startedAt);
+        state.timer.total = Math.max(remaining, Number(timerBefore.total) || 0);
+        if (typeof refreshRestLiveActivity === "function") refreshRestLiveActivity();
+      } else stopTimer();
       // The athlete is still on the newer set's exercise.
       if (state.activeWorkout) state.activeWorkout.lastExerciseIndex = anchorBefore;
       saveState();

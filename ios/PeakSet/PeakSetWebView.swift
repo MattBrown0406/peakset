@@ -227,7 +227,9 @@ struct PeakSetWebView: UIViewRepresentable {
             }
             switch action {
             case "capture", "library":
-                guard let presenter = Self.topViewController() else { return }
+                // Always answer: the page waits for a reply before treating the
+                // camera as closed.
+                guard let presenter = Self.topViewController() else { return report(["status": "cancelled"]) }
                 if action == "library" {
                     photoCoordinator.pickFromLibrary(pose: pose, from: presenter, completion: report)
                 } else {

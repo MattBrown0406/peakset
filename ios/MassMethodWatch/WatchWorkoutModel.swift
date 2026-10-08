@@ -203,7 +203,8 @@ final class WatchWorkoutModel: NSObject, ObservableObject, WCSessionDelegate {
         if !anyOpen {
             // Workout done: no rest screen or alert from an earlier rest.
             localRest = nil
-            restSkippedAt = completedAt
+            // Just before this set, so a rest that starts with it still shows.
+            restSkippedAt = completedAt.addingTimeInterval(-0.001)
         } else if restFollows {
             localRest = (completedAt, restEnds)
             localRestStartedOnWatch = true
