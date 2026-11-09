@@ -1811,3 +1811,75 @@ console.log("Audit round 8 checks passed.");
   assert.doesNotThrow(() => runSs("resetDemoData(); renderToday()"), "reset still renders Today");
   console.log("Contest-prep tools checks passed.");
 }
+
+// Exercise form guides (guides.js): every library exercise has a well-formed
+// guide, the "How to" panel renders in the Library, live workout and history,
+// and an exercise without a guide falls back to its cue.
+{
+  const guides = makeContext({ profile: { bodyweight: 200 } });
+  const runG = (code) => vm.runInContext(code, guides.context);
+  assert.ok(webScripts.indexOf("guides.js") > webScripts.indexOf("health.js"), "guides.js loads after health.js");
+  const guideCatalog = JSON.parse(runG("JSON.stringify({ ids: exerciseLibrary.map((item) => item.id), guides: EXERCISE_GUIDES })"));
+  const shortText = (value) => typeof value === "string" && value.trim().length > 0 && value.length <= 220;
+  for (const id of guideCatalog.ids) {
+    const guide = guideCatalog.guides[id];
+    if (!guide) {
+      // A newer exercise may not have a guide yet; it must still show its cue.
+      assert.match(runG(`renderExerciseGuide(${JSON.stringify(id)})`), /<details class="exercise-guide"/, `${id} has no guide and no cue fallback`);
+      continue;
+    }
+    assert.deepEqual(Object.keys(guide).sort(), ["mistakes", "muscles", "setup", "steps"], `${id} guide has exactly setup, steps, mistakes, muscles`);
+    assert.ok(shortText(guide.setup) && (guide.setup.match(/[.!?](\s|$)/g) || []).length <= 2, `${id} setup is 1-2 short sentences`);
+    assert.ok(Array.isArray(guide.steps) && guide.steps.length >= 3 && guide.steps.length <= 4 && guide.steps.every(shortText), `${id} has 3-4 short steps`);
+    assert.ok(Array.isArray(guide.mistakes) && guide.mistakes.length >= 2 && guide.mistakes.length <= 3 && guide.mistakes.every(shortText), `${id} has 2-3 short mistakes`);
+    assert.ok(shortText(guide.muscles) && guide.muscles.length <= 80, `${id} muscles is a short string`);
+  }
+  for (const id of Object.keys(guideCatalog.guides)) assert.ok(guideCatalog.ids.includes(id), `guide ${id} has no library exercise`);
+  const guided = guideCatalog.ids.filter((id) => guideCatalog.guides[id]).length;
+  assert.equal(guided, guideCatalog.ids.length, "every current library exercise has a written guide");
+
+  const bench = runG("renderExerciseGuide('barbell-bench')");
+  for (const label of ["How to", "Setup", "Steps", "Mistakes to avoid", "Muscles worked", "Watch a demo"]) assert.ok(bench.includes(label), `guide panel shows ${label}`);
+  assert.ok(bench.includes('href="https://www.youtube.com/results?search_query=Barbell%20Bench%20Press%20form"') && bench.includes('target="_blank"'), "Watch a demo opens a YouTube search for the exercise name + form");
+
+  // Unknown ids: cue only, or nothing at all, never an error.
+  const banded = runG("renderExerciseGuide({ id: 'band-pull-apart', name: 'Band <Pull-Apart>', cue: 'Pull the band to your chest & squeeze.' })");
+  assert.ok(banded.includes("Pull the band to your chest &amp; squeeze.") && !banded.includes("<h4>Steps</h4>"), "an exercise without a guide falls back to its cue");
+  assert.ok(!banded.includes("<Pull-Apart>") && banded.includes("search_query=Band%20%3CPull-Apart%3E%20form"), "fallback markup is escaped and the demo search is URL-encoded");
+  assert.equal(runG("exerciseGuide('no-such-exercise')"), null, "an unknown id has no guide");
+  assert.equal(runG("exerciseGuide('constructor')"), null, "object prototype keys are not guides");
+  assert.equal(runG("renderExerciseGuide('no-such-exercise')"), "", "an unknown id with no cue renders nothing");
+  assert.equal(runG("renderExerciseGuide(null)"), "", "a missing exercise renders nothing");
+
+  // Library: every card gets a panel, including after a live search.
+  runG("state.view = 'library'; state.librarySearch = ''; state.libraryFilter = 'chest'; state.libraryEquipmentFilter = 'all'; state.selectedExerciseId = null");
+  const libraryHtml = runG("renderContent()");
+  const chestCards = runG("libraryRows().length");
+  assert.ok(chestCards > 0 && (libraryHtml.match(/<details class="exercise-guide"/g) || []).length === chestCards, "every Library card has a How to panel");
+  assert.ok(libraryHtml.includes("Upper chest, front delts, triceps"), "Library panels show the guide content");
+  runG("state.librarySearch = 'hammer'");
+  assert.ok(runG("renderLibraryResults()").includes("Brachialis, brachioradialis, biceps"), "Library search results keep their panels");
+
+  // Library history panel and the History tab.
+  runG("state.librarySearch = ''; state.selectedExerciseId = 'lat-pulldown'");
+  const panelHtml = runG("renderExerciseHistoryPanel('lat-pulldown')");
+  assert.ok(panelHtml.includes('ontoggle="rememberExerciseGuide(\'history-panel:lat-pulldown\', this.open)"'), "the exercise history panel has a How to panel");
+  runG("setExerciseHistory('hack-squat'); state.view = 'history'");
+  assert.ok(runG("renderContent()").includes("history:hack-squat"), "the History tab shows the selected exercise's guide");
+
+  // Live workout session.
+  runG("window.confirm = () => true; state.activeWorkout = null; startWorkout('chest-density'); state.view = 'session'");
+  const sessionHtml = runG("renderContent()");
+  const sessionCount = runG("state.activeWorkout.exercises.length");
+  assert.equal((sessionHtml.match(/<details class="exercise-guide"/g) || []).length, sessionCount, "every live workout card has a How to panel");
+  const firstId = runG("state.activeWorkout.exercises[0].id");
+  runG(`rememberExerciseGuide('session:${firstId}', true)`);
+  assert.ok(runG("renderContent()").includes(`<details class="exercise-guide" open ontoggle="rememberExerciseGuide('session:${firstId}'`), "an opened guide stays open across re-renders");
+  runG("state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'travel-band-row', name: 'Band Row', cue: 'Row the band to your ribs.' }");
+  assert.ok(runG("renderContent()").includes("Row the band to your ribs."), "a live exercise without a guide shows its cue instead of breaking the session");
+
+  // External links leave the web view for Safari.
+  assert.ok(/case "http", "https", "mailto", "tel":\s*if navigationAction\.navigationType == \.linkActivated \{\s*UIApplication\.shared\.open\(url\)\s*\}\s*decisionHandler\(\.cancel\)/.test(swiftWebView), "tapped https links (the YouTube demo) open in Safari, never inside the web view");
+  assert.ok(styles.includes(".exercise-guide > summary") && styles.includes(".guide-demo-link"), "guide panel styles ship");
+  console.log(`Exercise guide checks passed (${guided} guides).`);
+}

@@ -45,6 +45,7 @@ Debug builds accept `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='<script>'` on `xcrun simc
 - Peak Week and show-day checklist on Today from 7 days out: day-by-day items, show-day tan, suit, oil, pump-up plan, snacks and check-in time, your own items, and water/sodium/carb targets you fill in from your coach's plan (no water-cut or diuretic advice; risky targets get a warning); previewable from More any time
 - Guided posing practice for your division's mandatory poses and quarter turns, with adjustable holds, rests and rounds, the boxing bell at each pose, and finished minutes saved to prep activity
 - Warm-up ramp (2-4 sets rounded to loadable weights) and a plates-per-side calculator on barbell and Smith lifts in the live workout, with saved bar weights in lb or kg
+- "How to" form guides for every library exercise (setup, steps, mistakes to avoid, muscles worked) in the Library, live workout, and exercise history, with a "Watch a demo" link that opens a YouTube search in Safari
 
 - Onboarding for gender, age, starting body weight, training phase, and starting measurements
 - Off-season, bulking, and contest prep training context
