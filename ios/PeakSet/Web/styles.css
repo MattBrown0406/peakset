@@ -2182,3 +2182,37 @@ button.check-item.prep-check {
   color: var(--accent-2);
   font-weight: 700;
 }
+
+/* Nutrition: four number boxes (kcal, protein, carbs, fat). */
+.nutrition-inputs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.nutrition-inputs .field {
+  min-width: 0;
+}
+
+.today-nutrition .volume-list,
+.nutrition-progress .volume-list {
+  margin-top: 4px;
+}
+
+@media (max-width: 560px) {
+  .nutrition-inputs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.nutrition-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.nutrition-badges .badge {
+  white-space: nowrap;
+}

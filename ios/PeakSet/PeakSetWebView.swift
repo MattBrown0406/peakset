@@ -388,6 +388,13 @@ struct PeakSetWebView: UIViewRepresentable {
                 service.readBodySamples(since: since, kilograms: (payload["unit"] as? String) == "kg", centimeters: (payload["lengthUnit"] as? String) == "cm") { [weak self] result in
                     self?.sendHealthKitResult(action: action, result.map { samples -> [String: Any] in ["status": "bodySamples", "samples": samples, "unit": (payload["unit"] as? String) ?? "lb"] })
                 }
+            case "readNutrition":
+                let sinceText = payload["since"] as? String ?? ""
+                let since = parseISODate(sinceText) ?? Date().addingTimeInterval(-90 * 86400)
+                service.readNutritionDays(since: since) { [weak self] result in
+                    // The window goes back so the page can drop days deleted in the food app.
+                    self?.sendHealthKitResult(action: action, result.map { days -> [String: Any] in ["status": "nutritionDays", "days": days, "since": sinceText] })
+                }
             case "readSteps":
                 service.readTodaySteps { [weak self] result in
                     self?.sendHealthKitResult(action: action, result.map { value -> [String: Any] in ["status": "stepsImported", "message": "Today's steps imported", "steps": value] })
