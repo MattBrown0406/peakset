@@ -27,12 +27,12 @@
 		2B3C4D5E6F7A800000000015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000008 /* Assets.xcassets */; };
 		2B3C4D5E6F7A800000000016 /* MassMethodWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2B3C4D5E6F7A800000000017 /* MassMethodWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		2B3C4D5E6F7A80000000F002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */; };
-		2B3C4D5E6F7A80000000F004 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */; };
 		2B3C4D5E6F7A800000000031 /* MassMethodWidgetSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000030 /* MassMethodWidgetSummary.swift */; };
 		2B3C4D5E6F7A800000000032 /* MassMethodWidgetSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000030 /* MassMethodWidgetSummary.swift */; };
 		2B3C4D5E6F7A800000000034 /* PeakSetWidgetBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000033 /* PeakSetWidgetBridge.swift */; };
 		2B3C4D5E6F7A800000000036 /* MassMethodTodayWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000035 /* MassMethodTodayWidget.swift */; };
+		2B3C4D5E6F7A80000000F002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */; };
+		2B3C4D5E6F7A80000000F004 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */; };
 		2B3C4D5E6F7A80000000F006 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F005 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
@@ -102,12 +102,12 @@
 		2B3C4D5E6F7A800000000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2B3C4D5E6F7A800000000009 /* MassMethodWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MassMethodWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MassMethodWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2B3C4D5E6F7A800000000030 /* MassMethodWidgetSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MassMethodWidgetSummary.swift; sourceTree = "<group>"; };
 		2B3C4D5E6F7A800000000033 /* PeakSetWidgetBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetWidgetBridge.swift; sourceTree = "<group>"; };
 		2B3C4D5E6F7A800000000035 /* MassMethodTodayWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MassMethodTodayWidget.swift; sourceTree = "<group>"; };
 		2B3C4D5E6F7A800000000037 /* MassMethodWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MassMethodWidgets.entitlements; sourceTree = "<group>"; };
+		2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2B3C4D5E6F7A80000000F005 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -280,17 +280,6 @@
 				LastSwiftUpdateCheck = 2650;
 				LastUpgradeCheck = 2650;
 				TargetAttributes = {
-					2B3C4D5E6F7A800000000020 = {
-						CreatedOnToolsVersion = 26.5;
-						SystemCapabilities = {
-							com.apple.ApplicationGroups.iOS = {
-								enabled = 1;
-							};
-						};
-					};
-					2B3C4D5E6F7A800000000021 = {
-						CreatedOnToolsVersion = 26.5;
-					};
 					1A2B3C4D5E6F700000000400 = {
 						CreatedOnToolsVersion = 26.5;
 						SystemCapabilities = {
@@ -304,6 +293,17 @@
 								enabled = 1;
 							};
 						};
+					};
+					2B3C4D5E6F7A800000000020 = {
+						CreatedOnToolsVersion = 26.5;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
+					};
+					2B3C4D5E6F7A800000000021 = {
+						CreatedOnToolsVersion = 26.5;
 					};
 				};
 			};
@@ -398,6 +398,8 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+/* End PBXSourcesBuildPhase section */
+
 /* Begin PBXTargetDependency section */
 		2B3C4D5E6F7A800000000024 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -410,7 +412,6 @@
 			targetProxy = 2B3C4D5E6F7A800000000023 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
-/* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
 		1A2B3C4D5E6F700000000602 /* Debug */ = {
@@ -533,7 +534,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PeakSet/Info.plist;
@@ -560,7 +561,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = PeakSet/PeakSet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PeakSet/Info.plist;
@@ -587,10 +588,11 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MassMethodWidgets/MassMethodWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MassMethodWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Mass Method";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -613,10 +615,11 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MassMethodWidgets/MassMethodWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MassMethodWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Mass Method";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -640,7 +643,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Mass Method";
@@ -668,7 +671,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Mass Method";
