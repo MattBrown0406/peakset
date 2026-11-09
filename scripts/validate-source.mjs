@@ -1480,7 +1480,7 @@ console.log("Audit round 8 checks passed.");
       runG("state.equipmentProfiles.push({ id: 'garage', name: 'Garage', equipment: ['Barbell', 'Dumbbells', 'Bench', 'Rack', 'Plates', 'Pull-up bar', 'Bodyweight'] }); state.activeEquipmentProfileId = 'garage'; state.workoutLogs = []; state.phase = 'offseason'");
       const garageSeen = new Set();
       for (let i = 0; i < 10; i += 1) {
-        garageSeen.add(runG(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'g-${i}', title: plan.title, date: new Date(Date.now() - (20 - ${i}) * 86400000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); return plan.muscle; })()`));
+        garageSeen.add(runG(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'g-${i}', title: plan.title, date: new Date(Date.now() - (20 - ${i}) * 86400000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); const counts = {}; plan.exercises.forEach(([id]) => { const muscle = exerciseById(id).muscle; if (muscle !== 'abs') counts[muscle] = (counts[muscle] || 0) + 1; }); return plan.muscle === 'travel' ? Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] : plan.muscle; })()`));
       }
       assert.ok(garageSeen.size >= 4, `a garage profile rotates muscles (saw ${[...garageSeen].join(", ")})`);
       assert.ok(read("toolkit.js").includes("Number.isInteger(Math.round(bestWeight * 400) / 100) ? 2 : 1"), "progression copy keeps quarter-step loads like 61.25 exact");
@@ -1603,4 +1603,53 @@ console.log("Audit round 8 checks passed.");
   assert(!/cardioType \|\| "Activity"\)/.test(toolkit.replace(/cardioType === "HealthKit" \? "Apple Health steps" : entry\.cardioType \|\| "Activity"/g, "")), "Users see Apple Health, not HealthKit");
   console.log("Audit round 12 checks passed.");
 }
+}
+
+// Travel: hotel profiles, automatic equipment swaps, dumbbell cap, trip mode.
+{
+  const tv = makeContext({ profile: { bodyweight: 200 } });
+  const run = (code) => vm.runInContext(code, tv.context);
+  const fitsProfile = (planId, profileId) => run(`travelPlanFits(planTemplates.find((p) => p.id === '${planId}'), state.equipmentProfiles.find((p) => p.id === '${profileId}'))`);
+  assert.ok(run("['road-gym','hotel-dumbbells','hotel-room','hotel-room-bodyweight'].every((id) => state.equipmentProfiles.some((p) => p.id === id))"), "hotel equipment profiles are added");
+  for (const id of ["chest-road-db", "back-road-db", "shoulders-road-db", "arms-road-db", "legs-road-db", "full-road-db", "express-upper-db", "express-lower-db"]) assert.ok(fitsProfile(id, "hotel-dumbbells"), `${id} fits a dumbbells-only hotel gym`);
+  for (const id of ["room-upper", "room-lower", "room-full", "express-room"]) assert.ok(fitsProfile(id, "hotel-room"), `${id} fits a hotel room with a band`);
+  assert.ok(fitsProfile("room-no-equipment", "hotel-room-bodyweight"), "the no-equipment room workout needs nothing but the room");
+  assert.ok(run("exerciseLibrary.filter((e) => e.repsOnly).every((e) => e.muscle === 'abs' || exerciseMuscleGroup(e))"), "every new travel exercise counts toward a muscle's weekly sets");
+  assert.ok(run("exerciseMatchesEquipmentProfile(exerciseById('push-up'), { equipment: ['Bodyweight'] })"), "push-ups need only bodyweight");
+
+  // A hotel room swaps cable work for band and bodyweight moves.
+  run("selectEquipmentProfile('hotel-room'); window.__toasts = []; toast = (message) => window.__toasts.push(message); startWorkout('back-road-gym')");
+  assert.ok(run("state.activeWorkout.exercises.every((e) => exerciseMatchesEquipmentProfile(exerciseById(e.id)))"), "every exercise in a started workout fits the hotel room");
+  assert.equal(run("state.activeWorkout.exercises[0].originalId"), "lat-pulldown", "a swapped exercise remembers what was planned");
+  assert.match(run("window.__toasts.at(-1)"), /Swapped for your equipment: Lat Pulldown → /, "the athlete is told what was swapped");
+  assert.equal(run("isRepsOnlyExercise(state.activeWorkout.exercises[0])"), true, "band exercises log reps only");
+  run("updateSet(0, 0, 'reps', '15'); completeSet(0, 0)");
+  assert.equal(run("state.activeWorkout.exercises[0].sets[0].done"), true, "a band set completes without a weight");
+  run("state.activeWorkout = null; stopTimer()");
+
+  // Dumbbell cap: home 100s don't follow the athlete to the hotel.
+  run("selectEquipmentProfile('hotel-dumbbells')");
+  run("state.workoutLogs.unshift({ id: 'home', date: new Date(Date.now() - 3 * 864e5).toISOString(), title: 'Chest', sets: [1, 2].map((set) => ({ exerciseId: 'incline-db-press', exercise: 'Incline Dumbbell Press', set, weight: '100', reps: '15', done: true })) })");
+  assert.match(run("progressionSuggestion({ id: 'incline-db-press', targetReps: '10-15' })"), /top out at 50 lb/, "progression stops at the hotel's heaviest dumbbell");
+  run("startWorkout('chest-road-db'); copyPreviousPerformance(0)");
+  assert.equal(run("state.activeWorkout.exercises[0].sets[0].weight"), "50", "Copy Last fills the hotel's heaviest dumbbell, not the home weight");
+  assert.equal(run("suggestedSetValues(state.activeWorkout.exercises[0], 1).weight"), "50", "the watch suggests no more than the cap");
+  run("state.units = 'metric'");
+  assert.equal(run("travelDumbbellCap()"), 22.5, "a 50 lb cap reads as 22.5 kg, never above the real dumbbell");
+  run("state.units = 'imperial'; state.activeWorkout = null");
+
+  // Trip mode switches the profile and pauses the block, then switches back.
+  run("selectEquipmentProfile('all-equipment'); state.trainingBlock = { id: 'b', name: 'Block', startDate: dateKey(startOfWeek(new Date())), accumulationWeeks: 4, deload: true, focus: [] }");
+  const blockStart = run("state.trainingBlock.startDate");
+  for (const [id, value] of Object.entries({ tripProfile: "hotel-room", tripUntil: run("dateKey(addDays(new Date(), 8))") })) tv.elements.set(id, { value, innerHTML: "", classList: { add() {}, remove() {} } });
+  tv.elements.set("tripPauseBlock", { checked: true, value: "on", innerHTML: "", classList: { add() {}, remove() {} } });
+  run("startTrip()");
+  assert.equal(run("state.activeEquipmentProfileId"), "hotel-room", "trip mode switches to the hotel equipment");
+  assert.ok(run("travelPlanFits(todaysSelectedPlan())"), "Today recommends a workout the hotel room can do");
+  assert.match(run("renderToday()"), /Trip mode/, "Today shows the trip");
+  run("state.trip.startedOn = dateKey(addDays(new Date(), -9)); state.trip.until = dateKey(addDays(new Date(), -1)); checkTripExpiry()");
+  assert.equal(run("state.activeEquipmentProfileId"), "all-equipment", "the home profile comes back after the trip");
+  assert.equal(run("state.trip.active"), false, "the trip ends on its own after the return date");
+  assert.equal(run(`daysBetweenKeys('${blockStart}', state.trainingBlock.startDate)`), 7, "a 9-day trip moves the block back one week");
+  console.log("Travel checks passed.");
 }

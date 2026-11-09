@@ -135,7 +135,7 @@ const exerciseLibrary = [
   { id: "mid-cable-fly", name: "Mid Cable Fly", muscle: "chest", equipment: "Cable crossover", hotel: true, cue: "Keep tension even through the midline." },
   { id: "db-fly", name: "Dumbbell Fly", muscle: "chest", equipment: "Dumbbells, bench", hotel: true, cue: "Long stretch, soft elbows, controlled arc." },
   { id: "machine-fly-press", name: "Machine Fly-Press", muscle: "chest", equipment: "Converging machine", hotel: false, cue: "Blend press and fly for chest-first reps." },
-  { id: "push-up", name: "Deficit Push-Up", muscle: "chest", equipment: "Handles or dumbbells", hotel: true, cue: "Use depth and tempo when load is limited." },
+  { id: "push-up", name: "Deficit Push-Up", muscle: "chest", equipment: "Bodyweight or handles", hotel: true, cue: "Use depth and tempo when load is limited." },
   { id: "squeeze-press", name: "Dumbbell Squeeze Press", muscle: "chest", equipment: "Dumbbells, bench", hotel: true, cue: "Crush dumbbells together for constant pec tension." },
   { id: "single-arm-cable-press", name: "Single-Arm Cable Press", muscle: "chest", equipment: "Cable handle", hotel: true, cue: "Press across the body and finish with pec squeeze." },
   { id: "landmine-press-chest", name: "Landmine Chest Press", muscle: "chest", equipment: "Landmine", hotel: false, cue: "Angled press for upper chest and serratus." },
@@ -225,7 +225,36 @@ const exerciseLibrary = [
   { id: "side-plank", name: "Side Plank", muscle: "abs", equipment: "Bodyweight", hotel: true, cue: "Stack hips and drive the bottom elbow into the floor." },
   { id: "dead-bug", name: "Dead Bug", muscle: "abs", equipment: "Bodyweight", hotel: true, cue: "Keep low back down while opposite limbs extend." },
   { id: "stomach-vacuum", name: "Stomach Vacuum", muscle: "abs", equipment: "Bodyweight", hotel: true, cue: "Exhale fully, pull waist in, and hold control." },
-  { id: "mountain-climber", name: "Slow Mountain Climber", muscle: "abs", equipment: "Bodyweight", hotel: true, cue: "Drive knees under control while keeping hips quiet." }
+  { id: "mountain-climber", name: "Slow Mountain Climber", muscle: "abs", equipment: "Bodyweight", hotel: true, cue: "Drive knees under control while keeping hips quiet." },
+  // Hotel room (bodyweight and bands) and dumbbell-only hotel gym work.
+  // Band and bodyweight moves log reps only. "Bands" means a long loop or
+  // tube band with a door anchor.
+  { id: "feet-elevated-push-up", name: "Feet-Elevated Push-Up", muscle: "chest", equipment: "Bodyweight", hotel: true, repsOnly: true, cue: "Feet on the bed or a chair shifts the work to the upper chest. Lower for 3 seconds." },
+  { id: "close-grip-push-up", name: "Close-Grip Push-Up", muscle: "arms", equipment: "Bodyweight", hotel: true, repsOnly: true, cue: "Hands under the chest, elbows tight to the ribs; lock out hard for triceps." },
+  { id: "band-chest-press", name: "Band Chest Press", muscle: "chest", equipment: "Bands", hotel: true, repsOnly: true, cue: "Anchor behind you at chest height, step out for tension, and press without shrugging." },
+  { id: "band-chest-fly", name: "Band Chest Fly", muscle: "chest", equipment: "Bands", hotel: true, repsOnly: true, cue: "Soft elbows, hug a wide arc, and squeeze for a second at the front." },
+  { id: "table-inverted-row", name: "Table Inverted Row", muscle: "back", equipment: "Bodyweight", hotel: true, repsOnly: true, cue: "Test the table first. Lie under the edge and row your chest up to it." },
+  { id: "band-row", name: "Band Seated Row", muscle: "back", equipment: "Bands", hotel: true, repsOnly: true, cue: "Anchor low, sit tall, and drive elbows back past the ribs." },
+  { id: "band-lat-pulldown", name: "Band Lat Pulldown", muscle: "back", equipment: "Bands", hotel: true, repsOnly: true, cue: "Anchor high on the door, kneel, and pull elbows down to your sides." },
+  { id: "band-straight-arm-pulldown", name: "Band Straight-Arm Pulldown", muscle: "back", equipment: "Bands", hotel: true, repsOnly: true, cue: "Arms long, sweep the band to your thighs, and feel the lats stretch on the way up." },
+  { id: "band-face-pull", name: "Band Face Pull", muscle: "back", equipment: "Bands", hotel: true, repsOnly: true, cue: "Anchor at face height and pull the band apart toward your ears." },
+  { id: "pike-push-up", name: "Pike Push-Up", muscle: "shoulders", equipment: "Bodyweight", hotel: true, repsOnly: true, cue: "Hips high, head travels in front of the hands. Feet on the bed makes it harder." },
+  { id: "band-overhead-press", name: "Band Overhead Press", muscle: "shoulders", equipment: "Bands", hotel: true, repsOnly: true, cue: "Stand on the band and press overhead with ribs down." },
+  { id: "band-lateral-raise", name: "Band Lateral Raise", muscle: "shoulders", equipment: "Bands", hotel: true, repsOnly: true, cue: "Stand on the band, lead with the elbows, and pause at shoulder height." },
+  { id: "band-rear-delt-pull-apart", name: "Band Pull-Apart", muscle: "shoulders", equipment: "Bands", hotel: true, repsOnly: true, cue: "Arms straight at shoulder height; pull the band to your chest with rear delts, not traps." },
+  { id: "band-curl", name: "Band Curl", muscle: "arms", equipment: "Bands", hotel: true, repsOnly: true, cue: "Stand on the band, elbows pinned, and squeeze hard at the top." },
+  { id: "band-hammer-curl", name: "Band Hammer Curl", muscle: "arms", equipment: "Bands", hotel: true, repsOnly: true, cue: "Neutral grip, elbows still, slow on the way down." },
+  { id: "band-pushdown", name: "Band Triceps Pushdown", muscle: "arms", equipment: "Bands", hotel: true, repsOnly: true, cue: "Anchor high, elbows at your sides, and lock out fully." },
+  { id: "band-overhead-extension", name: "Band Overhead Extension", muscle: "arms", equipment: "Bands", hotel: true, repsOnly: true, cue: "Anchor low behind you and extend overhead for a long-head stretch." },
+  { id: "db-overhead-extension", name: "Dumbbell Overhead Extension", muscle: "arms", equipment: "Dumbbell", hotel: true, cue: "One dumbbell in both hands, elbows forward, deep stretch behind the head." },
+  { id: "db-triceps-kickback", name: "Dumbbell Triceps Kickback", muscle: "arms", equipment: "Dumbbell, bench", hotel: true, cue: "Upper arm parallel to the floor; straighten and hold the squeeze." },
+  { id: "bodyweight-split-squat", name: "Rear-Foot-Elevated Split Squat", muscle: "legs", equipment: "Bodyweight", hotel: true, repsOnly: true, cue: "Back foot on the bed or a chair. Lower for 3 seconds and pause at the bottom." },
+  { id: "pause-air-squat", name: "Pause Squat", muscle: "legs", equipment: "Bodyweight", hotel: true, repsOnly: true, cue: "Sit deep, hold 2 seconds at the bottom, and stand up without bouncing." },
+  { id: "single-leg-rdl", name: "Single-Leg RDL", muscle: "legs", equipment: "Bodyweight or dumbbell", hotel: true, repsOnly: true, cue: "Hips back, back flat, and feel the hamstring stretch on the standing leg." },
+  { id: "band-leg-curl", name: "Band Leg Curl", muscle: "legs", equipment: "Bands", hotel: true, repsOnly: true, cue: "Anchor low, lie face down, and curl your heel toward your glutes." },
+  { id: "single-leg-glute-bridge", name: "Single-Leg Glute Bridge", muscle: "legs", equipment: "Bodyweight", hotel: true, repsOnly: true, cue: "Drive through the heel and hold the top for a second." },
+  { id: "band-hip-abduction", name: "Band Hip Abduction", muscle: "legs", equipment: "Bands", hotel: true, repsOnly: true, cue: "Band above the knees; push the knees out and control the return." },
+  { id: "single-leg-calf-raise", name: "Single-Leg Calf Raise", muscle: "legs", equipment: "Bodyweight", hotel: true, repsOnly: true, cue: "On a step or book, full stretch at the bottom and a 2-second hold at the top." }
 ];
 
 const planTemplates = [
@@ -700,6 +729,215 @@ const planTemplates = [
       ["db-rdl", 3, "10-12", 75],
       ["cable-hip-abduction", 3, "15-20 each", 35]
     ]
+  },
+  // Dumbbell-only hotel gyms (a bench and a rack of dumbbells, no cables).
+  {
+    id: "chest-road-db",
+    title: "Road Gym: Chest (Dumbbells Only)",
+    muscle: "travel",
+    phase: "travel",
+    rest: 60,
+    note: "For hotel gyms with only a bench and dumbbells. Slow the lowering when the dumbbells run out.",
+    exercises: [
+      ["incline-db-press", 4, "10-15", 60, 0, { setType: "tempo" }],
+      ["flat-db-press", 3, "10-15", 60],
+      ["db-fly", 3, "12-15", 45],
+      ["push-up", 3, "AMRAP", 45]
+    ]
+  },
+  {
+    id: "back-road-db",
+    title: "Road Gym: Back (Dumbbells Only)",
+    muscle: "travel",
+    phase: "travel",
+    rest: 60,
+    note: "Rows and pullovers with just a bench and dumbbells.",
+    exercises: [
+      ["one-arm-db-row", 4, "10-12 each", 60, 0, { setType: "paused" }],
+      ["chest-supported-row", 4, "10-15", 60],
+      ["db-pullover", 3, "12-15", 45],
+      ["shrug", 3, "12-15", 45]
+    ]
+  },
+  {
+    id: "shoulders-road-db",
+    title: "Road Gym: Shoulders (Dumbbells Only)",
+    muscle: "travel",
+    phase: "travel",
+    rest: 45,
+    note: "Side and rear delt volume that works with light dumbbells.",
+    exercises: [
+      ["db-shoulder-press", 4, "10-12", 60],
+      ["seated-lateral-raise", 4, "15-20", 35],
+      ["rear-delt-fly", 4, "15-20", 35],
+      ["db-lateral-raise", 3, "15-25", 30, 0, { setType: "one-and-half" }],
+      ["y-raise", 3, "12-15", 40]
+    ]
+  },
+  {
+    id: "arms-road-db",
+    title: "Road Gym: Arms (Dumbbells Only)",
+    muscle: "travel",
+    phase: "travel",
+    rest: 40,
+    note: "Biceps and triceps supersets with dumbbells and a bench.",
+    exercises: [
+      ["incline-db-curl", 3, "10-12", 40, 0, { group: "A" }],
+      ["skull-crusher", 3, "10-15", 40, 0, { group: "A" }],
+      ["hammer-curl", 3, "12-15", 40, 0, { group: "B" }],
+      ["db-overhead-extension", 3, "12-15", 40, 0, { group: "B" }],
+      ["concentration-curl", 2, "12-15", 30],
+      ["bench-dip", 2, "AMRAP", 30]
+    ]
+  },
+  {
+    id: "legs-road-db",
+    title: "Road Gym: Legs (Dumbbells Only)",
+    muscle: "travel",
+    phase: "travel",
+    rest: 60,
+    note: "Unilateral work and tempo make light dumbbells feel heavy.",
+    exercises: [
+      ["db-bulgarian-split-squat", 4, "10-12 each", 60],
+      ["goblet-squat", 4, "15-20", 60, 0, { setType: "tempo" }],
+      ["db-rdl", 4, "10-15", 60],
+      ["db-step-up", 3, "12 each", 45],
+      ["standing-calf-raise", 4, "15-25", 30, 0, { setType: "paused" }]
+    ]
+  },
+  {
+    id: "full-road-db",
+    title: "Road Gym: Full Body (Dumbbells Only)",
+    muscle: "travel",
+    phase: "travel",
+    rest: 45,
+    note: "One session for the whole body when you only have dumbbells and a bench.",
+    exercises: [
+      ["goblet-squat", 3, "12-15", 60, 0, { setType: "tempo" }],
+      ["incline-db-press", 3, "10-15", 60],
+      ["one-arm-db-row", 3, "10-12 each", 60],
+      ["db-rdl", 3, "10-15", 60],
+      ["db-lateral-raise", 3, "15-20", 30, 0, { group: "A" }],
+      ["db-curl", 3, "12-15", 30, 0, { group: "A" }],
+      ["db-overhead-extension", 3, "12-15", 30]
+    ]
+  },
+  // Hotel room: bodyweight plus a door-anchored band.
+  {
+    id: "room-upper",
+    title: "Hotel Room: Upper Body",
+    muscle: "travel",
+    phase: "travel",
+    rest: 45,
+    note: "Bodyweight and one band with a door anchor. Go close to failure; tempo does the work load usually does.",
+    exercises: [
+      ["feet-elevated-push-up", 4, "AMRAP", 60, 0, { setType: "tempo" }],
+      ["band-row", 4, "15-20", 45],
+      ["pike-push-up", 3, "8-12", 60],
+      ["band-lat-pulldown", 3, "15-20", 45],
+      ["band-lateral-raise", 3, "20-25", 30],
+      ["band-curl", 3, "15-20", 30, 0, { group: "A" }],
+      ["band-pushdown", 3, "15-20", 30, 0, { group: "A" }]
+    ]
+  },
+  {
+    id: "room-lower",
+    title: "Hotel Room: Lower Body",
+    muscle: "travel",
+    phase: "travel",
+    rest: 45,
+    note: "Single-leg work, pauses, and slow lowering for a real leg day without weights.",
+    exercises: [
+      ["bodyweight-split-squat", 4, "12-15 each", 60, 0, { setType: "tempo" }],
+      ["single-leg-rdl", 4, "10-12 each", 45],
+      ["pause-air-squat", 3, "20", 45, 0, { setType: "paused" }],
+      ["band-leg-curl", 3, "15-20", 40],
+      ["single-leg-glute-bridge", 3, "12-15 each", 40],
+      ["single-leg-calf-raise", 4, "15-20 each", 30, 0, { setType: "paused" }]
+    ]
+  },
+  {
+    id: "room-full",
+    title: "Hotel Room: Full Body",
+    muscle: "travel",
+    phase: "travel",
+    rest: 45,
+    note: "Everything in one session with a band and the floor.",
+    exercises: [
+      ["push-up", 3, "AMRAP", 60, 0, { setType: "tempo" }],
+      ["band-row", 3, "15-20", 45],
+      ["bodyweight-split-squat", 3, "12-15 each", 60],
+      ["single-leg-rdl", 3, "10-12 each", 45],
+      ["band-lateral-raise", 3, "20-25", 30, 0, { group: "A" }],
+      ["band-rear-delt-pull-apart", 3, "20-25", 30, 0, { group: "A" }],
+      ["band-curl", 2, "15-20", 30, 0, { group: "B" }],
+      ["band-pushdown", 2, "15-20", 30, 0, { group: "B" }]
+    ]
+  },
+  {
+    id: "room-no-equipment",
+    title: "Hotel Room: No Equipment",
+    muscle: "travel",
+    phase: "travel",
+    rest: 45,
+    note: "No band needed: a bed, a chair, and a sturdy table.",
+    exercises: [
+      ["push-up", 4, "AMRAP", 60, 0, { setType: "tempo" }],
+      ["table-inverted-row", 4, "8-15", 60],
+      ["pike-push-up", 3, "8-12", 60],
+      ["close-grip-push-up", 3, "AMRAP", 45],
+      ["bodyweight-split-squat", 4, "12-15 each", 60, 0, { setType: "tempo" }],
+      ["single-leg-rdl", 3, "10-12 each", 45],
+      ["single-leg-glute-bridge", 3, "12-15 each", 40],
+      ["single-leg-calf-raise", 3, "15-20 each", 30]
+    ]
+  },
+  // Short sessions for days when meetings or gym hours squeeze training.
+  {
+    id: "express-upper-db",
+    title: "Road Gym Express: Upper (30 min)",
+    muscle: "travel",
+    phase: "travel",
+    rest: 45,
+    note: "Three supersets with dumbbells and a bench, about 30 minutes.",
+    exercises: [
+      ["incline-db-press", 3, "10-15", 45, 0, { group: "A" }],
+      ["one-arm-db-row", 3, "10-12 each", 45, 0, { group: "A" }],
+      ["db-lateral-raise", 3, "15-20", 30, 0, { group: "B" }],
+      ["rear-delt-fly", 3, "15-20", 30, 0, { group: "B" }],
+      ["db-curl", 3, "12-15", 30, 0, { group: "C" }],
+      ["db-overhead-extension", 3, "12-15", 30, 0, { group: "C" }]
+    ]
+  },
+  {
+    id: "express-lower-db",
+    title: "Road Gym Express: Lower (30 min)",
+    muscle: "travel",
+    phase: "travel",
+    rest: 45,
+    note: "Two supersets with dumbbells, about 30 minutes.",
+    exercises: [
+      ["goblet-squat", 3, "15-20", 45, 0, { group: "A" }],
+      ["db-rdl", 3, "10-15", 45, 0, { group: "A" }],
+      ["db-bulgarian-split-squat", 3, "10-12 each", 45, 0, { group: "B" }],
+      ["standing-calf-raise", 3, "15-25", 30, 0, { group: "B" }]
+    ]
+  },
+  {
+    id: "express-room",
+    title: "Hotel Room Express (20 min)",
+    muscle: "travel",
+    phase: "travel",
+    rest: 30,
+    note: "Three quick supersets in the room, about 20 minutes.",
+    exercises: [
+      ["push-up", 3, "AMRAP", 30, 0, { group: "A" }],
+      ["band-row", 3, "15-20", 30, 0, { group: "A" }],
+      ["bodyweight-split-squat", 3, "12 each", 30, 0, { group: "B" }],
+      ["single-leg-rdl", 3, "10 each", 30, 0, { group: "B" }],
+      ["band-lateral-raise", 2, "20-25", 30, 0, { group: "C" }],
+      ["band-curl", 2, "15-20", 30, 0, { group: "C" }]
+    ]
   }
 ];
 
@@ -722,6 +960,15 @@ const abFinishersByPlan = {
   "legs-posterior": ["ab-wheel-rollout", 3, "8-12", 45],
   "legs-prep-detail": ["reverse-crunch", 3, "12-20", 35],
   "legs-road-gym": ["bench-leg-raise", 3, "12-20", 35],
+  "chest-road-db": ["bench-leg-raise", 3, "12-20", 35],
+  "back-road-db": ["reverse-crunch", 3, "12-20", 35],
+  "shoulders-road-db": ["dead-bug", 3, "10 each", 30],
+  "arms-road-db": ["side-plank", 3, "30 sec each", 30],
+  "legs-road-db": ["weighted-crunch", 3, "12-15", 35],
+  "room-upper": ["dead-bug", 3, "10 each", 30],
+  "room-lower": ["plank", 3, "45 sec", 30],
+  "room-full": ["side-plank", 3, "30 sec each", 30],
+  "room-no-equipment": ["mountain-climber", 3, "12 each", 30],
   "prep-push-detail": ["stomach-vacuum", 4, "20 sec", 30],
   "prep-pull-detail": ["pallof-press", 3, "12 each", 35],
   "prep-legs-pump": ["reverse-crunch", 3, "12-20", 35],

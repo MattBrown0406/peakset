@@ -10,7 +10,11 @@ const setTypeOptions = [
   ["myo", "Myo-rep"],
   ["cluster", "Cluster"],
   ["failure", "Failure"],
-  ["partials", "Lengthened partials"]
+  ["partials", "Lengthened partials"],
+  // Make light loads (hotel dumbbells, bands) hard enough to grow.
+  ["tempo", "Tempo (3 s down)"],
+  ["paused", "Paused reps"],
+  ["one-and-half", "1½ reps"]
 ];
 const equipmentOptions = ["Barbell", "Dumbbells", "Cable", "Machine", "Smith", "Bench", "Bodyweight", "Bands", "Rack", "Pull-Up Bar", "Dip Station", "Plates", "Landmine", "Stability Ball", "Ab Wheel"];
 const measurementDefinitions = [

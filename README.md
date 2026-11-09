@@ -51,6 +51,10 @@ Debug builds accept `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='<script>'` on `xcrun simc
 - Expanded lift library with 20+ movements each for chest, back, shoulders, arms, and legs
 - Abs exercise library with ab finishers mixed into many plans instead of a standalone abs day
 - Road Gym mode for hotel gyms with a bench, dumbbells up to 50 lb, cable handles, rope, and ankle cuffs
+- Travel training: hotel equipment profiles (cables, dumbbells only, a room with a band, a room with nothing), dumbbell-only and hotel-room workouts, 20–30 minute express sessions, and bodyweight and band exercises that log reps only
+- Exercises the current equipment can't do are swapped automatically when a workout starts (saved swaps first, then the closest same-muscle exercise)
+- A heaviest-dumbbell setting per equipment profile: progression, Copy Last, and the watch never suggest more than the hotel has, and Tempo, Paused, and 1½-rep set types make light weights harder
+- Trip mode: pick where you'll train and when you're back; Today recommends workouts that fit, the training block can pause while away, and the home profile returns on its own
 - 30+ pre-planned body-part, prep, weak-point, and Road Gym workouts
 - Advanced workout builder with equipment profiles, scheduling, reordering, duplication, supersets, set types, and reusable templates
 - Live-workout editing for adding, removing, reordering, substituting, or changing the planned set count
