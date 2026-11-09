@@ -42,6 +42,9 @@ Debug builds accept `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='<script>'` on `xcrun simc
 - Apple Watch app for logging sets with the Digital Crown and running rest from the wrist
 - Apple Health body data import: body weight, body fat %, lean body mass, and waist from smart scales and other apps, one reading per day, hand-logged entries always win
 - Coach mode without accounts: athletes send a check-in file; coaches keep a roster with trends, volume, photos, and notes, and send programs back
+- Peak Week and show-day checklist on Today from 7 days out: day-by-day items, show-day tan, suit, oil, pump-up plan, snacks and check-in time, your own items, and water/sodium/carb targets you fill in from your coach's plan (no water-cut or diuretic advice; risky targets get a warning); previewable from More any time
+- Guided posing practice for your division's mandatory poses and quarter turns, with adjustable holds, rests and rounds, the boxing bell at each pose, and finished minutes saved to prep activity
+- Warm-up ramp (2-4 sets rounded to loadable weights) and a plates-per-side calculator on barbell and Smith lifts in the live workout, with saved bar weights in lb or kg
 
 - Onboarding for gender, age, starting body weight, training phase, and starting measurements
 - Off-season, bulking, and contest prep training context

@@ -1992,3 +1992,136 @@ img {
   min-width: 72px;
   align-self: center;
 }
+
+/* Contest prep tools (prep.js): peak week, posing practice, warm-up and plates. */
+.prep-stack {
+  gap: 16px;
+}
+
+.prep-safety,
+.prep-warning {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 184, 77, 0.1);
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.prep-warning[hidden] {
+  display: none;
+}
+
+.prep-days {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.prep-day {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 4px 10px;
+}
+
+.prep-day.today {
+  outline: 1px solid rgba(255, 184, 77, 0.45);
+}
+
+.prep-day.past summary strong {
+  color: var(--muted);
+}
+
+.prep-day > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.prep-day > summary::-webkit-details-marker {
+  display: none;
+}
+
+.prep-day .checklist {
+  margin: 4px 0 10px;
+}
+
+.prep-item {
+  display: grid;
+  gap: 6px;
+}
+
+.prep-item:has(> .compact-btn) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.prep-item:has(> .compact-btn) > .prep-inline-field {
+  grid-column: 1 / -1;
+}
+
+button.check-item.prep-check {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.prep-inline-field {
+  margin: 0 0 4px 44px;
+}
+
+.prep-targets {
+  display: grid;
+  gap: 6px;
+}
+
+.prep-target-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.prep-target-row label {
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.prep-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.posing-list,
+.warmup-list {
+  margin: 10px 0;
+  padding-left: 22px;
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.posing-overlay .posing-pose {
+  margin: 4px 0 0;
+  font-size: 28px;
+}
+
+.prep-load-helper[open] {
+  grid-column: 1 / -1;
+}
+
+.prep-load-body {
+  margin-top: 8px;
+}
