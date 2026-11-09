@@ -29,6 +29,11 @@
 		2B3C4D5E6F7A800000000017 /* MassMethodWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2B3C4D5E6F7A80000000F002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */; };
 		2B3C4D5E6F7A80000000F004 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */; };
+		2B3C4D5E6F7A800000000031 /* MassMethodWidgetSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000030 /* MassMethodWidgetSummary.swift */; };
+		2B3C4D5E6F7A800000000032 /* MassMethodWidgetSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000030 /* MassMethodWidgetSummary.swift */; };
+		2B3C4D5E6F7A800000000034 /* PeakSetWidgetBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000033 /* PeakSetWidgetBridge.swift */; };
+		2B3C4D5E6F7A800000000036 /* MassMethodTodayWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A800000000035 /* MassMethodTodayWidget.swift */; };
+		2B3C4D5E6F7A80000000F006 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A80000000F005 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -99,6 +104,11 @@
 		2B3C4D5E6F7A80000000000A /* MassMethodWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MassMethodWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2B3C4D5E6F7A80000000F003 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000030 /* MassMethodWidgetSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MassMethodWidgetSummary.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000033 /* PeakSetWidgetBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeakSetWidgetBridge.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000035 /* MassMethodTodayWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MassMethodTodayWidget.swift; sourceTree = "<group>"; };
+		2B3C4D5E6F7A800000000037 /* MassMethodWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MassMethodWidgets.entitlements; sourceTree = "<group>"; };
+		2B3C4D5E6F7A80000000F005 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -150,6 +160,7 @@
 				1A2B3C4D5E6F700000000108 /* boxing-bell.wav */,
 				2B3C4D5E6F7A80000000F001 /* PrivacyInfo.xcprivacy */,
 				1A2B3C4D5E6F700000001004 /* PeakSetWatchBridge.swift */,
+				2B3C4D5E6F7A800000000033 /* PeakSetWidgetBridge.swift */,
 				1A2B3C4D5E6F700000001003 /* PeakSetLiveActivity.swift */,
 				1A2B3C4D5E6F700000001002 /* PeakSetPhotos.swift */,
 				1A2B3C4D5E6F700000001001 /* PeakSetBackupService.swift */,
@@ -171,6 +182,7 @@
 			isa = PBXGroup;
 			children = (
 				2B3C4D5E6F7A800000000001 /* RestTimerAttributes.swift */,
+				2B3C4D5E6F7A800000000030 /* MassMethodWidgetSummary.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -180,7 +192,10 @@
 			children = (
 				2B3C4D5E6F7A800000000002 /* MassMethodWidgetsBundle.swift */,
 				2B3C4D5E6F7A800000000003 /* RestTimerLiveActivity.swift */,
+				2B3C4D5E6F7A800000000035 /* MassMethodTodayWidget.swift */,
 				2B3C4D5E6F7A800000000004 /* Info.plist */,
+				2B3C4D5E6F7A800000000037 /* MassMethodWidgets.entitlements */,
+				2B3C4D5E6F7A80000000F005 /* PrivacyInfo.xcprivacy */,
 			);
 			path = MassMethodWidgets;
 			sourceTree = "<group>";
@@ -267,6 +282,11 @@
 				TargetAttributes = {
 					2B3C4D5E6F7A800000000020 = {
 						CreatedOnToolsVersion = 26.5;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
 					};
 					2B3C4D5E6F7A800000000021 = {
 						CreatedOnToolsVersion = 26.5;
@@ -274,6 +294,9 @@
 					1A2B3C4D5E6F700000000400 = {
 						CreatedOnToolsVersion = 26.5;
 						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
 							com.apple.HealthKit = {
 								enabled = 1;
 							};
@@ -320,6 +343,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2B3C4D5E6F7A80000000F006 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -344,6 +368,8 @@
 				1A2B3C4D5E6F700000000005 /* PeakSetNativeServices.swift in Sources */,
 				2B3C4D5E6F7A80000000000E /* RestTimerAttributes.swift in Sources */,
 				1A2B3C4D5E6F70000000000A /* PeakSetWatchBridge.swift in Sources */,
+				2B3C4D5E6F7A800000000034 /* PeakSetWidgetBridge.swift in Sources */,
+				2B3C4D5E6F7A800000000031 /* MassMethodWidgetSummary.swift in Sources */,
 				1A2B3C4D5E6F700000000009 /* PeakSetLiveActivity.swift in Sources */,
 				1A2B3C4D5E6F700000000008 /* PeakSetPhotos.swift in Sources */,
 				1A2B3C4D5E6F700000000007 /* PeakSetBackupService.swift in Sources */,
@@ -357,6 +383,8 @@
 				2B3C4D5E6F7A800000000010 /* MassMethodWidgetsBundle.swift in Sources */,
 				2B3C4D5E6F7A800000000011 /* RestTimerLiveActivity.swift in Sources */,
 				2B3C4D5E6F7A80000000000F /* RestTimerAttributes.swift in Sources */,
+				2B3C4D5E6F7A800000000036 /* MassMethodTodayWidget.swift in Sources */,
+				2B3C4D5E6F7A800000000032 /* MassMethodWidgetSummary.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -557,6 +585,7 @@
 		2B3C4D5E6F7A800000000028 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MassMethodWidgets/MassMethodWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
@@ -582,6 +611,7 @@
 		2B3C4D5E6F7A800000000029 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MassMethodWidgets/MassMethodWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 4D2KRG86P2;
