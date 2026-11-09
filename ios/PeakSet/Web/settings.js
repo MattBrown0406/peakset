@@ -161,6 +161,24 @@ function nativeBackupPayload() {
     // just the default 180 days.
     copy.healthBody.resyncFrom = healthDates.length ? new Date(Math.min(...healthDates)).toISOString() : null;
   }
+  // Apple Health nutrition (nutrition.js) stays out too, here in the base so it
+  // holds however early a snapshot runs: imported days are dropped and
+  // re-imported after a restore, from the oldest one held.
+  const healthNutrition = (entry) => String(entry?.id || "").startsWith("hk-") || entry?.source === "healthkit" || entry?.fromHealth === true;
+  if (copy.nutrition && typeof copy.nutrition === "object") {
+    const heldDays = (Array.isArray(state.nutrition?.healthLog) ? state.nutrition.healthLog : [])
+      .map((entry) => Date.parse(`${entry?.date}T00:00:00`)).filter(Number.isFinite);
+    const pending = Date.parse(state.nutrition?.health?.resyncFrom || "");
+    if (Number.isFinite(pending)) heldDays.push(pending);
+    copy.nutrition.healthLog = [];
+    if (Array.isArray(copy.nutrition.log)) copy.nutrition.log = copy.nutrition.log.filter((entry) => !healthNutrition(entry));
+    const health = copy.nutrition.health && typeof copy.nutrition.health === "object" ? copy.nutrition.health : {};
+    copy.nutrition.health = { ...health, lastSyncAt: null, lastResult: "", resyncFrom: heldDays.length ? new Date(Math.min(...heldDays)).toISOString() : null };
+  }
+  Object.values(copy.coach?.athletes || {}).forEach((athlete) => {
+    if (!athlete?.nutrition || typeof athlete.nutrition !== "object") return;
+    athlete.nutrition.days = (Array.isArray(athlete.nutrition.days) ? athlete.nutrition.days : []).filter((entry) => !healthNutrition(entry));
+  });
   return { format: BACKUP_FORMAT, version: BACKUP_VERSION, app: APP_NAME, exportedAt: new Date().toISOString(), state: copy };
 }
 
@@ -566,7 +584,13 @@ setView = function setViewWithMore(view) {
 };
 
 saveState();
-requestAutomaticSnapshot("launch");
+// After every module has loaded, so each one's migrations and backup rules
+// apply to the launch snapshot.
+if (typeof window.addEventListener === "function" && document.readyState !== "complete") {
+  window.addEventListener("load", () => requestAutomaticSnapshot("launch"), { once: true });
+} else {
+  requestAutomaticSnapshot("launch");
+}
 // iOS keeps the app in memory for days; the daily snapshot also runs when it
 // comes back to the foreground (it is skipped if one ran in the last 20 hours).
 try {

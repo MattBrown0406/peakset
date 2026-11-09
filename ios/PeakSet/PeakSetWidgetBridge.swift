@@ -39,6 +39,9 @@ final class PeakSetWidgetBridge {
     }
 
     private func requestReload() {
+        // A summary that arrives as the app leaves (finishing a workout and
+        // locking the phone) must not wait for the next launch.
+        guard UIApplication.shared.applicationState == .active else { return reloadNow() }
         guard pendingReload == nil else { return }
         let wait = lastReload.map { minimumReloadInterval - Date().timeIntervalSince($0) } ?? 0
         guard wait > 0 else { return reloadNow() }

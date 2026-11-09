@@ -2186,7 +2186,7 @@ function renderExerciseHistory() {
         <div><p class="eyebrow">Volume trend</p><h2>${escapeHtml(history.exercise.name)}</h2></div>
         <span class="badge blue">Last ${plural(history.sessionVolumes.length || 0, "session")}</span>
       </div>
-      ${exerciseVolumeSparkline(history.sessionVolumes, history.exercise.name, history.exercise.muscle === "abs" ? "reps" : weightUnit())}
+      ${exerciseVolumeSparkline(history.sessionVolumes, history.exercise.name, isRepsOnlyExercise(history.exercise) ? "reps" : weightUnit())}
       <div class="history-trend-labels">
         <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes[0].date) : "First session"}</span>
         <span>${history.sessionVolumes.length ? formatShortDate(history.sessionVolumes.at(-1).date) : "Latest session"}</span>
@@ -2196,9 +2196,9 @@ function renderExerciseHistory() {
       <div class="card-head"><div><p class="eyebrow">Personal records</p><h2>Best performances</h2></div></div>
       <div class="grid two history-records">
         <article class="log-card card"><strong>Estimated 1RM</strong><p class="history-record-value">${historyMetric(history.estimatedOneRepMax, ` ${weightUnit()}`)}</p><p class="muted">${history.bestSet ? `${historyMetric(history.bestSet.weight, ` ${weightUnit()}`)} × ${historyMetric(history.bestSet.reps, " reps")} · ${formatShortDate(history.bestSet.date)}` : "No weighted sets yet."}</p></article>
-        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${history.exercise.muscle === "abs" ? plural(Math.round(history.bestSessionVolume), "rep") : historyMetric(history.bestSessionVolume, ` ${weightUnit()}`)}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
+        <article class="log-card card"><strong>Best session volume</strong><p class="history-record-value">${isRepsOnlyExercise(history.exercise) ? plural(Math.round(history.bestSessionVolume), "rep") : historyMetric(history.bestSessionVolume, ` ${weightUnit()}`)}</p><p class="muted">Total work for this exercise in one saved workout.</p></article>
         <article class="log-card card"><strong>Highest reps</strong><p class="history-record-value">${historyMetric(history.bestReps)}</p><p class="muted">Highest recorded reps in one set.</p></article>
-        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${history.exercise.muscle === "abs" ? plural(Math.round(history.totalVolume), "rep") : historyMetric(history.totalVolume, ` ${weightUnit()}`)}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
+        <article class="log-card card"><strong>Total volume</strong><p class="history-record-value">${isRepsOnlyExercise(history.exercise) ? plural(Math.round(history.totalVolume), "rep") : historyMetric(history.totalVolume, ` ${weightUnit()}`)}</p><p class="muted">Across all saved ${escapeHtml(history.exercise.name)} sets.</p></article>
       </div>
     </section>
     <section class="card pad history-panel">
@@ -2207,7 +2207,7 @@ function renderExerciseHistory() {
         ${history.recentSessions.map((session) => `
           <article class="log-card card history-session">
             <div class="card-head"><strong>${escapeHtml(session.title)}</strong><span class="badge">${formatShortDate(session.date)}</span></div>
-            <p class="muted">${plural(session.sets.length, "set")} · ${history.exercise.muscle === "abs" ? plural(Math.round(session.volume), "rep") : `${Math.round(session.volume).toLocaleString()} ${weightUnit()} volume`}</p>
+            <p class="muted">${plural(session.sets.length, "set")} · ${isRepsOnlyExercise(history.exercise) ? plural(Math.round(session.volume), "rep") : `${Math.round(session.volume).toLocaleString()} ${weightUnit()} volume`}</p>
             <div class="history-set-list">${session.sets.map((set) => `<span class="history-set">${escapeHtml(historySetSummary(set))}</span>`).join("")}</div>
           </article>
         `).join("") || '<div class="empty"><p class="muted">No saved sets for this exercise yet. Complete a workout and they will appear here.</p></div>'}

@@ -557,27 +557,9 @@ window.handleNativeHealthKit = function handleNativeHealthKitWithNutrition(paylo
   }
 };
 
-// Apple's HealthKit rules forbid storing Health data in iCloud: automatic
-// snapshots leave out the imported days (they re-import after a restore,
-// from the oldest one we had) and a coach's copy of athletes' Health days.
-const baseNativeBackupPayloadForNutrition = nativeBackupPayload;
-nativeBackupPayload = function nativeBackupPayloadWithoutHealthNutrition() {
-  nutritionReady();
-  const payload = baseNativeBackupPayloadForNutrition();
-  const copy = payload.state;
-  if (copy.nutrition && typeof copy.nutrition === "object") {
-    const healthDays = state.nutrition.healthLog.map((entry) => parseDateKey(entry.date)?.getTime()).filter(Number.isFinite);
-    const pending = Date.parse(state.nutrition.health.resyncFrom || "");
-    if (Number.isFinite(pending)) healthDays.push(pending);
-    copy.nutrition.healthLog = [];
-    copy.nutrition.health = { ...copy.nutrition.health, lastSyncAt: null, lastResult: "", resyncFrom: healthDays.length ? new Date(Math.min(...healthDays)).toISOString() : null };
-  }
-  Object.values(copy.coach?.athletes || {}).forEach((athlete) => {
-    if (!athlete?.nutrition || typeof athlete.nutrition !== "object") return;
-    athlete.nutrition.days = (Array.isArray(athlete.nutrition.days) ? athlete.nutrition.days : []).filter((entry) => !isNutritionHealthEntry(entry));
-  });
-  return payload;
-};
+// Apple's HealthKit rules forbid storing Health data in iCloud: settings.js
+// nativeBackupPayload leaves out imported nutrition days (and a coach's copy
+// of athletes' Health days) and records where to re-import from.
 
 // ---------- Coach check-ins and reports ----------
 

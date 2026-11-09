@@ -316,7 +316,9 @@ final class PeakSetHealthKitService {
         }
 
         group.notify(queue: .global()) {
-            if days.isEmpty, let firstError {
+            // A real failure on any one type fails the read: reporting the
+            // others alone would blank that macro on days the app already has.
+            if let firstError {
                 completion(.failure(firstError))
                 return
             }

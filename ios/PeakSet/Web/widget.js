@@ -90,7 +90,9 @@ function scheduleWidgetSummary() {
 const baseSaveStateForWidget = saveState;
 saveState = function saveStateAndPublishWidget(...args) {
   const saved = baseSaveStateForWidget(...args);
-  scheduleWidgetSummary();
+  // The rest timer saves in the background every second; nothing the widget
+  // shows changes then.
+  if (!args[0]?.background) scheduleWidgetSummary();
   return saved;
 };
 

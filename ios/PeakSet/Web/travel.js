@@ -40,9 +40,8 @@ function travelMigrateState() {
     : state.travelProfilesSeeded === true ? ["road-gym", "hotel-dumbbells", "hotel-room", "hotel-room-bodyweight"] : []);
   TRAVEL_PROFILES.forEach((profile) => {
     if (seeded.has(profile.id)) return;
-    const existing = state.equipmentProfiles.find((item) => item.id === profile.id);
-    if (!existing) state.equipmentProfiles.push({ ...profile, equipment: [...profile.equipment] });
-    else if (existing.maxDumbbell === undefined && profile.maxDumbbell) Object.assign(existing, { maxDumbbell: profile.maxDumbbell, maxDumbbellUnit: profile.maxDumbbellUnit });
+    // An existing profile (e.g. a Road Gym used as a real gym) is left alone.
+    if (!state.equipmentProfiles.some((item) => item.id === profile.id)) state.equipmentProfiles.push({ ...profile, equipment: [...profile.equipment] });
     seeded.add(profile.id);
   });
   state.travelProfilesSeeded = [...seeded];
@@ -51,6 +50,7 @@ function travelMigrateState() {
     if (!(cap > 0 && cap <= 400)) delete profile.maxDumbbell;
     if (profile.maxDumbbellUnit !== "kg") profile.maxDumbbellUnit = "lb";
   });
+  if (state.trip?.active && !state.equipmentProfiles.some((item) => item.id === state.activeEquipmentProfileId)) state.activeEquipmentProfileId = state.equipmentProfiles[0]?.id;
   const trip = state.trip;
   const validKey = (key) => typeof parseDateKey === "function" && Boolean(parseDateKey(key));
   state.trip = trip && typeof trip === "object" && trip.active && validKey(trip.until) && validKey(trip.startedOn)
@@ -60,7 +60,9 @@ function travelMigrateState() {
       until: trip.until,
       profileId: String(trip.profileId || ""),
       previousProfileId: String(trip.previousProfileId || ""),
-      pauseBlock: Boolean(trip.pauseBlock)
+      pauseBlock: Boolean(trip.pauseBlock),
+      blockId: String(trip.blockId || ""),
+      blockStartDate: String(trip.blockStartDate || "")
     }
     : { active: false };
 }
@@ -74,8 +76,9 @@ function travelDumbbellCap(profile = activeEquipmentProfile()) {
   const stored = profile.maxDumbbellUnit === "kg" ? "kg" : "lb";
   const unit = isMetric() ? "kg" : "lb";
   if (stored === unit) return cap;
-  // Hotel racks go up in 5 lb or 2 kg steps; never round above the real cap.
-  return unit === "kg" ? Math.floor((cap * KG_PER_LB) / 0.5) * 0.5 : Math.floor(cap / KG_PER_LB);
+  // Converted the way saved weights are, so real 50 lb dumbbells logged in kg
+  // are never clamped below themselves.
+  return Math.round((unit === "kg" ? cap * KG_PER_LB : cap / KG_PER_LB) * 100) / 100;
 }
 
 // Dumbbell work is capped unless the profile also has a barbell and the
@@ -112,7 +115,8 @@ isRepsOnlyExercise = function isRepsOnlyIncludingBodyweight(exercise) {
 const baseProgressionForTravel = progressionSuggestion;
 progressionSuggestion = function progressionWithDumbbellCap(exercise) {
   const base = baseProgressionForTravel(exercise);
-  if (!isCappedDumbbellExercise(exercise) || isRepsOnlyExercise(exercise)) return base;
+  // A deload week's instructions win over the dumbbell limit.
+  if (!isCappedDumbbellExercise(exercise) || isRepsOnlyExercise(exercise) || /deload/i.test(base)) return base;
   const cap = travelDumbbellCap();
   const previous = lastExercisePerformance(exercise.id);
   const working = (previous?.sets || []).filter((set) => !set.dropSet && Number(set.weight) > 0 && Number(set.reps) > 0);
@@ -120,7 +124,7 @@ progressionSuggestion = function progressionWithDumbbellCap(exercise) {
   const best = Math.max(...working.map((set) => Number(set.weight)));
   if (nextLoadableWeight(exercise.id, best) <= cap) return base;
   const unit = weightUnit();
-  return `These dumbbells top out at ${formatWeight(cap, 2)} ${unit}. Use ${formatWeight(Math.min(best, cap), 2)} ${unit}, add reps, or switch the set type to Tempo, Paused reps, or 1½ reps.`;
+  return `These dumbbells top out at ${formatWeight(cap, 1)} ${unit}. Use ${formatWeight(Math.min(best, cap), 1)} ${unit}, add reps, or switch the set type to Tempo, Paused reps, or 1½ reps.`;
 };
 
 const baseCopyPreviousForTravel = copyPreviousPerformance;
@@ -139,7 +143,7 @@ copyPreviousPerformance = function copyPreviousWithDumbbellCap(exIndex) {
   if (!clamped) return;
   saveState();
   render();
-  toast(`Set to ${formatWeight(cap, 2)} ${weightUnit()}, the heaviest dumbbells here. Add reps or slow the tempo.`);
+  toast(`Set to ${formatWeight(cap, 1)} ${weightUnit()}, the heaviest dumbbells here. Add reps or slow the tempo.`);
 };
 
 if (typeof suggestedSetValues === "function") {
@@ -152,14 +156,30 @@ if (typeof suggestedSetValues === "function") {
   };
 }
 
+// Bodyweight-capable moves (push-ups, bench dips) can be logged with no added
+// weight: a blank weight counts as 0 instead of blocking the set.
+const BODYWEIGHT_OPTIONAL_IDS = new Set(["push-up", "bench-dip"]);
+const baseCompleteSetForTravel = completeSet;
+completeSet = function completeSetAllowingBodyweight(exIndex, setIndex) {
+  const exercise = state.activeWorkout?.exercises?.[exIndex];
+  const set = exercise?.sets?.[setIndex];
+  const library = exerciseLibrary.find((item) => item.id === exercise?.id);
+  if (set && !set.done && set.weight === "" && !isRepsOnlyExercise(exercise)
+    && (BODYWEIGHT_OPTIONAL_IDS.has(library?.id) || /^\s*bodyweight/i.test(String(library?.equipment || "")))) {
+    set.weight = "0";
+  }
+  return baseCompleteSetForTravel(exIndex, setIndex);
+};
+
 // ---------- Automatic swaps when a workout starts ----------
 
 // For each planned exercise the active profile can't do: the athlete's saved
 // swap if it fits, else the closest same-target exercise that fits. Quick
 // Start keeps exactly what the athlete picked.
 function equipmentSwapsForPlan(plan, profile = activeEquipmentProfile()) {
-  if (!profile?.equipment?.length || String(plan?.id || "").startsWith("quick-") || !Array.isArray(plan?.exercises)) return null;
-  const specs = plan.exercises.map(normalizePlanExercise);
+  if (!profile?.equipment?.length || String(plan?.id || "").startsWith("quick-") || plan?.adHoc || !Array.isArray(plan?.exercises)) return null;
+  // The same exercises, in the same order, that beginWorkoutFromPlan keeps.
+  const specs = plan.exercises.map(normalizePlanExercise).filter((spec) => exerciseLibrary.some((item) => item.id === spec.id)).slice(0, MAX_STORED_PLAN_EXERCISES);
   const used = new Set(specs.map((spec) => spec.id));
   const travel = plan.phase === "travel" || plan.muscle === "travel";
   const fits = (item) => item && !used.has(item.id) && exerciseMatchesEquipmentProfile(item, profile) && (!travel || item.hotel);
@@ -216,7 +236,12 @@ function travelPlanFits(plan, profile = activeEquipmentProfile()) {
 
 // The travel template to suggest: one that fits the equipment, training the
 // muscles rested longest, and not the one done most recently.
+let bestTravelPlanCache = { key: "", plan: null };
 function bestTravelPlan(profile = activeEquipmentProfile()) {
+  const logs = state.workoutLogs || [];
+  const key = [profile?.id, (profile?.equipment || []).join(","), logs.length, logs[0]?.id, logs[0]?.date, dateKey(new Date())].join("|");
+  if (bestTravelPlanCache.key === key) return bestTravelPlanCache.plan;
+  const { byId } = exerciseIndexes();
   const travel = planTemplates.filter((plan) => plan.phase === "travel");
   const fitting = travel.filter((plan) => travelPlanFits(plan, profile));
   const pool = fitting.length ? fitting : travel;
@@ -227,13 +252,15 @@ function bestTravelPlan(profile = activeEquipmentProfile()) {
     if (!Number.isFinite(time)) return;
     if (log.title) lastByTitle[log.title] = Math.max(lastByTitle[log.title] ?? -Infinity, time);
     workoutLogSets(log).forEach((set) => {
-      const muscle = exerciseById(loggedExerciseId(set))?.muscle;
+      const muscle = byId.get(loggedExerciseId(set))?.muscle;
       if (muscle) lastByMuscle[muscle] = Math.max(lastByMuscle[muscle] ?? -Infinity, time);
     });
   });
   // A plan's freshness is its most recently trained muscle (lower is fresher).
-  const freshness = (plan) => Math.max(-Infinity, ...(plan.exercises || []).map((row) => lastByMuscle[exerciseById(Array.isArray(row) ? row[0] : row?.id)?.muscle] ?? -Infinity));
-  return [...pool].sort((a, b) => freshness(a) - freshness(b) || (lastByTitle[a.title] ?? -Infinity) - (lastByTitle[b.title] ?? -Infinity))[0] || null;
+  const freshness = (plan) => Math.max(-Infinity, ...(plan.exercises || []).map((row) => lastByMuscle[byId.get(Array.isArray(row) ? row[0] : row?.id)?.muscle] ?? -Infinity));
+  const plan = [...pool].sort((a, b) => freshness(a) - freshness(b) || (lastByTitle[a.title] ?? -Infinity) - (lastByTitle[b.title] ?? -Infinity))[0] || null;
+  bestTravelPlanCache = { key, plan };
+  return plan;
 }
 
 const baseRecommendedForTravel = todaysRecommendedPlan;
@@ -263,14 +290,16 @@ function startTrip() {
   const until = document.getElementById("tripUntil")?.value;
   const profile = state.equipmentProfiles.find((item) => item.id === profileId);
   if (!profile) return toast("Choose where you'll be training.");
-  if (!parseDateKey(until) || daysBetweenKeys(todayKey(), until) < 0) return toast("Choose the day you'll be back.");
+  if (!parseDateKey(until) || daysBetweenKeys(todayKey(), until) < 1) return toast("Choose the day you'll be back (tomorrow or later).");
   if (daysBetweenKeys(todayKey(), until) > 60) return toast("Trips can be up to 60 days.");
   const capInput = document.getElementById("tripDumbbellCap");
-  if (capInput && capInput.value !== "") {
+  const capField = document.getElementById("tripCapField");
+  if (capInput && !capField?.hidden) {
     const cap = Number(capInput.value);
-    if (!(cap > 0 && cap <= 400)) return toast("Enter the heaviest dumbbell, or leave it blank.");
-    profile.maxDumbbell = Math.round(cap * 10) / 10;
-    profile.maxDumbbellUnit = isMetric() ? "kg" : "lb";
+    if (capInput.value !== "" && !(cap > 0 && cap <= 400)) return toast("Enter the heaviest dumbbell, or leave it blank for no limit.");
+    // Blank means no limit.
+    if (capInput.value === "") delete profile.maxDumbbell;
+    else Object.assign(profile, { maxDumbbell: Math.round(cap * 10) / 10, maxDumbbellUnit: isMetric() ? "kg" : "lb" });
   }
   const blockRunning = typeof blockWeekInfo === "function" && blockWeekInfo()?.status === "active";
   state.trip = {
@@ -279,7 +308,10 @@ function startTrip() {
     until,
     profileId: profile.id,
     previousProfileId: state.activeEquipmentProfileId === profile.id ? "" : state.activeEquipmentProfileId,
-    pauseBlock: blockRunning && document.getElementById("tripPauseBlock")?.checked !== false
+    pauseBlock: blockRunning && document.getElementById("tripPauseBlock")?.checked !== false,
+    // Only this block is paused and moved back; one started later is not.
+    blockId: blockRunning ? String(state.trainingBlock.id || "") : "",
+    blockStartDate: blockRunning ? String(state.trainingBlock.startDate || "") : ""
   };
   state.activeEquipmentProfileId = profile.id;
   // Today's earlier pick was for the home gym.
@@ -295,16 +327,24 @@ function startTrip() {
 function endTrip(automatic = false) {
   const trip = state.trip;
   if (!trip?.active) return;
+  // The athlete trains at home again on the "back on" day.
   const end = automatic ? trip.until : todayKey();
-  const days = Math.max(0, daysBetweenKeys(trip.startedOn, end) + 1);
   let shifted = 0;
-  if (trip.pauseBlock && state.trainingBlock && days >= TRIP_PAUSE_MIN_DAYS) {
-    const start = parseDateKey(state.trainingBlock.startDate);
-    shifted = Math.max(1, Math.round(days / 7));
-    if (start) state.trainingBlock.startDate = dateKey(addDays(start, shifted * 7));
+  const block = state.trainingBlock;
+  if (trip.pauseBlock && block && String(block.id || "") === trip.blockId && block.startDate === trip.blockStartDate) {
+    const pausedFrom = trip.startedOn > block.startDate ? trip.startedOn : block.startDate;
+    const days = Math.max(0, daysBetweenKeys(pausedFrom, end));
+    const start = parseDateKey(block.startDate);
+    if (days >= TRIP_PAUSE_MIN_DAYS && start) {
+      shifted = Math.max(1, Math.round(days / 7));
+      block.startDate = dateKey(addDays(start, shifted * 7));
+    }
   }
   if (trip.previousProfileId && state.equipmentProfiles.some((item) => item.id === trip.previousProfileId)) {
     state.activeEquipmentProfileId = trip.previousProfileId;
+  } else if (state.activeEquipmentProfileId === trip.profileId) {
+    // The home profile was deleted while away: fall back to the full gym.
+    state.activeEquipmentProfileId = (state.equipmentProfiles.find((item) => !item.equipment?.length) || state.equipmentProfiles[0])?.id;
   }
   state.trip = { active: false };
   state.todayPlanId = null;
@@ -319,7 +359,7 @@ function endTripNow() {
 }
 
 function checkTripExpiry() {
-  if (state.trip?.active && daysBetweenKeys(state.trip.until, todayKey()) > 0) {
+  if (state.trip?.active && daysBetweenKeys(state.trip.until, todayKey()) >= 0) {
     endTrip(true);
     return true;
   }
@@ -393,12 +433,13 @@ function renderTripCard() {
   const preferred = state.equipmentProfiles.find((profile) => profile.id === "hotel-dumbbells") || state.equipmentProfiles.find((profile) => profile.equipment?.length) || state.equipmentProfiles[0];
   const blockRunning = typeof blockWeekInfo === "function" && blockWeekInfo()?.status === "active";
   const defaultUntil = dateKey(addDays(new Date(), 4));
+  const earliestUntil = dateKey(addDays(new Date(), 1));
   return `<section class="card pad trip-card" style="margin-top:12px">
     <details>
       <summary><strong>Traveling?</strong> <span class="muted">Switch to hotel workouts until you're back.</span></summary>
       <div class="grid two" style="margin-top:10px">
         <div class="field"><label for="tripProfile">Where you'll train</label><select id="tripProfile" onchange="tripProfileChanged(this)">${tripProfileOptions(preferred?.id)}</select></div>
-        <div class="field"><label for="tripUntil">Back on</label><input id="tripUntil" type="date" value="${defaultUntil}" min="${todayKey()}" /></div>
+        <div class="field"><label for="tripUntil">Back on</label><input id="tripUntil" type="date" value="${defaultUntil}" min="${earliestUntil}" /></div>
         <div class="field" id="tripCapField" ${preferred?.equipment.includes("Dumbbells") ? "" : "hidden"}><label for="tripDumbbellCap">Heaviest dumbbells (${unit})</label><input id="tripDumbbellCap" type="number" inputmode="decimal" min="1" step="0.5" value="${travelDumbbellCap(preferred) ?? ""}" placeholder="No limit" /></div>
       </div>
       ${blockRunning ? `<label class="toggle-row"><input id="tripPauseBlock" type="checkbox" checked /> <span>Pause my training block while I'm away (trips of ${TRIP_PAUSE_MIN_DAYS}+ days)</span></label>` : ""}
@@ -413,7 +454,7 @@ renderToday = function renderTodayWithTrip() {
   let html = baseRenderTodayForTravel();
   // "Start Road Gym" starts a hotel workout this equipment can actually do.
   const roadPlan = travelPlanFits(planTemplates.find((plan) => plan.id === "road-gym-full")) ? null : bestTravelPlan();
-  if (roadPlan) html = html.replace("startWorkout('road-gym-full')", `startWorkout('${roadPlan.id}')`);
+  if (roadPlan) html = html.replace(`onclick="startWorkout('road-gym-full')">Start Road Gym`, `onclick="startWorkout('${roadPlan.id}')">Start Road Gym`);
   const anchor = html.indexOf('<div class="grid today-stats">');
   const card = renderTripCard();
   return anchor === -1 ? `${card}${html}` : `${html.slice(0, anchor)}${card}${html.slice(anchor)}`;
@@ -430,6 +471,49 @@ renderPlans = function renderPlansWithTravelFit() {
   const note = `<section class="card pad" style="margin-bottom:12px"><p class="eyebrow">${escapeHtml(profile.name)}</p><p class="muted">${fitting.length ? `Fits this equipment: ${fitting.map((plan) => escapeHtml(plan.title)).join(" · ")}.` : "None of these fit this equipment exactly."} Other workouts swap exercises you can't do when you start them.</p></section>`;
   const anchor = html.indexOf('<div class="filters"');
   return anchor === -1 ? `${note}${html}` : `${html.slice(0, anchor)}${note}${html.slice(anchor)}`;
+};
+
+// While a trip pauses the block, its week stays where the trip began and no
+// deload is prescribed; endTrip moves the block back afterwards.
+function tripPausesBlock(block) {
+  const trip = state.trip;
+  return Boolean(trip?.active && trip.pauseBlock && block && String(block.id || "") === trip.blockId && block.startDate === trip.blockStartDate);
+}
+
+const baseBlockWeekInfoForTravel = blockWeekInfo;
+blockWeekInfo = function blockWeekInfoPausedForTrip(...args) {
+  const block = args.length ? args[0] : (promotePendingBlock(), state.trainingBlock);
+  if (args.length > 1 || !tripPausesBlock(block)) return baseBlockWeekInfoForTravel(...args);
+  const frozen = baseBlockWeekInfoForTravel(block, parseDateKey(state.trip.startedOn) || new Date());
+  return frozen ? { ...frozen, deload: false, paused: true } : frozen;
+};
+
+const baseBlockStatusLineForTravel = renderBlockStatusLine;
+renderBlockStatusLine = function blockStatusLineWithTrip(...args) {
+  const line = baseBlockStatusLineForTravel(...args);
+  const info = args.length ? args[0] : blockWeekInfo();
+  return info?.paused && line ? `${line} · Paused while traveling` : line;
+};
+
+// Builder > Equipment profiles: the heaviest dumbbell for the active profile.
+const baseRenderBuilderForTravel = renderBuilder;
+renderBuilder = function renderBuilderWithDumbbellCap() {
+  const html = baseRenderBuilderForTravel();
+  const profile = activeEquipmentProfile();
+  const anchor = `<button class="ghost-btn danger" onclick="deleteEquipmentProfile('${profile?.id}')">Delete Active Profile</button>`;
+  if (!profile || !html.includes(anchor) || !(profile.equipment?.includes("Dumbbells") || !profile.equipment?.length)) return html;
+  const cap = travelDumbbellCap(profile);
+  const field = `<div class="field"><label for="profileDumbbellCap">Heaviest dumbbells (${weightUnit()})</label><input id="profileDumbbellCap" type="number" inputmode="decimal" min="1" step="0.5" value="${cap ?? ""}" placeholder="No limit" onchange="setDumbbellCap('${profile.id}', this.value)" /></div>`;
+  return html.replace(anchor, `${field}${anchor}`);
+};
+
+const baseResetForTravel = resetDemoData;
+resetDemoData = function resetDataWithTravel(...args) {
+  const result = baseResetForTravel(...args);
+  travelMigrateState();
+  saveState();
+  render();
+  return result;
 };
 
 travelMigrateState();

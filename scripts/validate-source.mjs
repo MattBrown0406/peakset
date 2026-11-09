@@ -1635,11 +1635,11 @@ console.log("Audit round 8 checks passed.");
   assert.equal(run("state.activeWorkout.exercises[0].sets[0].weight"), "50", "Copy Last fills the hotel's heaviest dumbbell, not the home weight");
   assert.equal(run("suggestedSetValues(state.activeWorkout.exercises[0], 1).weight"), "50", "the watch suggests no more than the cap");
   run("state.units = 'metric'");
-  assert.equal(run("travelDumbbellCap()"), 22.5, "a 50 lb cap reads as 22.5 kg, never above the real dumbbell");
+  assert.equal(run("travelDumbbellCap()"), 22.68, "a 50 lb cap converts like logged weights, so real 50 lb dumbbells are never clamped");
   run("state.units = 'imperial'; state.activeWorkout = null");
 
   // Trip mode switches the profile and pauses the block, then switches back.
-  run("selectEquipmentProfile('all-equipment'); state.trainingBlock = { id: 'b', name: 'Block', startDate: dateKey(startOfWeek(new Date())), accumulationWeeks: 4, deload: true, focus: [] }");
+  run("selectEquipmentProfile('all-equipment'); state.trainingBlock = { id: 'b', name: 'Block', startDate: dateKey(addDays(startOfWeek(new Date()), -14)), accumulationWeeks: 4, deload: true, focus: [] }");
   const blockStart = run("state.trainingBlock.startDate");
   for (const [id, value] of Object.entries({ tripProfile: "hotel-room", tripUntil: run("dateKey(addDays(new Date(), 8))") })) tv.elements.set(id, { value, innerHTML: "", classList: { add() {}, remove() {} } });
   tv.elements.set("tripPauseBlock", { checked: true, value: "on", innerHTML: "", classList: { add() {}, remove() {} } });
@@ -2200,3 +2200,41 @@ console.log("Audit round 8 checks passed.");
   assert.match(run("renderToday()"), /Training at/, "the active trip card lets the athlete change gyms");
   console.log("Gym finder checks passed.");
 }
+
+// PR #4 audit fixes: backup privacy at launch, dumbbell caps, paused blocks,
+// bodyweight sets, trip timing.
+{
+  assert(read("settings.js").includes('window.addEventListener("load", () => requestAutomaticSnapshot("launch")'), "the launch snapshot waits until every module has loaded");
+  const pv = makeContext({ profile: { bodyweight: 200 }, nutrition: { log: [{ id: "n1", date: "2026-11-01", kcal: 2500, protein: 200, carbs: 250, fat: 70 }], healthLog: [{ id: "hk-n-2026-11-02", date: "2026-11-02", kcal: 2400, protein: 190, carbs: 240, fat: 70, fromHealth: true }], highDays: [], health: { enabled: true, lastSyncAt: new Date().toISOString() } } });
+  const snap = vm.runInContext("JSON.parse(JSON.stringify(nativeBackupPayload().state.nutrition))", pv.context);
+  assert.equal(snap.healthLog.length, 0, "Apple Health nutrition never goes into an iCloud snapshot");
+  assert.equal(snap.log.length, 1, "hand-logged nutrition is backed up");
+  assert.ok(snap.health.resyncFrom && !snap.health.lastSyncAt, "a restore re-imports Health nutrition from the oldest day held");
+
+  const cap = makeContext({ profile: { bodyweight: 200 }, equipmentProfiles: [{ id: "all-equipment", name: "Commercial Gym", equipment: [] }, { id: "road-gym", name: "Road Gym", equipment: ["Dumbbells", "Cable", "Bench", "Bodyweight", "Bands"] }] });
+  const runCap = (code) => vm.runInContext(code, cap.context);
+  assert.equal(runCap("state.equipmentProfiles.find((p) => p.id === 'road-gym').maxDumbbell"), undefined, "an existing Road Gym profile gets no dumbbell limit it didn't have");
+  runCap("selectEquipmentProfile('hotel-dumbbells'); setView('builder')");
+  assert.match(runCap("renderBuilder()"), /id="profileDumbbellCap"[^>]*value="50"/, "Builder shows and edits the dumbbell limit");
+  runCap("setDumbbellCap('hotel-dumbbells', '')");
+  assert.equal(runCap("travelDumbbellCap()"), null, "clearing the limit means no limit");
+
+  // A paused block holds its week and prescribes no deload while away.
+  runCap("state.trainingBlock = { id: 'blk', name: 'Block', startDate: dateKey(addDays(startOfWeek(new Date()), -21)), accumulationWeeks: 3, deload: true, focus: [] }");
+  assert.equal(runCap("blockWeekInfo().deload"), true, "this is the block's deload week at home");
+  for (const [id, value] of Object.entries({ tripProfile: "hotel-room", tripUntil: runCap("dateKey(addDays(new Date(), 6))") })) cap.elements.set(id, { value, innerHTML: "", classList: { add() {}, remove() {} } });
+  cap.elements.set("tripPauseBlock", { checked: true, value: "on", innerHTML: "", classList: { add() {}, remove() {} } });
+  runCap("state.trip = { active: false }; state.trip.startedOn = null; startTrip()");
+  assert.equal(runCap("blockWeekInfo().deload"), false, "no deload is prescribed while the block is paused for a trip");
+  assert.match(runCap("renderBlockStatusLine()"), /Paused while traveling/, "the block says it is paused");
+  // A different block started during the trip is not moved back.
+  runCap("state.trainingBlock = { ...state.trainingBlock, id: 'other' }; const before = state.trainingBlock.startDate; state.trip.startedOn = dateKey(addDays(new Date(), -10)); state.trip.until = dateKey(new Date()); checkTripExpiry(); window.__same = before === state.trainingBlock.startDate");
+  assert.equal(runCap("window.__same"), true, "only the block that was paused is moved back");
+  assert.equal(runCap("state.trip.active"), false, "trip mode ends on the day you're back");
+
+  // Bodyweight push-ups and bench dips complete without typing 0.
+  runCap("selectEquipmentProfile('all-equipment'); startWorkout('room-full'); const i = state.activeWorkout.exercises.findIndex((e) => e.id === 'push-up'); updateSet(i, 0, 'reps', '20'); completeSet(i, 0); window.__pushUp = state.activeWorkout.exercises[i].sets[0]");
+  assert.equal(runCap("window.__pushUp.done && window.__pushUp.weight"), "0", "a push-up set with no added weight completes");
+  console.log("PR #4 audit fix checks passed.");
+}
+
