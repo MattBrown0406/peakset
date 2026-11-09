@@ -836,7 +836,7 @@ registerMoreSection(25, () => `
   <section class="card pad">
     <p class="eyebrow">Coaching</p>
     <h2>Work with a coach</h2>
-    <p class="muted">Send your coach a check-in with weight, measurements (including readings imported from Apple Health), workouts, recovery, volume, and your latest photos. ${state.lastCoachPackageAt ? `Last sent ${formatShortDate(state.lastCoachPackageAt)}.` : ""}</p>
+    <p class="muted">Send your coach a check-in with weight, measurements and nutrition (including data imported from Apple Health), workouts, recovery, volume, and your latest photos. ${state.lastCoachPackageAt ? `Last sent ${formatShortDate(state.lastCoachPackageAt)}.` : ""}</p>
     <button class="primary-btn" onclick="sendCheckInToCoach()">Send Check-In to Coach</button>
     <label class="toggle-row"><input type="checkbox" ${state.coach?.enabled ? "checked" : ""} onchange="setCoachEnabled(this.checked)" /> <span>I coach athletes (adds a roster of athlete check-ins)</span></label>
     ${state.coach?.enabled ? `<button class="secondary-btn" style="margin-top:10px" onclick="openAthlete('')">Open Coach Hub (${coachAthletes().length})</button>` : ""}

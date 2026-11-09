@@ -1604,3 +1604,206 @@ console.log("Audit round 8 checks passed.");
   console.log("Audit round 12 checks passed.");
 }
 }
+
+// Nutrition (nutrition.js): targets, daily log, adherence, Apple Health import, privacy.
+{
+  const dk = (offset) => {
+    const date = new Date();
+    date.setDate(date.getDate() + offset);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  };
+  const localMidnight = (offset) => {
+    const date = new Date();
+    date.setDate(date.getDate() + offset);
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString();
+  };
+  const setInputs = (ctx, prefix, values) => {
+    for (const field of ["Kcal", "Protein", "Carbs", "Fat"]) {
+      ctx.elements.set(`${prefix}${field}`, { value: String(values[field.toLowerCase()] ?? ""), innerHTML: "", classList: { add() {}, remove() {} } });
+    }
+  };
+
+  // Suggested starting points per phase and unit.
+  const lb = makeContext({ profile: { bodyweight: 200, gender: "Male", age: 40 }, weightLogs: [{ id: "w-lb", date: new Date().toISOString(), bodyweight: 200 }] });
+  const runLb = (code) => vm.runInContext(code, lb.context);
+  const suggestion = (phase, run = runLb) => JSON.parse(run(`JSON.stringify(suggestedNutritionTargets('${phase}'))`));
+  assert.deepEqual(suggestion("offseason").targets, { kcal: 3000, protein: 200, carbs: 370, fat: 80 }, "off-season starts at maintenance with ~1 g protein per lb");
+  assert.equal(suggestion("offseason").highDay, null, "only prep suggests a high day");
+  assert.deepEqual(suggestion("bulking").targets, { kcal: 3300, protein: 200, carbs: 445, fat: 80 }, "bulking adds a surplus");
+  assert.deepEqual(suggestion("prep").targets, { kcal: 2400, protein: 200, carbs: 265, fat: 60 }, "prep sets a deficit and keeps protein high");
+  assert.deepEqual(suggestion("prep").highDay, { kcal: 3000, protein: 200, carbs: 415, fat: 60 }, "the prep high day returns to maintenance through carbs");
+  assert.equal(suggestion("travel").targets.kcal, 3000, "travel holds maintenance");
+  for (const phase of ["offseason", "bulking", "prep"]) {
+    const { targets } = suggestion(phase);
+    assert.ok(Math.abs(targets.protein * 4 + targets.carbs * 4 + targets.fat * 9 - targets.kcal) <= 20, `${phase} macros add up to the calorie target`);
+  }
+  const kg = makeContext({ units: "metric", profile: { bodyweight: 90.72, gender: "Male", age: 40 }, weightLogs: [{ id: "w-kg", date: new Date().toISOString(), bodyweight: 90.72 }] });
+  const runKg = (code) => vm.runInContext(code, kg.context);
+  const kgTargets = suggestion("prep", runKg).targets;
+  assert.equal(kgTargets.protein, 200, "a kg body weight is read as kg (90.7 kg -> 200 g protein)");
+  assert.ok(Math.abs(kgTargets.protein / 90.72 - 2.2) < 0.05, "protein is about 2.2 g per kg");
+  assert.match(runKg("state.view = 'progress'; renderProgress()"), /2\.2 g per kg[\s\S]*90\.7 kg/, "metric athletes see the per-kg rule and their kg weight");
+  assert.match(runLb("state.view = 'progress'; renderProgress()"), /1 g per lb[\s\S]*200 lb/, "imperial athletes see the per-lb rule");
+  runLb("setUnits('metric')");
+  assert.equal(suggestion("prep").targets.protein, 200, "switching lb -> kg does not change the suggested protein");
+  runLb("setUnits('imperial')");
+  assert.equal(suggestion("offseason", runKg).targets.kcal, suggestion("offseason").targets.kcal, "the same athlete gets the same calories in kg or lb");
+  assert.equal(runLb("suggestedNutritionTargets('prep', 20)"), null, "an implausible body weight gives no suggestion");
+  runLb("state.phase = 'prep'; applySuggestedNutritionTargets()");
+  assert.equal(runLb("state.nutrition.targets.kcal + '|' + state.nutrition.highDay.kcal + '|' + state.nutrition.targetsSuggested"), "2400|3000|true", "using the starting point sets daily and high-day targets, labeled as suggested");
+  assert.match(runLb("state.view = 'today'; renderToday()"), /Suggested starting point/, "Today labels suggested targets as a starting point");
+  setInputs(lb, "nutTarget", { kcal: 2300, protein: 210, carbs: 240, fat: 60 });
+  setInputs(lb, "nutHigh", {});
+  runLb("saveNutritionTargets()");
+  assert.equal(runLb("state.nutrition.targets.kcal + '|' + state.nutrition.targetsSuggested + '|' + state.nutrition.highDay"), "2300|false|null", "edited targets are the athlete's own; an empty high day clears it");
+  setInputs(lb, "nutTarget", { protein: 200, carbs: 250, fat: 60 });
+  runLb("saveNutritionTargets()");
+  assert.equal(runLb("state.nutrition.targets.kcal"), 2340, "macros alone set the calorie target (4/4/9)");
+
+  // Logging and adherence.
+  const nut = makeContext({
+    profile: { bodyweight: 200, gender: "Female", age: 30 },
+    athleteName: "Nina",
+    phase: "prep",
+    weightLogs: [{ id: "w-n", date: new Date().toISOString(), bodyweight: 150 }],
+    nutrition: {
+      targets: { kcal: 2400, protein: 200, carbs: 265, fat: 60 },
+      highDay: { kcal: 3000, protein: 200, carbs: 415, fat: 60 },
+      highDays: [dk(-2)],
+      log: [
+        { date: dk(0), kcal: 1000 },
+        { date: dk(-1), kcal: 2450, protein: 205, carbs: 270, fat: 58 },
+        { date: dk(-2), kcal: 2950, protein: 198, carbs: 410, fat: 62 },
+        { date: dk(-3), kcal: 2900, protein: 150, carbs: 300, fat: 90 },
+        { date: dk(-4), protein: 200, carbs: 250, fat: 60 },
+        { date: dk(-9), kcal: 5000, protein: 50, carbs: 10, fat: 10 }
+      ]
+    }
+  });
+  const runN = (code) => vm.runInContext(code, nut.context);
+  runN("window.confirm = () => true");
+  const summary = JSON.parse(runN("JSON.stringify(ownNutritionSummary())"));
+  assert.equal(summary.loggedDays, 4, "the 7-day window holds full days only: not today, not day 9");
+  assert.equal(summary.judgedDays + "|" + summary.onTarget, "4|3", "kcal within 10% and protein >= 90% counts as on target (high days use the high-day target)");
+  assert.equal(summary.adherence, 0.75, "adherence is on-target days over logged days");
+  assert.equal(summary.avg.kcal, 2660, "macro-only days count their calories (4/4/9)");
+  assert.equal(summary.avgTarget.kcal, 2550, "the average target includes the high day's target");
+  assert.equal(summary.avg.protein, 188.25, "protein averages over logged days");
+  setInputs(nut, "nutAdd", { protein: 30, carbs: 50 });
+  runN("quickAddNutrition()");
+  assert.equal(runN("JSON.stringify(manualNutritionDay(dateKey(new Date())))"), JSON.stringify({ id: `n-${dk(0)}`, date: dk(0), kcal: 1320, protein: 30, carbs: 50, fat: null }), "quick add adds grams and their calories to today");
+  setInputs(nut, "nutAdd", { kcal: 200 });
+  runN("quickAddNutrition()");
+  assert.equal(runN("manualNutritionDay(dateKey(new Date())).kcal + '|' + manualNutritionDay(dateKey(new Date())).protein"), "1520|30", "calories alone leave macros untouched");
+  setInputs(nut, "nutAdd", { kcal: -5 });
+  runN("quickAddNutrition()");
+  assert.equal(runN("manualNutritionDay(dateKey(new Date())).kcal"), 1520, "a negative entry is rejected");
+  setInputs(nut, "nutEdit", { kcal: 2000, protein: 180 });
+  runN("toggleNutritionEdit(true); saveNutritionDay()");
+  assert.equal(runN("JSON.stringify(manualNutritionDay(dateKey(new Date())))"), JSON.stringify({ id: `n-${dk(0)}`, date: dk(0), kcal: 2000, protein: 180, carbs: null, fat: null }), "edit sets the day's totals exactly");
+  assert.match(runN("state.view = 'today'; renderToday()"), /Nutrition today[\s\S]*2,000 \/ 2,400 kcal[\s\S]*Make Today a High Day/, "Today shows progress against the day's target and offers a prep high day");
+  runN("toggleNutritionHighDay(dateKey(new Date()))");
+  assert.match(runN("renderToday()"), /2,000 \/ 3,000 kcal[\s\S]*High day/, "a high day uses the high-day target");
+  runN("toggleNutritionHighDay(dateKey(new Date())); clearNutritionDay(dateKey(new Date()))");
+  assert.equal(runN("manualNutritionDay(dateKey(new Date()))"), null, "clear removes the day");
+  assert.match(runN("renderToday()"), /0 \/ 2,400 kcal/, "a cleared day reads zero against the target");
+
+  // Apple Health import: one entry per day, hand-logged days win, Health days marked.
+  const posted = [];
+  nut.context.window.webkit = { messageHandlers: { peaksetHealthKit: { postMessage(message) { posted.push(message); } } } };
+  runN("setHealthNutritionEnabled(true)");
+  assert.equal(posted.at(-1)?.action, "authorize", "turning the import on asks Health for access first");
+  runN("window.handleNativeHealthKit({ status: 'authorizationCompleted', weightWrite: true, workoutWrite: true })");
+  assert.equal(posted.at(-1)?.action, "readNutrition", "the import runs once access is answered");
+  assert.ok(Date.now() - Date.parse(posted.at(-1).since) >= 89 * 86400000, "the first import reaches back about 90 days");
+  const healthDays = [
+    { date: dk(-1), kcal: 9999, protein: 1, carbs: 1, fat: 1 },
+    { date: dk(-5), kcal: 2187.4, protein: 193.4, carbs: 251, fat: 71 },
+    { date: dk(2), kcal: 100 },
+    { date: "2026-02-31", kcal: 100 },
+    { date: dk(-6), kcal: 0, protein: 0 }
+  ];
+  runN(`window.handleNativeHealthKit({ status: 'nutritionDays', action: 'readNutrition', since: ${JSON.stringify(localMidnight(-6))}, days: ${JSON.stringify(healthDays)} })`);
+  assert.equal(runN("state.nutrition.healthLog.length"), 2, "only real, past days with food are imported");
+  assert.equal(runN("nutritionDayEntry(dateKey(addDays(new Date(), -1))).kcal"), 2450, "a hand-logged day wins over the day's Health totals");
+  assert.equal(runN("nutritionDayEntry(dateKey(addDays(new Date(), -5))).id"), `hk-n-${dk(-5)}`, "Health days fill the gaps, marked as Health");
+  assert.equal(runN("nutritionDayEntry(dateKey(addDays(new Date(), -5))).kcal + '|' + nutritionDayEntry(dateKey(addDays(new Date(), -5))).source"), "2187|healthkit", "Health totals are stored rounded and marked healthkit");
+  assert.equal(runN("nutritionEntries().filter((entry) => entry.date === dateKey(addDays(new Date(), -1))).length"), 1, "one entry per day");
+  assert.equal(runN(`applyHealthNutritionDays(${JSON.stringify(healthDays)}, ${JSON.stringify(localMidnight(-6))})`), 0, "re-syncing the same days changes nothing");
+  assert.equal(runN(`applyHealthNutritionDays(${JSON.stringify(healthDays.slice(0, 1))}, ${JSON.stringify(localMidnight(-6))})`), 1, "a day deleted in the food app goes away");
+  runN(`applyHealthNutritionDays(${JSON.stringify(healthDays)}, ${JSON.stringify(localMidnight(-6))})`);
+  assert.equal(JSON.parse(runN("JSON.stringify(ownNutritionSummary())")).healthDays, 1, "the summary counts Health days");
+  runN("state.nutrition.health.lastResult = '<img src=x onerror=alert(1)>'");
+  assert.ok(!runN("renderMore()").includes("<img src=x"), "Health status text is escaped");
+  assert.match(runN("renderMore()"), /Import nutrition/, "More offers the Health nutrition import");
+  runN("state.nutrition.health.lastResult = ''");
+
+  // iCloud snapshots never carry Health nutrition; the coach sees it, marked, and the coach's snapshots drop it.
+  const snapshot = JSON.stringify(runN("nativeBackupPayload()"));
+  assert.ok(!snapshot.includes('"kcal":2187') && !snapshot.includes('"kcal":9999'), "Health nutrition never reaches an iCloud snapshot");
+  assert.ok(snapshot.includes('"kcal":2450'), "hand-logged nutrition is backed up");
+  const snapState = JSON.parse(snapshot).state;
+  assert.equal(snapState.nutrition.healthLog.length, 0, "the snapshot's Health log is empty");
+  assert.equal(snapState.nutrition.health.resyncFrom.slice(0, 10), new Date(Date.parse(localMidnight(-5))).toISOString().slice(0, 10), "after a restore, Health nutrition re-imports from the oldest day it had");
+  assert.ok(JSON.stringify(JSON.parse(runN("JSON.stringify(backupPayload())"))).includes('"kcal":2187'), "an exported backup file (the athlete's choice) stays complete");
+  const nutPkg = JSON.parse(JSON.stringify(await runN("buildCoachPackage(14)")));
+  const pkgDay = (offset) => nutPkg.nutrition.days.find((entry) => entry.date === dk(offset));
+  assert.equal(pkgDay(-5).fromHealth, true, "Health days go to the coach marked as Health, like Health body readings");
+  assert.equal(pkgDay(-1).kcal + "|" + Boolean(pkgDay(-1).fromHealth), "2450|false", "the coach gets the hand-logged day, not the Health one");
+  assert.equal(pkgDay(-2).highDay, true, "high days are marked for the coach");
+  assert.equal(nutPkg.nutrition.targets.kcal, 2400, "targets go with the check-in");
+  const nutCoach = makeContext({ profile: { bodyweight: 210 } });
+  const runC = (code) => vm.runInContext(code, nutCoach.context);
+  runC("window.confirm = () => true");
+  await runC(`importCoachPackage(${JSON.stringify(nutPkg)})`);
+  const athleteNutrition = JSON.parse(runC("JSON.stringify(coachAthletes()[0].nutrition)"));
+  assert.equal(athleteNutrition.days.find((entry) => entry.date === dk(-5)).fromHealth, true, "the coach's copy keeps the Health marker");
+  const coachSummary = JSON.parse(runC("JSON.stringify(athleteNutritionSummary(coachAthletes()[0]))"));
+  const ownSummary = JSON.parse(runN("JSON.stringify(ownNutritionSummary())"));
+  assert.equal(coachSummary.loggedDays + "|" + coachSummary.onTarget, "5|4", "the coach sees the 7-day adherence (high day judged on its own target)");
+  assert.deepEqual(coachSummary, ownSummary, "the coach's summary matches the athlete's own");
+  assert.match(runC("state.view = 'coach'; state.coach.selectedAthleteId = coachAthletes()[0].id; renderCoach()"), /<p class="eyebrow">Nutrition<\/p>[\s\S]*Apple Health[\s\S]*Weekly volume/, "the coach's athlete page shows nutrition before volume");
+  const coachSnapshot = JSON.stringify(runC("nativeBackupPayload()"));
+  assert.ok(!coachSnapshot.includes('"kcal":2187'), "the coach's iCloud snapshot leaves out the athlete's Health nutrition");
+  assert.ok(coachSnapshot.includes('"kcal":2450'), "the coach's snapshot keeps the athlete's hand-logged nutrition");
+  runN("window.confirm = () => true; clearNutritionDay(dateKey(addDays(new Date(), -1)))");
+  assert.equal(runN("nutritionDayEntry(dateKey(addDays(new Date(), -1))).kcal"), 9999, "clearing a hand-logged day brings back that day's Health totals");
+  const nextPkg = JSON.parse(JSON.stringify(await runN("buildCoachPackage(14)")));
+  nextPkg.generatedAt = new Date(Date.now() + 1000).toISOString();
+  await runC(`importCoachPackage(${JSON.stringify(nextPkg)})`);
+  assert.equal(runC(`coachAthletes()[0].nutrition.days.find((entry) => entry.date === ${JSON.stringify(dk(-1))}).fromHealth`), true, "a newer check-in replaces the coach's copy of a changed day");
+  await runC(`importCoachPackage(${JSON.stringify(nutPkg)})`);
+  assert.equal(runC(`coachAthletes()[0].nutrition.days.find((entry) => entry.date === ${JSON.stringify(dk(-1))}).kcal`), 9999, "an older check-in opened again does not bring back a replaced day");
+
+  // Coach PDF and logbook.
+  const pdf = runN("buildCoachReportLines(14).map((line) => line.text).join('\\n')");
+  assert.match(pdf, /Nutrition\nDaily targets: 2,400 kcal - P 200 g - C 265 g - F 60 g\nHigh day: 3,000 kcal/, "the coach PDF lists the targets");
+  assert.match(pdf, /Last 7 full days average: [\d,]+ kcal \(\d+% of target\)/, "the coach PDF shows averages against targets");
+  assert.match(pdf, /Logged \d of 7 days - on target \d of \d \(\d+%\) - \d from Apple Health/, "the coach PDF shows adherence and Health days");
+  assert.ok(/^[\x20-\x7E\xA0-\xFF\n]*$/.test(pdf), "nutrition PDF lines are Latin-1 text");
+  assert.match(runN("state.view = 'logbook'; renderLogbook()"), /<p class="eyebrow">Nutrition<\/p>/, "the logbook shows nutrition");
+
+  // Remove imported nutrition; a reset and a damaged restore stay safe.
+  runN("removeHealthNutrition()");
+  assert.equal(runN("state.nutrition.healthLog.length + '|' + state.nutrition.health.enabled"), "0|false", "imported nutrition can be removed");
+  runN("window.handleNativeHealthKit({ status: 'nutritionDays', since: '', days: [{ date: dateKey(new Date()), kcal: 500 }] })");
+  assert.equal(runN("state.nutrition.healthLog.length"), 0, "a read that finishes after the import was turned off is ignored");
+  runN("resetDemoData()");
+  assert.equal(runN("state.nutrition.log.length + '|' + state.nutrition.targets"), "0|null", "reset clears nutrition");
+  const damaged = makeContext({ profile: { bodyweight: 180 }, nutrition: { targets: { kcal: -1 }, highDays: "x", log: [null, { date: "2026-13-45", kcal: 5 }, { date: dk(-1), kcal: "abc", protein: "<b>" }, { date: dk(-2), kcal: 1e9 }], healthLog: {}, health: "x" }, coach: { enabled: true, athletes: { "athlete-0009": { id: "athlete-0009", nutrition: { asOf: "nope", days: [] } } } } });
+  const runD = (code) => vm.runInContext(code, damaged.context);
+  assert.equal(runD("JSON.stringify([state.nutrition.targets, state.nutrition.log, state.nutrition.healthLog, state.nutrition.highDays])"), "[null,[],[],[]]", "damaged stored nutrition is dropped on load");
+  assert.equal(runD("'nutrition' in state.coach.athletes['athlete-0009']"), false, "a damaged roster nutrition copy is dropped");
+  for (const view of ["today", "progress", "logbook", "more"]) {
+    runD(`state.view = '${view}'; render()`);
+  }
+  assert.match(runD("state.view = 'today'; renderToday()"), /Nothing logged yet[\s\S]*Set Targets/, "Today invites setting targets when none are set");
+  assert.match(runD("state.view = 'progress'; renderProgress()"), /Targets and adherence[\s\S]*Use Starting Point/, "Progress renders the nutrition section");
+  assert.ok(read("index.html").indexOf("./health.js") < read("index.html").indexOf("./nutrition.js"), "nutrition.js loads after health.js");
+  assert.match(nativeServices, /dietaryEnergyConsumed[\s\S]*dietaryProtein[\s\S]*dietaryCarbohydrates[\s\S]*dietaryFatTotal/, "HealthKit reads the four nutrition types");
+  assert.match(nativeServices, /readTypes\.formUnion\(Self\.nutritionReadTypes/, "nutrition types are in the authorization request");
+  assert.match(nativeServices, /HKStatisticsCollectionQuery[\s\S]*\.cumulativeSum[\s\S]*intervalComponents: DateComponents\(day: 1\)/, "nutrition is read as daily sums");
+  assert.match(swiftWebView, /case "readNutrition":[\s\S]*"status": "nutritionDays"/, "the peaksetHealthKit handler answers readNutrition");
+  assert.match(infoPlist, /NSHealthShareUsageDescription<\/key>\s*<string>[^<]*nutrition/, "the Health read permission mentions nutrition");
+  console.log("Nutrition checks passed.");
+}

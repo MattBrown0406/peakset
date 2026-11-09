@@ -41,6 +41,7 @@ Debug builds accept `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='<script>'` on `xcrun simc
 - Rest timer on the Lock Screen and in the Dynamic Island (Live Activity)
 - Apple Watch app for logging sets with the Digital Crown and running rest from the wrist
 - Apple Health body data import: body weight, body fat %, lean body mass, and waist from smart scales and other apps, one reading per day, hand-logged entries always win
+- Nutrition: daily calorie, protein, carb and fat targets with a phase-aware suggested starting point (about 1 g protein per lb / 2.2 g per kg; surplus to bulk, deficit for prep) and an optional prep high day; quick add on Today, 7-day averages and adherence on Progress, Apple Health import of daily totals from MacroFactor, MyFitnessPal and similar apps (hand-logged days win; never in iCloud backups), and nutrition in coach check-ins and PDFs
 - Coach mode without accounts: athletes send a check-in file; coaches keep a roster with trends, volume, photos, and notes, and send programs back
 
 - Onboarding for gender, age, starting body weight, training phase, and starting measurements
