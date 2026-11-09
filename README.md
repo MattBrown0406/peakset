@@ -42,6 +42,7 @@ Debug builds accept `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='<script>'` on `xcrun simc
 - Apple Watch app for logging sets with the Digital Crown and running rest from the wrist
 - Apple Health body data import: body weight, body fat %, lean body mass, and waist from smart scales and other apps, one reading per day, hand-logged entries always win
 - Coach mode without accounts: athletes send a check-in file; coaches keep a roster with trends, volume, photos, and notes, and send programs back
+- "How to" form guides for every library exercise (setup, steps, mistakes to avoid, muscles worked) in the Library, live workout, and exercise history, with a "Watch a demo" link that opens a YouTube search in Safari
 
 - Onboarding for gender, age, starting body weight, training phase, and starting measurements
 - Off-season, bulking, and contest prep training context
