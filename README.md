@@ -40,8 +40,14 @@ Debug builds accept `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='<script>'` on `xcrun simc
 - Training blocks: 3-6 build weeks with a falling RIR target and rising set targets, weak-point focus, and an automatic deload week
 - Rest timer on the Lock Screen and in the Dynamic Island (Live Activity)
 - Apple Watch app for logging sets with the Digital Crown and running rest from the wrist
+- Home Screen and Lock Screen widgets: today's workout and exercise count (or Done today), the training block week and RIR, and on the medium size the muscles furthest behind on weekly sets plus the 7-day body-weight average
 - Apple Health body data import: body weight, body fat %, lean body mass, and waist from smart scales and other apps, one reading per day, hand-logged entries always win
+- Nutrition: daily calorie, protein, carb and fat targets with a phase-aware suggested starting point (about 1 g protein per lb / 2.2 g per kg; surplus to bulk, deficit for prep) and an optional prep high day; quick add on Today, 7-day averages and adherence on Progress, Apple Health import of daily totals from MacroFactor, MyFitnessPal and similar apps (hand-logged days win; never in iCloud backups), and nutrition in coach check-ins and PDFs
 - Coach mode without accounts: athletes send a check-in file; coaches keep a roster with trends, volume, photos, and notes, and send programs back
+- Peak Week and show-day checklist on Today from 7 days out: day-by-day items, show-day tan, suit, oil, pump-up plan, snacks and check-in time, your own items, and water/sodium/carb targets you fill in from your coach's plan (no water-cut or diuretic advice; risky targets get a warning); previewable from More any time
+- Guided posing practice for your division's mandatory poses and quarter turns, with adjustable holds, rests and rounds, the boxing bell at each pose, and finished minutes saved to prep activity
+- Warm-up ramp (2-4 sets rounded to loadable weights) and a plates-per-side calculator on barbell and Smith lifts in the live workout, with saved bar weights in lb or kg
+- "How to" form guides for every library exercise (setup, steps, mistakes to avoid, muscles worked) in the Library, live workout, and exercise history, with a "Watch a demo" link that opens a YouTube search in Safari
 
 - Onboarding for gender, age, starting body weight, training phase, and starting measurements
 - Off-season, bulking, and contest prep training context
@@ -51,6 +57,11 @@ Debug builds accept `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='<script>'` on `xcrun simc
 - Expanded lift library with 20+ movements each for chest, back, shoulders, arms, and legs
 - Abs exercise library with ab finishers mixed into many plans instead of a standalone abs day
 - Road Gym mode for hotel gyms with a bench, dumbbells up to 50 lb, cable handles, rope, and ankle cuffs
+- Travel training: hotel equipment profiles (cables, dumbbells only, a room with a band, a room with nothing), dumbbell-only and hotel-room workouts, 20–30 minute express sessions, and bodyweight and band exercises that log reps only
+- Exercises the current equipment can't do are swapped automatically when a workout starts (saved swaps first, then the closest same-muscle exercise)
+- A heaviest-dumbbell setting per equipment profile: progression, Copy Last, and the watch never suggest more than the hotel has, and Tempo, Paused, and 1½-rep set types make light weights harder
+- Find a gym nearby: one tap opens Apple Maps to the closest Planet Fitness, 24 Hour Fitness, LA Fitness, Anytime, Snap, Gold's, Crunch, EoS, Life Time, YMCA, or Equinox (or any gym by name), plus a Planet Fitness equipment profile (no free barbells, dumbbells to 75 lb)
+- Trip mode: pick where you'll train and when you're back; Today recommends workouts that fit, the training block can pause while away, and the home profile returns on its own
 - 30+ pre-planned body-part, prep, weak-point, and Road Gym workouts
 - Advanced workout builder with equipment profiles, scheduling, reordering, duplication, supersets, set types, and reusable templates
 - Live-workout editing for adding, removing, reordering, substituting, or changing the planned set count

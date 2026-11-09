@@ -161,6 +161,24 @@ function nativeBackupPayload() {
     // just the default 180 days.
     copy.healthBody.resyncFrom = healthDates.length ? new Date(Math.min(...healthDates)).toISOString() : null;
   }
+  // Apple Health nutrition (nutrition.js) stays out too, here in the base so it
+  // holds however early a snapshot runs: imported days are dropped and
+  // re-imported after a restore, from the oldest one held.
+  const healthNutrition = (entry) => String(entry?.id || "").startsWith("hk-") || entry?.source === "healthkit" || entry?.fromHealth === true;
+  if (copy.nutrition && typeof copy.nutrition === "object") {
+    const heldDays = (Array.isArray(state.nutrition?.healthLog) ? state.nutrition.healthLog : [])
+      .map((entry) => Date.parse(`${entry?.date}T00:00:00`)).filter(Number.isFinite);
+    const pending = Date.parse(state.nutrition?.health?.resyncFrom || "");
+    if (Number.isFinite(pending)) heldDays.push(pending);
+    copy.nutrition.healthLog = [];
+    if (Array.isArray(copy.nutrition.log)) copy.nutrition.log = copy.nutrition.log.filter((entry) => !healthNutrition(entry));
+    const health = copy.nutrition.health && typeof copy.nutrition.health === "object" ? copy.nutrition.health : {};
+    copy.nutrition.health = { ...health, lastSyncAt: null, lastResult: "", resyncFrom: heldDays.length ? new Date(Math.min(...heldDays)).toISOString() : null };
+  }
+  Object.values(copy.coach?.athletes || {}).forEach((athlete) => {
+    if (!athlete?.nutrition || typeof athlete.nutrition !== "object") return;
+    athlete.nutrition.days = (Array.isArray(athlete.nutrition.days) ? athlete.nutrition.days : []).filter((entry) => !healthNutrition(entry));
+  });
   return { format: BACKUP_FORMAT, version: BACKUP_VERSION, app: APP_NAME, exportedAt: new Date().toISOString(), state: copy };
 }
 
@@ -460,7 +478,7 @@ function renderBackupCard() {
       <p class="eyebrow">Backup and restore</p>
       <h2>Keep your logbook safe</h2>
       ${native ? `
-        <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app). Apple Health readings are not included: body readings re-import from Apple Health after a restore, but imported step history does not.</p>
+        <p class="muted">Mass Method backs up automatically after each saved workout and once a day. Backups go to iCloud Drive when it is on, otherwise to this iPhone (visible in the Files app). Apple Health readings are not included: body readings and nutrition re-import from Apple Health after a restore, but imported step history does not.</p>
         <div class="signal-card"><span class="badge green">Automatic</span><strong>${escapeHtml(state.backupStatus?.message || "")}</strong>${state.backupStatus?.at ? `<p class="muted" style="margin:4px 0 0">${new Date(state.backupStatus.at).toLocaleString()}</p>` : ""}</div>
         <div class="actions" style="margin-top:12px">
           <button class="primary-btn" onclick="requestAutomaticSnapshot('manual', true) || toast(state.profile ? 'Backups need the iPhone app.' : 'Finish setting up your profile first; there is nothing to back up yet.')">Back Up Now</button>
@@ -502,8 +520,8 @@ registerMoreSection(90, () => `
       <div class="policy-text">
         <p><strong>Mass Method does not collect your data.</strong> There are no accounts, no analytics, no ads, and no servers. Everything you log stays on your iPhone and Apple Watch.</p>
         <p><strong>Backups.</strong> If iCloud Drive is on, automatic backups are saved to your own iCloud Drive; otherwise they stay on this iPhone. Only you can read them. Apple Health readings are never included in automatic backups.</p>
-        <p><strong>Apple Health.</strong> With your permission, Mass Method reads body weight, body fat, lean body mass, waist and steps, and writes body weight and strength workouts. Health data is used only to show your progress in the app. It is never sold, used for advertising, or sent anywhere unless you share it.</p>
-        <p><strong>Sharing.</strong> Data leaves your device only when you choose to share it: exporting a backup file, exporting a PDF, or sending a check-in to your coach (which can include readings imported from Apple Health). You choose where those files go.</p>
+        <p><strong>Apple Health.</strong> With your permission, Mass Method reads body weight, body fat, lean body mass, waist, steps and daily nutrition totals (calories, protein, carbohydrates and fat), and writes body weight and strength workouts. Health data is used only to show your progress in the app. It is never sold, used for advertising, or sent anywhere unless you share it.</p>
+        <p><strong>Sharing.</strong> Data leaves your device only when you choose to share it: exporting a backup file, exporting a PDF, or sending a check-in to your coach (which can include readings and nutrition imported from Apple Health). You choose where those files go.</p>
         <p><strong>Camera and photos.</strong> Progress photos you take or choose are stored on this iPhone and in your own iCloud Drive backup folder. They are never uploaded anywhere else.</p>
         <p><strong>Deleting data.</strong> Delete individual entries in Progress, History and Logbook, or delete the app to remove everything on this device. Backups in iCloud Drive can be deleted from the Files app.</p>
       </div>
@@ -566,7 +584,13 @@ setView = function setViewWithMore(view) {
 };
 
 saveState();
-requestAutomaticSnapshot("launch");
+// After every module has loaded, so each one's migrations and backup rules
+// apply to the launch snapshot.
+if (typeof window.addEventListener === "function" && document.readyState !== "complete") {
+  window.addEventListener("load", () => requestAutomaticSnapshot("launch"), { once: true });
+} else {
+  requestAutomaticSnapshot("launch");
+}
 // iOS keeps the app in memory for days; the daily snapshot also runs when it
 // comes back to the foreground (it is skipped if one ran in the last 20 hours).
 try {

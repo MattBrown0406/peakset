@@ -4,7 +4,7 @@ import WebKit
 import AVFoundation
 
 struct PeakSetWebView: UIViewRepresentable {
-    static let messageHandlers = ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit", "peaksetBackup", "peaksetPhoto", "peaksetWatch"]
+    static let messageHandlers = ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit", "peaksetBackup", "peaksetPhoto", "peaksetWatch", "peaksetWidget"]
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -87,6 +87,10 @@ struct PeakSetWebView: UIViewRepresentable {
             case "peaksetWatch":
                 if let payload = message.body as? [String: Any], let snapshot = payload["snapshot"] as? String {
                     PeakSetWatchBridge.shared.publish(snapshotJSON: snapshot)
+                }
+            case "peaksetWidget":
+                if let payload = message.body as? [String: Any], let summary = payload["summary"] as? String {
+                    PeakSetWidgetBridge.shared.publish(summaryJSON: summary)
                 }
             default:
                 break
@@ -383,6 +387,13 @@ struct PeakSetWebView: UIViewRepresentable {
                 let since = (payload["since"] as? String).flatMap(parseISODate) ?? Date().addingTimeInterval(-180 * 86400)
                 service.readBodySamples(since: since, kilograms: (payload["unit"] as? String) == "kg", centimeters: (payload["lengthUnit"] as? String) == "cm") { [weak self] result in
                     self?.sendHealthKitResult(action: action, result.map { samples -> [String: Any] in ["status": "bodySamples", "samples": samples, "unit": (payload["unit"] as? String) ?? "lb"] })
+                }
+            case "readNutrition":
+                let sinceText = payload["since"] as? String ?? ""
+                let since = parseISODate(sinceText) ?? Date().addingTimeInterval(-90 * 86400)
+                service.readNutritionDays(since: since) { [weak self] result in
+                    // The window goes back so the page can drop days deleted in the food app.
+                    self?.sendHealthKitResult(action: action, result.map { days -> [String: Any] in ["status": "nutritionDays", "days": days, "since": sinceText] })
                 }
             case "readSteps":
                 service.readTodaySteps { [weak self] result in

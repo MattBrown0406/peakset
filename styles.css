@@ -1992,3 +1992,244 @@ img {
   min-width: 72px;
   align-self: center;
 }
+
+/* Contest prep tools (prep.js): peak week, posing practice, warm-up and plates. */
+.prep-stack {
+  gap: 16px;
+}
+
+.prep-safety,
+.prep-warning {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 184, 77, 0.1);
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.prep-warning[hidden] {
+  display: none;
+}
+
+.prep-days {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.prep-day {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 4px 10px;
+}
+
+.prep-day.today {
+  outline: 1px solid rgba(255, 184, 77, 0.45);
+}
+
+.prep-day.past summary strong {
+  color: var(--muted);
+}
+
+.prep-day > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.prep-day > summary::-webkit-details-marker {
+  display: none;
+}
+
+.prep-day .checklist {
+  margin: 4px 0 10px;
+}
+
+.prep-item {
+  display: grid;
+  gap: 6px;
+}
+
+.prep-item:has(> .compact-btn) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.prep-item:has(> .compact-btn) > .prep-inline-field {
+  grid-column: 1 / -1;
+}
+
+button.check-item.prep-check {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.prep-inline-field {
+  margin: 0 0 4px 44px;
+}
+
+.prep-targets {
+  display: grid;
+  gap: 6px;
+}
+
+.prep-target-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.prep-target-row label {
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.prep-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.posing-list,
+.warmup-list {
+  margin: 10px 0;
+  padding-left: 22px;
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.posing-overlay .posing-pose {
+  margin: 4px 0 0;
+  font-size: 28px;
+}
+
+.prep-load-helper[open] {
+  grid-column: 1 / -1;
+}
+
+.prep-load-body {
+  margin-top: 8px;
+}
+
+/* Exercise form guides */
+.exercise-guide {
+  margin: 8px 0;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.exercise-guide > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.exercise-guide-body {
+  padding-bottom: 12px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.exercise-guide-body h4 {
+  margin: 10px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.exercise-guide-body p,
+.exercise-guide-body ol,
+.exercise-guide-body ul {
+  margin: 0;
+  /* Library cards shrink their own paragraphs; guides stay readable. */
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.exercise-guide-body ol,
+.exercise-guide-body ul {
+  padding-left: 20px;
+}
+
+.exercise-guide-body li + li {
+  margin-top: 2px;
+}
+
+.guide-demo-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-top: 4px;
+  color: var(--accent-2);
+  font-weight: 700;
+}
+
+/* Nutrition: four number boxes (kcal, protein, carbs, fat). */
+.nutrition-inputs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.nutrition-inputs .field {
+  min-width: 0;
+}
+
+.today-nutrition .volume-list,
+.nutrition-progress .volume-list {
+  margin-top: 4px;
+}
+
+@media (max-width: 560px) {
+  .nutrition-inputs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.nutrition-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.nutrition-badges .badge {
+  white-space: nowrap;
+}
+
+/* Travel gym finder (travel.js) */
+.gym-chain-list {
+  flex-wrap: wrap;
+}
+
+.gym-chip,
+.gym-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.gym-finder summary {
+  cursor: pointer;
+}

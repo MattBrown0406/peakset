@@ -1480,7 +1480,7 @@ console.log("Audit round 8 checks passed.");
       runG("state.equipmentProfiles.push({ id: 'garage', name: 'Garage', equipment: ['Barbell', 'Dumbbells', 'Bench', 'Rack', 'Plates', 'Pull-up bar', 'Bodyweight'] }); state.activeEquipmentProfileId = 'garage'; state.workoutLogs = []; state.phase = 'offseason'");
       const garageSeen = new Set();
       for (let i = 0; i < 10; i += 1) {
-        garageSeen.add(runG(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'g-${i}', title: plan.title, date: new Date(Date.now() - (20 - ${i}) * 86400000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); return plan.muscle; })()`));
+        garageSeen.add(runG(`(() => { const plan = todaysRecommendedPlan(); state.workoutLogs.unshift({ id: 'g-${i}', title: plan.title, date: new Date(Date.now() - (20 - ${i}) * 86400000).toISOString(), sets: plan.exercises.map(([id]) => ({ exercise: exerciseById(id).name, exerciseId: id, weight: '50', reps: '10' })) }); const counts = {}; plan.exercises.forEach(([id]) => { const muscle = exerciseById(id).muscle; if (muscle !== 'abs') counts[muscle] = (counts[muscle] || 0) + 1; }); return plan.muscle === 'travel' ? Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] : plan.muscle; })()`));
       }
       assert.ok(garageSeen.size >= 4, `a garage profile rotates muscles (saw ${[...garageSeen].join(", ")})`);
       assert.ok(read("toolkit.js").includes("Number.isInteger(Math.round(bestWeight * 400) / 100) ? 2 : 1"), "progression copy keeps quarter-step loads like 61.25 exact");
@@ -1604,3 +1604,652 @@ console.log("Audit round 8 checks passed.");
   console.log("Audit round 12 checks passed.");
 }
 }
+
+// Travel: hotel profiles, automatic equipment swaps, dumbbell cap, trip mode.
+{
+  const tv = makeContext({ profile: { bodyweight: 200 } });
+  const run = (code) => vm.runInContext(code, tv.context);
+  const fitsProfile = (planId, profileId) => run(`travelPlanFits(planTemplates.find((p) => p.id === '${planId}'), state.equipmentProfiles.find((p) => p.id === '${profileId}'))`);
+  assert.ok(run("['road-gym','hotel-dumbbells','hotel-room','hotel-room-bodyweight'].every((id) => state.equipmentProfiles.some((p) => p.id === id))"), "hotel equipment profiles are added");
+  for (const id of ["chest-road-db", "back-road-db", "shoulders-road-db", "arms-road-db", "legs-road-db", "full-road-db", "express-upper-db", "express-lower-db"]) assert.ok(fitsProfile(id, "hotel-dumbbells"), `${id} fits a dumbbells-only hotel gym`);
+  for (const id of ["room-upper", "room-lower", "room-full", "express-room"]) assert.ok(fitsProfile(id, "hotel-room"), `${id} fits a hotel room with a band`);
+  assert.ok(fitsProfile("room-no-equipment", "hotel-room-bodyweight"), "the no-equipment room workout needs nothing but the room");
+  assert.ok(run("exerciseLibrary.filter((e) => e.repsOnly).every((e) => e.muscle === 'abs' || exerciseMuscleGroup(e))"), "every new travel exercise counts toward a muscle's weekly sets");
+  assert.ok(run("exerciseMatchesEquipmentProfile(exerciseById('push-up'), { equipment: ['Bodyweight'] })"), "push-ups need only bodyweight");
+
+  // A hotel room swaps cable work for band and bodyweight moves.
+  run("selectEquipmentProfile('hotel-room'); window.__toasts = []; toast = (message) => window.__toasts.push(message); startWorkout('back-road-gym')");
+  assert.ok(run("state.activeWorkout.exercises.every((e) => exerciseMatchesEquipmentProfile(exerciseById(e.id)))"), "every exercise in a started workout fits the hotel room");
+  assert.equal(run("state.activeWorkout.exercises[0].originalId"), "lat-pulldown", "a swapped exercise remembers what was planned");
+  assert.match(run("window.__toasts.at(-1)"), /Swapped for your equipment: Lat Pulldown → /, "the athlete is told what was swapped");
+  assert.equal(run("isRepsOnlyExercise(state.activeWorkout.exercises[0])"), true, "band exercises log reps only");
+  run("updateSet(0, 0, 'reps', '15'); completeSet(0, 0)");
+  assert.equal(run("state.activeWorkout.exercises[0].sets[0].done"), true, "a band set completes without a weight");
+  run("state.activeWorkout = null; stopTimer()");
+
+  // Dumbbell cap: home 100s don't follow the athlete to the hotel.
+  run("selectEquipmentProfile('hotel-dumbbells')");
+  run("state.workoutLogs.unshift({ id: 'home', date: new Date(Date.now() - 3 * 864e5).toISOString(), title: 'Chest', sets: [1, 2].map((set) => ({ exerciseId: 'incline-db-press', exercise: 'Incline Dumbbell Press', set, weight: '100', reps: '15', done: true })) })");
+  assert.match(run("progressionSuggestion({ id: 'incline-db-press', targetReps: '10-15' })"), /top out at 50 lb/, "progression stops at the hotel's heaviest dumbbell");
+  run("startWorkout('chest-road-db'); copyPreviousPerformance(0)");
+  assert.equal(run("state.activeWorkout.exercises[0].sets[0].weight"), "50", "Copy Last fills the hotel's heaviest dumbbell, not the home weight");
+  assert.equal(run("suggestedSetValues(state.activeWorkout.exercises[0], 1).weight"), "50", "the watch suggests no more than the cap");
+  run("state.units = 'metric'");
+  assert.equal(run("travelDumbbellCap()"), 22.68, "a 50 lb cap converts like logged weights, so real 50 lb dumbbells are never clamped");
+  run("state.units = 'imperial'; state.activeWorkout = null");
+
+  // Trip mode switches the profile and pauses the block, then switches back.
+  run("selectEquipmentProfile('all-equipment'); state.trainingBlock = { id: 'b', name: 'Block', startDate: dateKey(addDays(startOfWeek(new Date()), -14)), accumulationWeeks: 4, deload: true, focus: [] }");
+  const blockStart = run("state.trainingBlock.startDate");
+  for (const [id, value] of Object.entries({ tripProfile: "hotel-room", tripUntil: run("dateKey(addDays(new Date(), 8))") })) tv.elements.set(id, { value, innerHTML: "", classList: { add() {}, remove() {} } });
+  tv.elements.set("tripPauseBlock", { checked: true, value: "on", innerHTML: "", classList: { add() {}, remove() {} } });
+  run("startTrip()");
+  assert.equal(run("state.activeEquipmentProfileId"), "hotel-room", "trip mode switches to the hotel equipment");
+  assert.ok(run("travelPlanFits(todaysSelectedPlan())"), "Today recommends a workout the hotel room can do");
+  assert.match(run("renderToday()"), /Trip mode/, "Today shows the trip");
+  // Tuesday last week to Wednesday this week: one block week crossed.
+  run("state.trip.startedOn = dateKey(addDays(startOfWeek(new Date()), -6)); state.trip.until = dateKey(addDays(startOfWeek(new Date()), 2)); endTrip(true)");
+  assert.equal(run("state.activeEquipmentProfileId"), "all-equipment", "the home profile comes back after the trip");
+  assert.equal(run("state.trip.active"), false, "the trip ends on the return date");
+  assert.equal(run(`daysBetweenKeys('${blockStart}', state.trainingBlock.startDate)`), 7, "a trip across one week boundary moves the block back one week");
+  console.log("Travel checks passed.");
+}
+
+// ---- Contest-prep tools (prep.js): peak week, posing practice, warm-up and plates ----
+{
+  const localKey = (offsetDays) => {
+    const date = new Date();
+    date.setDate(date.getDate() + offsetDays);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  };
+  const profile = { gender: "Male", age: 30, bodyweight: 200, division: "Classic Physique", createdAt: new Date().toISOString() };
+  assert(read("index.html").indexOf('<script src="./prep.js"></script>') > read("index.html").indexOf('<script src="./health.js"></script>'), "prep.js loads after health.js");
+
+  // Checklist generation by days out.
+  const pw = makeContext({ profile: { ...profile, goalDate: localKey(3) } });
+  const runPw = (code) => vm.runInContext(code, pw.context);
+  const days = JSON.parse(runPw("JSON.stringify(peakWeekChecklist(peakWeekContext().showDate, peakWeekContext().daysOut))"));
+  assert.deepEqual(days.map((day) => day.day), [7, 6, 5, 4, 3, 2, 1, 0], "peak week runs 7 days out to show day");
+  assert.equal(days.find((day) => day.isToday).day, 3, "today is the day matching days out");
+  assert.deepEqual(days.filter((day) => day.past).map((day) => day.day), [7, 6, 5, 4], "earlier days are marked past");
+  assert.equal(days.at(-1).date, localKey(3), "show day is the goal date");
+  assert.equal(days[0].date, localKey(-4), "7 days out is a week before the show");
+  const showDayText = days.at(-1).items.map((item) => item.text).join(" | ");
+  for (const word of [/tan/i, /suit/i, /oil/i, /pump-up/i, /snacks/i, /check-in/i]) assert.match(showDayText, word, `show day covers ${word}`);
+  const allItems = days.flatMap((day) => day.items.map((item) => `${item.text} ${item.detail}`)).join(" | ");
+  assert.doesNotMatch(allItems, /diuretic|water pill|dandelion|cut (the )?water|stop drinking|dehydrat|restrict water|water load/i, "peak week items never prescribe water cuts or diuretics");
+  assert.match(runPw("PEAK_SAFETY_TEXT"), /coach/i, "peak week guidance defers to the coach");
+  assert.match(runPw("PEAK_SAFETY_TEXT"), /Do not cut water or take diuretics/, "peak week warns against water cuts and diuretics");
+  const today3 = runPw("renderToday()");
+  assert.match(today3, /peak-week-card/, "Today shows the Peak Week card 3 days out");
+  assert.match(today3, /3 days out/, "the card counts days out");
+  assert.match(today3, /Rehearse your pump-up/, "the card shows today's (3 days out) items");
+  // Check-offs, targets and custom items are saved per show date.
+  const showDate = localKey(3);
+  runPw(`togglePeakWeekItem('${showDate}', 'd3-pump')`);
+  assert.equal(runPw(`state.prepTools.peakWeek['${showDate}'].done['d3-pump']`), true, "checking an item saves it for this show");
+  runPw(`setPeakWeekTarget('${showDate}', 3, 'water', 'Same as last week')`);
+  assert.equal(runPw(`state.prepTools.peakWeek['${showDate}'].targets[3].water`), "Same as last week", "water target is free text the athlete edits");
+  runPw(`window.__toasts = []; toast = (message) => window.__toasts.push(message); setPeakWeekTarget('${showDate}', 1, 'water', 'Take a diuretic')`);
+  assert.match(runPw("window.__toasts.join('|')"), /confirm with your coach or doctor/, "a diuretic target gets a warning");
+  assert.equal(runPw("peakTargetRisky('0 L') && !peakTargetRisky('4 L, same as usual')"), true, "zero water is flagged; a normal target is not");
+  runPw(`document.getElementById('peakCustom-0').value = 'Bring <b>robe</b>'; addPeakWeekItem('${showDate}', 0)`);
+  const custom = JSON.parse(runPw(`JSON.stringify(state.prepTools.peakWeek['${showDate}'].custom)`));
+  assert.equal(custom.length, 1, "athletes can add their own items");
+  assert.match(runPw("renderPrepTools()"), /Bring &lt;b&gt;robe&lt;\/b&gt;/, "custom item text is escaped");
+  assert.equal(runPw(`peakWeekProgress('${showDate}').done`), 1, "progress counts checked items");
+  // A new show date starts a fresh checklist; the old one is kept.
+  runPw(`state.profile.goalDate = '${localKey(5)}'`);
+  assert.equal(runPw(`peakWeekProgress('${localKey(5)}').done`), 0, "a different show date has its own check-offs");
+  assert.ok(runPw(`Boolean(state.prepTools.peakWeek['${showDate}'])`), "the earlier show's checklist is kept");
+  // Restore of a damaged or hostile prepTools survives migration.
+  const bad = makeContext({ profile, prepTools: { peakWeek: { "not-a-date": {}, [showDate]: { done: { "d0-tan": true, "bad id!": true }, targets: { 9: { water: "x" }, 2: { water: 5 } }, custom: [{ id: "x1", day: 99, text: "Hi" }, null, { id: "x1", day: 1, text: "dupe" }] } }, barWeight: { barbell: { imperial: -5, metric: "1e400" } }, posing: { hold: 999, rounds: "abc", division: "__proto__" } } });
+  const cleaned = JSON.parse(vm.runInContext("JSON.stringify(state.prepTools)", bad.context));
+  assert.deepEqual(Object.keys(cleaned.peakWeek), [showDate], "only real show dates survive");
+  assert.deepEqual(cleaned.peakWeek[showDate].done, { "d0-tan": true }, "invalid item ids are dropped");
+  assert.deepEqual(cleaned.peakWeek[showDate].targets, {}, "out-of-range days and non-text targets are dropped");
+  assert.deepEqual(cleaned.peakWeek[showDate].custom, [{ id: "x1", day: 7, text: "Hi" }], "custom items are clamped and de-duplicated");
+  assert.equal(cleaned.barWeight.barbell.imperial + "|" + cleaned.barWeight.barbell.metric, "45|20", "invalid bar weights fall back to 45 lb / 20 kg");
+  assert.equal(`${cleaned.posing.hold}|${cleaned.posing.rounds}|${cleaned.posing.division}`, "90|2|", "posing settings are clamped");
+
+  // Far out: no Today card, but the preview is reachable from More.
+  const far = makeContext({ profile: { ...profile, goalDate: localKey(60) } });
+  assert.doesNotMatch(vm.runInContext("renderToday()", far.context), /peak-week-card/, "no Peak Week card 60 days out");
+  assert.match(vm.runInContext("renderMore()", far.context), /setView\('prep'\)/, "More links to the Peak Week preview");
+  assert.match(vm.runInContext("setView('prep'); renderContent()", far.context), /Preview: peak week starts/, "the Peak Week page works as a preview when far out");
+  assert.match(vm.runInContext("renderToday()", makeContext({ profile: { ...profile, goalDate: localKey(12) } }).context), /Starts in 5 days/, "Today previews peak week from three weeks out");
+  const none = makeContext({ profile });
+  assert.match(vm.runInContext("setView('prep'); renderContent()", none.context), /Set a show date/, "without a show date the checklist is a read-only preview");
+  assert.doesNotMatch(vm.runInContext("renderPeakWeekSection()", none.context), /togglePeakWeekItem/, "the no-date preview has no check-offs");
+  assert.match(vm.runInContext("renderToday()", makeContext({ profile: { ...profile, goalDate: localKey(0) } }).context), /Today is the show/, "show day gets the show-day card");
+  assert.doesNotMatch(vm.runInContext("renderToday()", makeContext({ profile: { ...profile, goalDate: localKey(-1) } }).context), /peak-week-card/, "the card goes away after the show");
+
+  // Posing practice: division poses, timing, and logging into prep logs.
+  const ps = makeContext({ profile });
+  const runPs = (code) => vm.runInContext(code, ps.context);
+  assert.equal(runPs("posingDivision().key"), "classic-physique", "the posing routine follows the profile division");
+  const classic = JSON.parse(runPs("JSON.stringify(posingPoses())"));
+  assert.ok(classic.includes("Favorite classic pose") && classic.includes("Quarter turn: side"), "Classic Physique runs its mandatories and quarter turns");
+  assert.deepEqual(JSON.parse(runPs("JSON.stringify(posingPoses(POSING_DIVISIONS.find((d) => d.key === 'mens-bodybuilding'), false))")), ["Front double biceps", "Front lat spread", "Side chest", "Back double biceps", "Back lat spread", "Side triceps", "Abdominals and thighs", "Most muscular"], "Men's Bodybuilding has the eight mandatories");
+  assert.deepEqual(JSON.parse(runPs("JSON.stringify(posingPoses(POSING_DIVISIONS.find((d) => d.key === 'bikini'), false))")), ["Front stance", "Quarter turn: side", "Back stance", "Quarter turn: other side", "Model walk and transitions"], "Bikini always runs quarter turns");
+  assert.equal(runPs("posingDivisionKey(\"Women's Physique\") + '|' + posingDivisionKey('Mens Physique') + '|' + posingDivisionKey('Off-season Size Goal')"), "womens-physique|mens-physique|", "division names map to pose sets");
+  const steps = JSON.parse(runPs("JSON.stringify(posingSteps({ hold: 20, rest: 10, rounds: 2 }, ['A', 'B', 'C']))"));
+  assert.equal(steps.filter((step) => step.type === "pose").length, 6, "each round holds every pose");
+  assert.equal(runPs("posingTotalSeconds(posingSteps({ hold: 20, rest: 10, rounds: 2 }, ['A', 'B', 'C']))"), 5 + 6 * 20 + 5 * 10, "no rest after the final pose");
+  assert.equal(runPs("posingMinutesFor(175, posingSteps({ hold: 20, rest: 10, rounds: 2 }, ['A', 'B', 'C']))"), 2.8, "logged minutes leave out the lead-in, to 1 decimal");
+  runPs("var bells = 0; playBoxingBell = () => { bells += 1; }; window.__toasts = []; toast = (message) => window.__toasts.push(message); setPosingOption('rounds', 1); setPosingOption('hold', 10); setPosingOption('rest', 5); startPosingRoutine()");
+  assert.match(runPs("renderContent()"), /posing-overlay/, "a running routine shows the posing timer");
+  const total = runPs("posingTotalSeconds(posingSession.steps)");
+  runPs("posingTick(posingSession.startedAt + 6000)");
+  assert.equal(runPs("bells"), 1, "the bell rings when the first pose starts");
+  const logsBefore = runPs("state.prepLogs.length");
+  runPs(`posingTick(posingSession.startedAt + ${total * 1000 + 50})`);
+  const entry = JSON.parse(runPs("JSON.stringify(state.prepLogs[0])"));
+  assert.equal(runPs("state.prepLogs.length"), logsBefore + 1, "finishing the routine logs one prep entry");
+  assert.deepEqual(Object.keys(entry).sort(), ["cardioMinutes", "cardioType", "date", "id", "notes", "posingMinutes", "steps"], "the entry has savePrepLog's shape");
+  assert.equal(entry.posingMinutes, Math.round((total - 5) / 6) / 10, "posing minutes match the routine");
+  assert.equal(entry.cardioMinutes + entry.steps, 0, "posing practice adds no cardio or steps");
+  assert.match(entry.notes, /Classic Physique, 1 round/, "the note names the division and rounds");
+  assert.equal(runPs("posingSession"), null, "the routine ends after logging");
+  assert.ok(runPs("stageChecklist({ phase: 'prep' }).find((item) => /Posing practice logged/.test(item.label)).done"), "logged posing counts toward the stage checklist");
+  assert.match(runPs("renderProgress()"), /posing/, "Progress still renders with the posing entry");
+  // Stopping early with little time does not log.
+  runPs("startPosingRoutine(); stopPosingRoutine()");
+  assert.equal(runPs("state.prepLogs.length"), logsBefore + 1, "stopping straight away logs nothing");
+
+  // Warm-up and plate math, lb and kg.
+  const wm = makeContext({ profile });
+  const runWm = (code) => JSON.parse(vm.runInContext(`JSON.stringify(${code})`, wm.context));
+  const plates225 = runWm("platesPerSide(225, { unit: 'lb', bar: 45 })");
+  assert.equal(plates225.ok, true, "225 lb is loadable");
+  assert.deepEqual(plates225.plates, [{ plate: 45, count: 2 }], "225 lb is two 45s a side");
+  assert.deepEqual(runWm("platesPerSide(185, { unit: 'lb', bar: 45 }).plates"), [{ plate: 45, count: 1 }, { plate: 25, count: 1 }], "185 lb is 45 + 25 a side");
+  assert.deepEqual(runWm("platesPerSide(315, { unit: 'lb', bar: 45 }).plates"), [{ plate: 45, count: 3 }], "315 lb is three 45s a side");
+  assert.deepEqual(runWm("platesPerSide(100, { unit: 'lb', bar: 35 }).plates"), [{ plate: 25, count: 1 }, { plate: 5, count: 1 }, { plate: 2.5, count: 1 }], "an adjusted 35 lb bar changes the plate math");
+  assert.equal(runWm("platesPerSide(226, { unit: 'lb', bar: 45 })").ok, false, "226 lb is not loadable with standard plates");
+  assert.equal(runWm("platesPerSide(226, { unit: 'lb', bar: 45 })").nearestBelow + "|" + runWm("platesPerSide(226, { unit: 'lb', bar: 45 })").nearestAbove, "225|230", "the nearest loadable weights are offered");
+  assert.equal(runWm("platesPerSide(30, { unit: 'lb', bar: 45 })").reason, "below-bar", "a load lighter than the bar is impossible");
+  assert.deepEqual(runWm("platesPerSide(45, { unit: 'lb', bar: 45 })").plates, [], "the empty bar needs no plates");
+  assert.deepEqual(runWm("platesPerSide(102.5, { unit: 'kg', bar: 20 }).plates"), [{ plate: 25, count: 1 }, { plate: 15, count: 1 }, { plate: 1.25, count: 1 }], "102.5 kg is 25 + 15 + 1.25 a side");
+  assert.deepEqual(runWm("platesPerSide(140, { unit: 'kg', bar: 20 }).plates"), [{ plate: 25, count: 2 }, { plate: 10, count: 1 }], "140 kg is 25 + 25 + 10 a side");
+  assert.equal(runWm("platesPerSide(15, { unit: 'kg', bar: 20 })").reason, "below-bar", "15 kg on a 20 kg bar is impossible");
+  assert.equal(runWm("platesPerSide(101, { unit: 'kg', bar: 20 })").ok, false, "101 kg can't be loaded with 1.25 kg as the smallest plate");
+  assert.deepEqual(runWm("warmupSets(225, { unit: 'lb', bar: 45 }).sets.map((set) => [set.weight, set.reps])"), [[45, 10], [115, 8], [160, 5], [190, 2]], "heavy barbell work ramps bar x10, 50% x8, 70% x5, 85% x2 in loadable lb");
+  assert.deepEqual(runWm("warmupSets(100, { unit: 'kg', bar: 20 }).sets.map((set) => [set.weight, set.reps])"), [[20, 10], [50, 8], [70, 5], [85, 2]], "heavy barbell work ramps in loadable kg");
+  assert.deepEqual(runWm("warmupSets(135, { unit: 'lb', bar: 45 }).sets.map((set) => [set.weight, set.reps])"), [[45, 10], [80, 6], [110, 3]], "moderate loads get fewer ramp sets");
+  const ramps = runWm("[95, 135, 185, 225, 315, 405].map((w) => warmupSets(w, { unit: 'lb', bar: 45 }).sets.length)");
+  assert.ok(ramps.every((count) => count >= 2 && count <= 4), `barbell ramps are 2-4 sets (${ramps})`);
+  assert.ok(runWm("[95, 135, 185, 225, 315, 405].every((w) => warmupSets(w, { unit: 'lb', bar: 45 }).sets.every((set, i, all) => set.weight < w && (i === 0 || set.weight > all[i - 1].weight) && platesPerSide(set.weight, { unit: 'lb', bar: 45 }).ok))"), "every warm-up is lighter than the work, climbing, and loadable");
+  assert.ok(runWm("[60, 82.5, 100, 140, 180].every((w) => warmupSets(w, { unit: 'kg', bar: 20 }).sets.every((set) => platesPerSide(set.weight, { unit: 'kg', bar: 20 }).ok))"), "kg warm-ups are loadable with kg plates");
+  assert.equal(runWm("warmupSets(30, { unit: 'lb', bar: 45 })").reason, "below-bar", "a working weight below the bar has no warm-up");
+  assert.equal(runWm("warmupSets('', { unit: 'lb', bar: 45 })").reason, "empty", "no working weight, no warm-up");
+  assert.deepEqual(runWm("warmupSets(80, { unit: 'lb', bar: 0 }).sets.map((set) => [set.weight, set.reps])"), [[40, 10], [60, 5]], "dumbbell ramps round to 5 lb");
+  assert.deepEqual(runWm("warmupSets(32, { unit: 'kg', bar: 0 }).sets.map((set) => set.weight)"), [15, 25], "dumbbell ramps round to 2.5 kg");
+
+  // Session render smoke test: helpers appear on loaded lifts and log nothing.
+  const ss = makeContext({ profile });
+  const runSs = (code) => vm.runInContext(code, ss.context);
+  runSs("state.activeWorkout = null; startWorkout('chest-density'); state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'barbell-bench', name: 'Barbell Bench Press' }; state.activeWorkout.exercises[0].sets[0].weight = '225'");
+  const setsBefore = runSs("JSON.stringify(state.activeWorkout.exercises.map((exercise) => exercise.sets))");
+  const session = runSs("renderSession()");
+  assert.match(session, /Warm-up and plates/, "barbell lifts get the warm-up and plates helper");
+  assert.match(session, /45 \+ 45 per side/, "the working set's plates are shown");
+  assert.match(session, /Empty bar \(45 lb\)<\/strong> × 10/, "the ramp starts with the empty bar");
+  assert.equal(runSs("JSON.stringify(state.activeWorkout.exercises.map((exercise) => exercise.sets))"), setsBefore, "rendering the helpers changes no logged data");
+  runSs("state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'smith-incline-press', name: 'Smith Machine Incline Press' }; setBarWeight('smith', '25')");
+  assert.equal(runSs("state.prepTools.barWeight.smith.imperial + '|' + state.prepTools.barWeight.barbell.imperial"), "25|45", "the Smith bar weight is saved on its own");
+  assert.match(runSs("renderSession()"), /Smith bar \(lb\)[\s\S]*value="25"/, "the saved Smith bar weight is used");
+  runSs("state.activeWorkout.exercises[0].sets[0].weight = '20'");
+  assert.match(runSs("renderSession()"), /lighter than the 25 lb bar/, "a load below the bar is called out in the session");
+  runSs("state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'flat-db-press', name: 'Flat Dumbbell Press' }");
+  const dbSession = runSs("renderSession()");
+  assert.ok(/>Warm-up<\/summary>/.test(dbSession) && !/Warm-up and plates/.test(dbSession.slice(dbSession.indexOf('exercise-card-0'), dbSession.indexOf('exercise-card-1'))), "dumbbell lifts get a warm-up helper without plates");
+  runSs("setUnits('metric')");
+  assert.match(runSs("state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'barbell-bench', name: 'Barbell Bench Press' }; state.activeWorkout.exercises[0].sets[0].weight = '100'; renderSession()"), /Empty bar \(20 kg\)[\s\S]*25 \+ 15 per side/, "in kg the 20 kg bar and kg plates are used");
+  runSs("setLoadHelperWeight(0, '15')");
+  assert.match(runSs("renderLoadHelperOutput(state.activeWorkout.exercises[0], 0)"), /lighter than the 20 kg bar/, "typing a weight below the bar is flagged");
+  assert.equal(runSs("state.activeWorkout.exercises[0].sets[0].weight"), "100", "typing in the helper never changes a logged set");
+  assert.doesNotThrow(() => runSs("resetDemoData(); renderToday()"), "reset still renders Today");
+  console.log("Contest-prep tools checks passed.");
+}
+
+// Exercise form guides (guides.js): every library exercise has a well-formed
+// guide, the "How to" panel renders in the Library, live workout and history,
+// and an exercise without a guide falls back to its cue.
+{
+  const guides = makeContext({ profile: { bodyweight: 200 } });
+  const runG = (code) => vm.runInContext(code, guides.context);
+  assert.ok(webScripts.indexOf("guides.js") > webScripts.indexOf("health.js"), "guides.js loads after health.js");
+  const guideCatalog = JSON.parse(runG("JSON.stringify({ ids: exerciseLibrary.map((item) => item.id), guides: EXERCISE_GUIDES })"));
+  const shortText = (value) => typeof value === "string" && value.trim().length > 0 && value.length <= 220;
+  for (const id of guideCatalog.ids) {
+    const guide = guideCatalog.guides[id];
+    if (!guide) {
+      // A newer exercise may not have a guide yet; it must still show its cue.
+      assert.match(runG(`renderExerciseGuide(${JSON.stringify(id)})`), /<details class="exercise-guide"/, `${id} has no guide and no cue fallback`);
+      continue;
+    }
+    assert.deepEqual(Object.keys(guide).sort(), ["mistakes", "muscles", "setup", "steps"], `${id} guide has exactly setup, steps, mistakes, muscles`);
+    assert.ok(shortText(guide.setup) && (guide.setup.match(/[.!?](\s|$)/g) || []).length <= 2, `${id} setup is 1-2 short sentences`);
+    assert.ok(Array.isArray(guide.steps) && guide.steps.length >= 3 && guide.steps.length <= 4 && guide.steps.every(shortText), `${id} has 3-4 short steps`);
+    assert.ok(Array.isArray(guide.mistakes) && guide.mistakes.length >= 2 && guide.mistakes.length <= 3 && guide.mistakes.every(shortText), `${id} has 2-3 short mistakes`);
+    assert.ok(shortText(guide.muscles) && guide.muscles.length <= 80, `${id} muscles is a short string`);
+  }
+  for (const id of Object.keys(guideCatalog.guides)) assert.ok(guideCatalog.ids.includes(id), `guide ${id} has no library exercise`);
+  const guided = guideCatalog.ids.filter((id) => guideCatalog.guides[id]).length;
+  assert.equal(guided, guideCatalog.ids.length, "every current library exercise has a written guide");
+
+  const bench = runG("renderExerciseGuide('barbell-bench')");
+  for (const label of ["How to", "Setup", "Steps", "Mistakes to avoid", "Muscles worked", "Watch a demo"]) assert.ok(bench.includes(label), `guide panel shows ${label}`);
+  assert.ok(bench.includes('href="https://www.youtube.com/results?search_query=Barbell%20Bench%20Press%20form"') && bench.includes('target="_blank"'), "Watch a demo opens a YouTube search for the exercise name + form");
+
+  // Unknown ids: cue only, or nothing at all, never an error.
+  const banded = runG("renderExerciseGuide({ id: 'band-pull-apart', name: 'Band <Pull-Apart>', cue: 'Pull the band to your chest & squeeze.' })");
+  assert.ok(banded.includes("Pull the band to your chest &amp; squeeze.") && !banded.includes("<h4>Steps</h4>"), "an exercise without a guide falls back to its cue");
+  assert.ok(!banded.includes("<Pull-Apart>") && banded.includes("search_query=Band%20%3CPull-Apart%3E%20form"), "fallback markup is escaped and the demo search is URL-encoded");
+  assert.equal(runG("exerciseGuide('no-such-exercise')"), null, "an unknown id has no guide");
+  assert.equal(runG("exerciseGuide('constructor')"), null, "object prototype keys are not guides");
+  assert.equal(runG("renderExerciseGuide('no-such-exercise')"), "", "an unknown id with no cue renders nothing");
+  assert.equal(runG("renderExerciseGuide(null)"), "", "a missing exercise renders nothing");
+
+  // Library: every card gets a panel, including after a live search.
+  runG("state.view = 'library'; state.librarySearch = ''; state.libraryFilter = 'chest'; state.libraryEquipmentFilter = 'all'; state.selectedExerciseId = null");
+  const libraryHtml = runG("renderContent()");
+  const chestCards = runG("libraryRows().length");
+  assert.ok(chestCards > 0 && (libraryHtml.match(/<details class="exercise-guide"/g) || []).length === chestCards, "every Library card has a How to panel");
+  assert.ok(libraryHtml.includes("Upper chest, front delts, triceps"), "Library panels show the guide content");
+  runG("state.librarySearch = 'hammer'");
+  assert.ok(runG("renderLibraryResults()").includes("Brachialis, brachioradialis, biceps"), "Library search results keep their panels");
+
+  // Library history panel and the History tab.
+  runG("state.librarySearch = ''; state.selectedExerciseId = 'lat-pulldown'");
+  const panelHtml = runG("renderExerciseHistoryPanel('lat-pulldown')");
+  assert.ok(panelHtml.includes('ontoggle="rememberExerciseGuide(\'history-panel:lat-pulldown\', this.open)"'), "the exercise history panel has a How to panel");
+  runG("setExerciseHistory('hack-squat'); state.view = 'history'");
+  assert.ok(runG("renderContent()").includes("history:hack-squat"), "the History tab shows the selected exercise's guide");
+
+  // Live workout session.
+  runG("window.confirm = () => true; state.activeWorkout = null; startWorkout('chest-density'); state.view = 'session'");
+  const sessionHtml = runG("renderContent()");
+  const sessionCount = runG("state.activeWorkout.exercises.length");
+  assert.equal((sessionHtml.match(/<details class="exercise-guide"/g) || []).length, sessionCount, "every live workout card has a How to panel");
+  const firstId = runG("state.activeWorkout.exercises[0].id");
+  runG(`rememberExerciseGuide('session:${firstId}', true)`);
+  assert.ok(runG("renderContent()").includes(`<details class="exercise-guide" open ontoggle="rememberExerciseGuide('session:${firstId}'`), "an opened guide stays open across re-renders");
+  runG("state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'travel-band-row', name: 'Band Row', cue: 'Row the band to your ribs.' }");
+  assert.ok(runG("renderContent()").includes("Row the band to your ribs."), "a live exercise without a guide shows its cue instead of breaking the session");
+
+  // External links leave the web view for Safari.
+  assert.ok(/case "http", "https", "mailto", "tel":\s*if navigationAction\.navigationType == \.linkActivated \{\s*UIApplication\.shared\.open\(url\)\s*\}\s*decisionHandler\(\.cancel\)/.test(swiftWebView), "tapped https links (the YouTube demo) open in Safari, never inside the web view");
+  assert.ok(styles.includes(".exercise-guide > summary") && styles.includes(".guide-demo-link"), "guide panel styles ship");
+  console.log(`Exercise guide checks passed (${guided} guides).`);
+}
+
+// ---- Home Screen and Lock Screen widgets ----
+{
+  const widgetJs = read("widget.js");
+  assert.equal(webScripts.at(-1), "widget.js", "widget.js loads last so it wraps every earlier saveState");
+  const summaryKeys = ["version", "day", "title", "exerciseCount", "doneToday", "doneTitle", "active", "activeTitle", "completedSets", "totalSets", "blockLine", "behind", "weightAverage", "unit"];
+  const today = new Date();
+  const localDay = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const wg = makeContext({ profile: { bodyweight: 150 }, weightLogs: [{ id: "w1", date: new Date().toISOString(), bodyweight: 150 }, { id: "w2", date: new Date(Date.now() - 2 * 86400000).toISOString(), bodyweight: 151 }, { id: "w0", date: new Date(Date.now() - 9 * 86400000).toISOString(), bodyweight: 170 }] });
+  const runWg = (code) => vm.runInContext(code, wg.context);
+  runWg("state.blockDraft = { weeks: 4, start: 'this', focus: [] }; startTrainingBlock()");
+  const summary = JSON.parse(runWg("JSON.stringify(buildWidgetSummary())"));
+  assert.deepEqual(Object.keys(summary), summaryKeys, "the widget summary has exactly the fields the widget decodes");
+  assert.equal(summary.day, localDay, "the widget summary is dated by the local calendar day");
+  assert.equal(summary.title, runWg("todaysSelectedPlan().title"), "the widget shows the workout the Today tab offers");
+  assert.ok(Number.isInteger(summary.exerciseCount) && summary.exerciseCount > 0, "the widget shows today's exercise count");
+  assert.equal(summary.exerciseCount, runWg("knownPlanExercises(todayPreviewPlan(todaysSelectedPlan())).length"), "the exercise count matches the Today tab's list");
+  assert.equal(summary.doneToday || summary.active, false, "nothing is done or in progress yet");
+  assert.equal(summary.blockLine, "Week 1 of 5 · 3 RIR", "the widget shows the training block week and RIR");
+  assert.equal(summary.weightAverage + summary.unit, "150.5lb", "the widget shows the 7-day body-weight average in the athlete's unit");
+  assert.ok(summary.behind.length > 0 && summary.behind.length <= 4, "the medium widget lists up to four muscles behind");
+  for (const muscle of summary.behind) {
+    assert.deepEqual(Object.keys(muscle), ["label", "sets", "low", "high"], "each behind muscle carries its label, sets, and target range");
+    assert.ok(muscle.sets < muscle.low && muscle.low <= muscle.high, `${muscle.label} is behind its target range`);
+  }
+  const gaps = summary.behind.map((muscle) => muscle.low - muscle.sets);
+  assert.deepEqual(gaps, [...gaps].sort((a, b) => b - a), "the furthest-behind muscle is listed first");
+  // A workout in progress, then finished today.
+  runWg("startWorkout('chest-density'); const ex = state.activeWorkout.exercises[0]; ex.sets[0].weight = '100'; ex.sets[0].reps = '10'; completeSet(0, 0); stopTimer()");
+  const live = JSON.parse(runWg("JSON.stringify(buildWidgetSummary())"));
+  assert.equal(`${live.active}|${live.activeTitle}|${live.completedSets}`, `true|${runWg("state.activeWorkout.title")}|1`, "the widget shows the workout in progress");
+  assert.ok(live.totalSets > 1, "the in-progress workout counts its sets");
+  const finishedTitle = runWg("state.activeWorkout.title");
+  runWg("window.confirm = () => true; finishWorkout()");
+  const done = JSON.parse(runWg("JSON.stringify(buildWidgetSummary())"));
+  assert.equal(`${done.doneToday}|${done.doneTitle}|${done.active}`, `true|${finishedTitle}|false`, "the widget says Done today once a workout is finished");
+  // Publishing: one debounced message per change, none when nothing changed.
+  runWg("window.__widgetPosts = []; window.webkit = { messageHandlers: { peaksetWidget: { postMessage: (message) => window.__widgetPosts.push(message) } } }; lastWidgetSummary = ''; publishWidgetSummary(); publishWidgetSummary()");
+  assert.equal(runWg("window.__widgetPosts.length"), 1, "an unchanged summary is not posted again");
+  assert.deepEqual(Object.keys(JSON.parse(runWg("window.__widgetPosts[0].summary"))), summaryKeys, "the posted summary is the JSON the native side stores");
+  runWg("widgetPublishTimer = null; saveState()");
+  assert.ok(runWg("widgetPublishTimer !== null"), "saveState schedules a debounced widget publish");
+  runWg("publishWidgetSummary()");
+  assert.equal(runWg("widgetPublishTimer"), null, "publishing clears the pending debounce");
+  // No-throw across odd states: no block, upcoming coach block, metric, bad log dates, object-row plans.
+  const odd = makeContext({ units: "metric", workoutLogs: [{ id: "bad", title: "Old", date: "not a date", sets: [] }], customPlans: [{ id: "c1", title: "Mine", muscle: "chest", phase: "offseason", note: "", scheduleDay: today.toLocaleDateString("en-US", { weekday: "long" }), exercises: [{ id: "barbell-bench", sets: 3, reps: "8" }] }] });
+  const oddSummary = JSON.parse(vm.runInContext("JSON.stringify(buildWidgetSummary())", odd.context));
+  assert.equal(`${oddSummary.blockLine}|${oddSummary.weightAverage}|${oddSummary.unit}|${oddSummary.doneToday}`, "|null|kg|false", "no block, no weigh-ins, and a bad log date still build a summary");
+  assert.ok(Number.isInteger(oddSummary.exerciseCount), "a plan with object rows still yields an exercise count");
+  vm.runInContext("state.blockDraft = { weeks: 4, start: 'next', focus: [] }; startTrainingBlock()", odd.context);
+  assert.match(JSON.parse(vm.runInContext("JSON.stringify(buildWidgetSummary())", odd.context)).blockLine, /^Block starts /, "an upcoming block shows its start date");
+  assert.ok(widgetJs.includes('document.addEventListener("visibilitychange"'), "leaving the app flushes the pending widget summary");
+
+  // Native: the Swift model decodes the same fields; stale summaries say so.
+  const widgetModel = read("ios/Shared/MassMethodWidgetSummary.swift");
+  const swiftFields = [...literalBetween(widgetModel, "static let widgetKind", "init(version:").matchAll(/^\s+var (\w+):/gm)].map((match) => match[1]);
+  assert.deepEqual(swiftFields, summaryKeys, "MassMethodWidgetSummary.swift fields match buildWidgetSummary");
+  assert.ok(widgetModel.includes('static let appGroup = "group.com.mattbrown.peakset"'), "the widget data lives in the App Group");
+  assert.ok(widgetModel.includes('String(format: "%04d-%02d-%02d"'), "the native day key matches the web dateKey format");
+  const widgetView = read("ios/MassMethodWidgets/MassMethodTodayWidget.swift");
+  assert.ok(widgetView.includes(`"Open Mass Method to see today's workout"`), "a summary from another day asks the athlete to open the app");
+  assert.ok(widgetView.includes("summary.isCurrent(at: date)"), "the widget checks the summary's day against the entry's date");
+  for (const family of [".systemSmall", ".systemMedium", ".accessoryRectangular", ".accessoryInline", ".accessoryCircular"]) {
+    assert.ok(widgetView.includes(family), `the widget supports ${family}`);
+  }
+  assert.ok((widgetView.match(/\.containerBackground\(for: \.widget\)/g) || []).length >= 5, "every widget family adopts containerBackground (iOS 17)");
+  assert.ok(read("ios/MassMethodWidgets/MassMethodWidgetsBundle.swift").includes("MassMethodTodayWidget()\n        RestTimerLiveActivity()"), "the widget bundle ships the Home Screen widget and the Live Activity");
+  const widgetBridge = read("ios/PeakSet/PeakSetWidgetBridge.swift");
+  assert.ok(widgetBridge.includes("WidgetCenter.shared.reloadAllTimelines()") && widgetBridge.includes("minimumReloadInterval"), "widget reloads are throttled");
+  assert.ok(widgetBridge.includes("UIApplication.didEnterBackgroundNotification"), "a throttled reload is sent when the app goes to the background");
+  assert.ok(swiftWebView.includes('"peaksetWidget"') && swiftWebView.includes("PeakSetWidgetBridge.shared.publish(summaryJSON: summary)"), "the web view forwards widget summaries");
+
+  // Signing: both targets carry the App Group; both bundles declare the UserDefaults reason.
+  const appGroupEntitlement = "<key>com.apple.security.application-groups</key>\n\t<array>\n\t\t<string>group.com.mattbrown.peakset</string>\n\t</array>";
+  assert.ok(entitlements.includes(appGroupEntitlement), "the app entitlements include the App Group");
+  assert.ok(read("ios/MassMethodWidgets/MassMethodWidgets.entitlements").includes(appGroupEntitlement), "the widget extension entitlements include the App Group");
+  assert.equal((xcodeProject.match(/CODE_SIGN_ENTITLEMENTS = MassMethodWidgets\/MassMethodWidgets\.entitlements;/g) || []).length, 2, "the widget extension signs with its entitlements in Debug and Release");
+  assert.equal((xcodeProject.match(/CODE_SIGN_ENTITLEMENTS = PeakSet\/PeakSet\.entitlements;/g) || []).length, 2, "the app signs with its entitlements in Debug and Release");
+  assert.equal((xcodeProject.match(/com\.apple\.ApplicationGroups\.iOS = \{\n\t+enabled = 1;/g) || []).length, 2, "App Groups is enabled for the app and the widget extension");
+  // The phase definitions (`ID /* Sources */ = {`), not their mentions in target lists.
+  const phase = (id, name = "Sources") => literalBetween(xcodeProject, `\t\t${id} /* ${name} */ = {`, "};");
+  const appSources = phase("1A2B3C4D5E6F700000000500");
+  const widgetSources = phase("2B3C4D5E6F7A800000000018");
+  assert.ok(appSources.includes("PeakSetWidgetBridge.swift in Sources") && appSources.includes("MassMethodWidgetSummary.swift in Sources"), "the app compiles the widget bridge and summary model");
+  assert.ok(widgetSources.includes("MassMethodTodayWidget.swift in Sources") && widgetSources.includes("MassMethodWidgetSummary.swift in Sources"), "the widget extension compiles the widget and summary model");
+  assert.ok(phase("2B3C4D5E6F7A80000000001A", "Resources").includes("PrivacyInfo.xcprivacy in Resources"), "the widget extension ships its privacy manifest");
+  assert.ok(read("ios/MassMethodWidgets/PrivacyInfo.xcprivacy").includes("<string>1C8F.1</string>"), "the widget privacy manifest declares App Group UserDefaults");
+  assert.ok(read("ios/PeakSet/PrivacyInfo.xcprivacy").includes("<string>1C8F.1</string>"), "the app privacy manifest declares App Group UserDefaults");
+  const objectIds = [...xcodeProject.matchAll(/^\t\t([0-9A-F]{24}) (?:\/\*.*?\*\/ )?= \{/gm)].map((match) => match[1]);
+  assert.equal(new Set(objectIds).size, objectIds.length, "every project.pbxproj object ID is unique");
+  for (const [, ref] of xcodeProject.matchAll(/fileRef = ([0-9A-F]{24})/g)) {
+    assert.ok(objectIds.includes(ref), `project.pbxproj build file points at a missing file reference ${ref}`);
+  }
+  console.log("Widget checks passed.");
+}
+
+// Nutrition (nutrition.js): targets, daily log, adherence, Apple Health import, privacy.
+{
+  const dk = (offset) => {
+    const date = new Date();
+    date.setDate(date.getDate() + offset);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  };
+  const localMidnight = (offset) => {
+    const date = new Date();
+    date.setDate(date.getDate() + offset);
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate()).toISOString();
+  };
+  const setInputs = (ctx, prefix, values) => {
+    for (const field of ["Kcal", "Protein", "Carbs", "Fat"]) {
+      ctx.elements.set(`${prefix}${field}`, { value: String(values[field.toLowerCase()] ?? ""), innerHTML: "", classList: { add() {}, remove() {} } });
+    }
+  };
+
+  // Suggested starting points per phase and unit.
+  const lb = makeContext({ profile: { bodyweight: 200, gender: "Male", age: 40 }, weightLogs: [{ id: "w-lb", date: new Date().toISOString(), bodyweight: 200 }] });
+  const runLb = (code) => vm.runInContext(code, lb.context);
+  const suggestion = (phase, run = runLb) => JSON.parse(run(`JSON.stringify(suggestedNutritionTargets('${phase}'))`));
+  assert.deepEqual(suggestion("offseason").targets, { kcal: 3000, protein: 200, carbs: 370, fat: 80 }, "off-season starts at maintenance with ~1 g protein per lb");
+  assert.equal(suggestion("offseason").highDay, null, "only prep suggests a high day");
+  assert.deepEqual(suggestion("bulking").targets, { kcal: 3300, protein: 200, carbs: 445, fat: 80 }, "bulking adds a surplus");
+  assert.deepEqual(suggestion("prep").targets, { kcal: 2400, protein: 200, carbs: 265, fat: 60 }, "prep sets a deficit and keeps protein high");
+  assert.deepEqual(suggestion("prep").highDay, { kcal: 3000, protein: 200, carbs: 415, fat: 60 }, "the prep high day returns to maintenance through carbs");
+  assert.equal(suggestion("travel").targets.kcal, 3000, "travel holds maintenance");
+  for (const phase of ["offseason", "bulking", "prep"]) {
+    const { targets } = suggestion(phase);
+    assert.ok(Math.abs(targets.protein * 4 + targets.carbs * 4 + targets.fat * 9 - targets.kcal) <= 20, `${phase} macros add up to the calorie target`);
+  }
+  const kg = makeContext({ units: "metric", profile: { bodyweight: 90.72, gender: "Male", age: 40 }, weightLogs: [{ id: "w-kg", date: new Date().toISOString(), bodyweight: 90.72 }] });
+  const runKg = (code) => vm.runInContext(code, kg.context);
+  const kgTargets = suggestion("prep", runKg).targets;
+  assert.equal(kgTargets.protein, 200, "a kg body weight is read as kg (90.7 kg -> 200 g protein)");
+  assert.ok(Math.abs(kgTargets.protein / 90.72 - 2.2) < 0.05, "protein is about 2.2 g per kg");
+  assert.match(runKg("state.view = 'progress'; renderProgress()"), /2\.2 g per kg[\s\S]*90\.7 kg/, "metric athletes see the per-kg rule and their kg weight");
+  assert.match(runLb("state.view = 'progress'; renderProgress()"), /1 g per lb[\s\S]*200 lb/, "imperial athletes see the per-lb rule");
+  runLb("setUnits('metric')");
+  assert.equal(suggestion("prep").targets.protein, 200, "switching lb -> kg does not change the suggested protein");
+  runLb("setUnits('imperial')");
+  assert.equal(suggestion("offseason", runKg).targets.kcal, suggestion("offseason").targets.kcal, "the same athlete gets the same calories in kg or lb");
+  assert.equal(runLb("suggestedNutritionTargets('prep', 20)"), null, "an implausible body weight gives no suggestion");
+  runLb("state.phase = 'prep'; applySuggestedNutritionTargets()");
+  assert.equal(runLb("state.nutrition.targets.kcal + '|' + state.nutrition.highDay.kcal + '|' + state.nutrition.targetsSuggested"), "2400|3000|true", "using the starting point sets daily and high-day targets, labeled as suggested");
+  assert.match(runLb("state.view = 'today'; renderToday()"), /Suggested starting point/, "Today labels suggested targets as a starting point");
+  setInputs(lb, "nutTarget", { kcal: 2300, protein: 210, carbs: 240, fat: 60 });
+  setInputs(lb, "nutHigh", {});
+  runLb("saveNutritionTargets()");
+  assert.equal(runLb("state.nutrition.targets.kcal + '|' + state.nutrition.targetsSuggested + '|' + state.nutrition.highDay"), "2300|false|null", "edited targets are the athlete's own; an empty high day clears it");
+  setInputs(lb, "nutTarget", { protein: 200, carbs: 250, fat: 60 });
+  runLb("saveNutritionTargets()");
+  assert.equal(runLb("state.nutrition.targets.kcal"), 2340, "macros alone set the calorie target (4/4/9)");
+
+  // Logging and adherence.
+  const nut = makeContext({
+    profile: { bodyweight: 200, gender: "Female", age: 30 },
+    athleteName: "Nina",
+    phase: "prep",
+    weightLogs: [{ id: "w-n", date: new Date().toISOString(), bodyweight: 150 }],
+    nutrition: {
+      targets: { kcal: 2400, protein: 200, carbs: 265, fat: 60 },
+      highDay: { kcal: 3000, protein: 200, carbs: 415, fat: 60 },
+      highDays: [dk(-2)],
+      log: [
+        { date: dk(0), kcal: 1000 },
+        { date: dk(-1), kcal: 2450, protein: 205, carbs: 270, fat: 58 },
+        { date: dk(-2), kcal: 2950, protein: 198, carbs: 410, fat: 62 },
+        { date: dk(-3), kcal: 2900, protein: 150, carbs: 300, fat: 90 },
+        { date: dk(-4), protein: 200, carbs: 250, fat: 60 },
+        { date: dk(-9), kcal: 5000, protein: 50, carbs: 10, fat: 10 }
+      ]
+    }
+  });
+  const runN = (code) => vm.runInContext(code, nut.context);
+  runN("window.confirm = () => true");
+  const summary = JSON.parse(runN("JSON.stringify(ownNutritionSummary())"));
+  assert.equal(summary.loggedDays, 4, "the 7-day window holds full days only: not today, not day 9");
+  assert.equal(summary.judgedDays + "|" + summary.onTarget, "4|3", "kcal within 10% and protein >= 90% counts as on target (high days use the high-day target)");
+  assert.equal(summary.adherence, 0.75, "adherence is on-target days over logged days");
+  assert.equal(summary.avg.kcal, 2660, "macro-only days count their calories (4/4/9)");
+  assert.equal(summary.avgTarget.kcal, 2550, "the average target includes the high day's target");
+  assert.equal(summary.avg.protein, 188.25, "protein averages over logged days");
+  setInputs(nut, "nutAdd", { protein: 30, carbs: 50 });
+  runN("quickAddNutrition()");
+  assert.equal(runN("JSON.stringify(manualNutritionDay(dateKey(new Date())))"), JSON.stringify({ id: `n-${dk(0)}`, date: dk(0), kcal: 1320, protein: 30, carbs: 50, fat: null }), "quick add adds grams and their calories to today");
+  setInputs(nut, "nutAdd", { kcal: 200 });
+  runN("quickAddNutrition()");
+  assert.equal(runN("manualNutritionDay(dateKey(new Date())).kcal + '|' + manualNutritionDay(dateKey(new Date())).protein"), "1520|30", "calories alone leave macros untouched");
+  setInputs(nut, "nutAdd", { kcal: -5 });
+  runN("quickAddNutrition()");
+  assert.equal(runN("manualNutritionDay(dateKey(new Date())).kcal"), 1520, "a negative entry is rejected");
+  setInputs(nut, "nutEdit", { kcal: 2000, protein: 180 });
+  runN("toggleNutritionEdit(true); saveNutritionDay()");
+  assert.equal(runN("JSON.stringify(manualNutritionDay(dateKey(new Date())))"), JSON.stringify({ id: `n-${dk(0)}`, date: dk(0), kcal: 2000, protein: 180, carbs: null, fat: null }), "edit sets the day's totals exactly");
+  assert.match(runN("state.view = 'today'; renderToday()"), /Nutrition today[\s\S]*2,000 \/ 2,400 kcal[\s\S]*Make Today a High Day/, "Today shows progress against the day's target and offers a prep high day");
+  runN("toggleNutritionHighDay(dateKey(new Date()))");
+  assert.match(runN("renderToday()"), /2,000 \/ 3,000 kcal[\s\S]*High day/, "a high day uses the high-day target");
+  runN("toggleNutritionHighDay(dateKey(new Date())); clearNutritionDay(dateKey(new Date()))");
+  assert.equal(runN("manualNutritionDay(dateKey(new Date()))"), null, "clear removes the day");
+  assert.match(runN("renderToday()"), /0 \/ 2,400 kcal/, "a cleared day reads zero against the target");
+
+  // Apple Health import: one entry per day, hand-logged days win, Health days marked.
+  const posted = [];
+  nut.context.window.webkit = { messageHandlers: { peaksetHealthKit: { postMessage(message) { posted.push(message); } } } };
+  runN("setHealthNutritionEnabled(true)");
+  assert.equal(posted.at(-1)?.action, "authorize", "turning the import on asks Health for access first");
+  runN("window.handleNativeHealthKit({ status: 'authorizationCompleted', weightWrite: true, workoutWrite: true })");
+  assert.equal(posted.at(-1)?.action, "readNutrition", "the import runs once access is answered");
+  assert.ok(Date.now() - Date.parse(posted.at(-1).since) >= 89 * 86400000, "the first import reaches back about 90 days");
+  const healthDays = [
+    { date: dk(-1), kcal: 9999, protein: 1, carbs: 1, fat: 1 },
+    { date: dk(-5), kcal: 2187.4, protein: 193.4, carbs: 251, fat: 71 },
+    { date: dk(2), kcal: 100 },
+    { date: "2026-02-31", kcal: 100 },
+    { date: dk(-6), kcal: 0, protein: 0 }
+  ];
+  runN(`window.handleNativeHealthKit({ status: 'nutritionDays', action: 'readNutrition', since: ${JSON.stringify(localMidnight(-6))}, days: ${JSON.stringify(healthDays)} })`);
+  assert.equal(runN("state.nutrition.healthLog.length"), 2, "only real, past days with food are imported");
+  assert.equal(runN("nutritionDayEntry(dateKey(addDays(new Date(), -1))).kcal"), 2450, "a hand-logged day wins over the day's Health totals");
+  assert.equal(runN("nutritionDayEntry(dateKey(addDays(new Date(), -5))).id"), `hk-n-${dk(-5)}`, "Health days fill the gaps, marked as Health");
+  assert.equal(runN("nutritionDayEntry(dateKey(addDays(new Date(), -5))).kcal + '|' + nutritionDayEntry(dateKey(addDays(new Date(), -5))).source"), "2187|healthkit", "Health totals are stored rounded and marked healthkit");
+  assert.equal(runN("nutritionEntries().filter((entry) => entry.date === dateKey(addDays(new Date(), -1))).length"), 1, "one entry per day");
+  assert.equal(runN(`applyHealthNutritionDays(${JSON.stringify(healthDays)}, ${JSON.stringify(localMidnight(-6))})`), 0, "re-syncing the same days changes nothing");
+  assert.equal(runN(`applyHealthNutritionDays(${JSON.stringify(healthDays.slice(0, 1))}, ${JSON.stringify(localMidnight(-6))})`), 1, "a day deleted in the food app goes away");
+  runN(`applyHealthNutritionDays(${JSON.stringify(healthDays)}, ${JSON.stringify(localMidnight(-6))})`);
+  assert.equal(JSON.parse(runN("JSON.stringify(ownNutritionSummary())")).healthDays, 1, "the summary counts Health days");
+  runN("state.nutrition.health.lastResult = '<img src=x onerror=alert(1)>'");
+  assert.ok(!runN("renderMore()").includes("<img src=x"), "Health status text is escaped");
+  assert.match(runN("renderMore()"), /Import nutrition/, "More offers the Health nutrition import");
+  runN("state.nutrition.health.lastResult = ''");
+
+  // iCloud snapshots never carry Health nutrition; the coach sees it, marked, and the coach's snapshots drop it.
+  const snapshot = JSON.stringify(runN("nativeBackupPayload()"));
+  assert.ok(!snapshot.includes('"kcal":2187') && !snapshot.includes('"kcal":9999'), "Health nutrition never reaches an iCloud snapshot");
+  assert.ok(snapshot.includes('"kcal":2450'), "hand-logged nutrition is backed up");
+  const snapState = JSON.parse(snapshot).state;
+  assert.equal(snapState.nutrition.healthLog.length, 0, "the snapshot's Health log is empty");
+  assert.equal(snapState.nutrition.health.resyncFrom.slice(0, 10), new Date(Date.parse(localMidnight(-5))).toISOString().slice(0, 10), "after a restore, Health nutrition re-imports from the oldest day it had");
+  assert.ok(JSON.stringify(JSON.parse(runN("JSON.stringify(backupPayload())"))).includes('"kcal":2187'), "an exported backup file (the athlete's choice) stays complete");
+  const nutPkg = JSON.parse(JSON.stringify(await runN("buildCoachPackage(14)")));
+  const pkgDay = (offset) => nutPkg.nutrition.days.find((entry) => entry.date === dk(offset));
+  assert.equal(pkgDay(-5).fromHealth, true, "Health days go to the coach marked as Health, like Health body readings");
+  assert.equal(pkgDay(-1).kcal + "|" + Boolean(pkgDay(-1).fromHealth), "2450|false", "the coach gets the hand-logged day, not the Health one");
+  assert.equal(pkgDay(-2).highDay, true, "high days are marked for the coach");
+  assert.equal(nutPkg.nutrition.targets.kcal, 2400, "targets go with the check-in");
+  const nutCoach = makeContext({ profile: { bodyweight: 210 } });
+  const runC = (code) => vm.runInContext(code, nutCoach.context);
+  runC("window.confirm = () => true");
+  await runC(`importCoachPackage(${JSON.stringify(nutPkg)})`);
+  const athleteNutrition = JSON.parse(runC("JSON.stringify(coachAthletes()[0].nutrition)"));
+  assert.equal(athleteNutrition.days.find((entry) => entry.date === dk(-5)).fromHealth, true, "the coach's copy keeps the Health marker");
+  const coachSummary = JSON.parse(runC("JSON.stringify(athleteNutritionSummary(coachAthletes()[0]))"));
+  const ownSummary = JSON.parse(runN("JSON.stringify(ownNutritionSummary())"));
+  assert.equal(coachSummary.loggedDays + "|" + coachSummary.onTarget, "5|4", "the coach sees the 7-day adherence (high day judged on its own target)");
+  assert.deepEqual(coachSummary, ownSummary, "the coach's summary matches the athlete's own");
+  assert.match(runC("state.view = 'coach'; state.coach.selectedAthleteId = coachAthletes()[0].id; renderCoach()"), /<p class="eyebrow">Nutrition<\/p>[\s\S]*Apple Health[\s\S]*Weekly volume/, "the coach's athlete page shows nutrition before volume");
+  const coachSnapshot = JSON.stringify(runC("nativeBackupPayload()"));
+  assert.ok(!coachSnapshot.includes('"kcal":2187'), "the coach's iCloud snapshot leaves out the athlete's Health nutrition");
+  assert.ok(coachSnapshot.includes('"kcal":2450'), "the coach's snapshot keeps the athlete's hand-logged nutrition");
+  runN("window.confirm = () => true; clearNutritionDay(dateKey(addDays(new Date(), -1)))");
+  assert.equal(runN("nutritionDayEntry(dateKey(addDays(new Date(), -1))).kcal"), 9999, "clearing a hand-logged day brings back that day's Health totals");
+  const nextPkg = JSON.parse(JSON.stringify(await runN("buildCoachPackage(14)")));
+  nextPkg.generatedAt = new Date(Date.now() + 1000).toISOString();
+  await runC(`importCoachPackage(${JSON.stringify(nextPkg)})`);
+  assert.equal(runC(`coachAthletes()[0].nutrition.days.find((entry) => entry.date === ${JSON.stringify(dk(-1))}).fromHealth`), true, "a newer check-in replaces the coach's copy of a changed day");
+  await runC(`importCoachPackage(${JSON.stringify(nutPkg)})`);
+  assert.equal(runC(`coachAthletes()[0].nutrition.days.find((entry) => entry.date === ${JSON.stringify(dk(-1))}).kcal`), 9999, "an older check-in opened again does not bring back a replaced day");
+
+  // Coach PDF and logbook.
+  const pdf = runN("buildCoachReportLines(14).map((line) => line.text).join('\\n')");
+  assert.match(pdf, /Nutrition\nDaily targets: 2,400 kcal - P 200 g - C 265 g - F 60 g\nHigh day: 3,000 kcal/, "the coach PDF lists the targets");
+  assert.match(pdf, /Last 7 full days average: [\d,]+ kcal \(\d+% of target\)/, "the coach PDF shows averages against targets");
+  assert.match(pdf, /Logged \d of 7 days - on target \d of \d \(\d+%\) - \d from Apple Health/, "the coach PDF shows adherence and Health days");
+  assert.ok(/^[\x20-\x7E\xA0-\xFF\n]*$/.test(pdf), "nutrition PDF lines are Latin-1 text");
+  assert.match(runN("state.view = 'logbook'; renderLogbook()"), /<p class="eyebrow">Nutrition<\/p>/, "the logbook shows nutrition");
+
+  // Remove imported nutrition; a reset and a damaged restore stay safe.
+  runN("removeHealthNutrition()");
+  assert.equal(runN("state.nutrition.healthLog.length + '|' + state.nutrition.health.enabled"), "0|false", "imported nutrition can be removed");
+  runN("window.handleNativeHealthKit({ status: 'nutritionDays', since: '', days: [{ date: dateKey(new Date()), kcal: 500 }] })");
+  assert.equal(runN("state.nutrition.healthLog.length"), 0, "a read that finishes after the import was turned off is ignored");
+  runN("resetDemoData()");
+  assert.equal(runN("state.nutrition.log.length + '|' + state.nutrition.targets"), "0|null", "reset clears nutrition");
+  const damaged = makeContext({ profile: { bodyweight: 180 }, nutrition: { targets: { kcal: -1 }, highDays: "x", log: [null, { date: "2026-13-45", kcal: 5 }, { date: dk(-1), kcal: "abc", protein: "<b>" }, { date: dk(-2), kcal: 1e9 }], healthLog: {}, health: "x" }, coach: { enabled: true, athletes: { "athlete-0009": { id: "athlete-0009", nutrition: { asOf: "nope", days: [] } } } } });
+  const runD = (code) => vm.runInContext(code, damaged.context);
+  assert.equal(runD("JSON.stringify([state.nutrition.targets, state.nutrition.log, state.nutrition.healthLog, state.nutrition.highDays])"), "[null,[],[],[]]", "damaged stored nutrition is dropped on load");
+  assert.equal(runD("'nutrition' in state.coach.athletes['athlete-0009']"), false, "a damaged roster nutrition copy is dropped");
+  for (const view of ["today", "progress", "logbook", "more"]) {
+    runD(`state.view = '${view}'; render()`);
+  }
+  assert.match(runD("state.view = 'today'; renderToday()"), /Nothing logged yet[\s\S]*Set Targets/, "Today invites setting targets when none are set");
+  assert.match(runD("state.view = 'progress'; renderProgress()"), /Targets and adherence[\s\S]*Use Starting Point/, "Progress renders the nutrition section");
+  assert.ok(read("index.html").indexOf("./health.js") < read("index.html").indexOf("./nutrition.js"), "nutrition.js loads after health.js");
+  assert.match(nativeServices, /dietaryEnergyConsumed[\s\S]*dietaryProtein[\s\S]*dietaryCarbohydrates[\s\S]*dietaryFatTotal/, "HealthKit reads the four nutrition types");
+  assert.match(nativeServices, /readTypes\.formUnion\(Self\.nutritionReadTypes/, "nutrition types are in the authorization request");
+  assert.match(nativeServices, /HKStatisticsCollectionQuery[\s\S]*\.cumulativeSum[\s\S]*intervalComponents: DateComponents\(day: 1\)/, "nutrition is read as daily sums");
+  assert.match(swiftWebView, /case "readNutrition":[\s\S]*"status": "nutritionDays"/, "the peaksetHealthKit handler answers readNutrition");
+  assert.match(infoPlist, /NSHealthShareUsageDescription<\/key>\s*<string>[^<]*nutrition/, "the Health read permission mentions nutrition");
+  console.log("Nutrition checks passed.");
+}
+
+// Travel gym finder: chain searches open Apple Maps; chain equipment profiles.
+{
+  const gf = makeContext({ profile: { bodyweight: 200 }, travelProfilesSeeded: true, equipmentProfiles: [{ id: "all-equipment", name: "Commercial Gym", equipment: [] }] });
+  const run = (code) => vm.runInContext(code, gf.context);
+  assert.ok(run("state.equipmentProfiles.some((p) => p.id === 'planet-fitness' && p.maxDumbbell === 75)"), "an athlete from before the chain profiles still gets Planet Fitness");
+  assert.ok(!run("state.equipmentProfiles.some((p) => p.id === 'hotel-room')"), "profiles seeded earlier and then deleted stay deleted");
+  const today = run("renderToday()");
+  assert.ok(today.includes('href="https://maps.apple.com/?q=Planet%20Fitness"') && today.includes('href="https://maps.apple.com/?q=24%20Hour%20Fitness"') && today.includes('href="https://maps.apple.com/?q=Gold\'s%20Gym"'), "chain buttons open Apple Maps searches near the athlete");
+  assert.ok(!/<script|javascript:/i.test(run("appleMapsSearchUrl('<script>x</script>')")), "typed gym names are URL-encoded");
+  assert.match(run("renderToday()"), /data-cap="75"/, "the trip form carries each profile's own dumbbell limit");
+  // A trip to a full chain gym keeps the usual rotation, not hotel workouts.
+  run("state.trip = { active: true, startedOn: dateKey(new Date()), until: dateKey(addDays(new Date(), 3)), profileId: 'all-equipment', previousProfileId: '', pauseBlock: false }; state.activeEquipmentProfileId = 'all-equipment'");
+  assert.notEqual(run("todaysRecommendedPlan().phase"), "travel", "a full gym on the road gets normal workouts");
+  run("changeTripProfile('planet-fitness')");
+  assert.equal(run("state.activeEquipmentProfileId"), "planet-fitness", "changing where you train mid-trip switches the equipment");
+  assert.match(run("renderToday()"), /Training at/, "the active trip card lets the athlete change gyms");
+  console.log("Gym finder checks passed.");
+}
+
+// PR #4 audit fixes: backup privacy at launch, dumbbell caps, paused blocks,
+// bodyweight sets, trip timing.
+{
+  assert(read("settings.js").includes('window.addEventListener("load", () => requestAutomaticSnapshot("launch")'), "the launch snapshot waits until every module has loaded");
+  const pv = makeContext({ profile: { bodyweight: 200 }, nutrition: { log: [{ id: "n1", date: "2026-11-01", kcal: 2500, protein: 200, carbs: 250, fat: 70 }], healthLog: [{ id: "hk-n-2026-11-02", date: "2026-11-02", kcal: 2400, protein: 190, carbs: 240, fat: 70, fromHealth: true }], highDays: [], health: { enabled: true, lastSyncAt: new Date().toISOString() } } });
+  const snap = vm.runInContext("JSON.parse(JSON.stringify(nativeBackupPayload().state.nutrition))", pv.context);
+  assert.equal(snap.healthLog.length, 0, "Apple Health nutrition never goes into an iCloud snapshot");
+  assert.equal(snap.log.length, 1, "hand-logged nutrition is backed up");
+  assert.ok(snap.health.resyncFrom && !snap.health.lastSyncAt, "a restore re-imports Health nutrition from the oldest day held");
+
+  const cap = makeContext({ profile: { bodyweight: 200 }, equipmentProfiles: [{ id: "all-equipment", name: "Commercial Gym", equipment: [] }, { id: "road-gym", name: "Road Gym", equipment: ["Dumbbells", "Cable", "Bench", "Bodyweight", "Bands"] }] });
+  const runCap = (code) => vm.runInContext(code, cap.context);
+  assert.equal(runCap("state.equipmentProfiles.find((p) => p.id === 'road-gym').maxDumbbell"), undefined, "an existing Road Gym profile gets no dumbbell limit it didn't have");
+  runCap("selectEquipmentProfile('hotel-dumbbells'); setView('builder')");
+  assert.match(runCap("renderBuilder()"), /id="profileDumbbellCap"[^>]*value="50"/, "Builder shows and edits the dumbbell limit");
+  runCap("setDumbbellCap('hotel-dumbbells', '')");
+  assert.equal(runCap("travelDumbbellCap()"), null, "clearing the limit means no limit");
+
+  // A paused block holds its week and prescribes no deload while away.
+  runCap("state.trainingBlock = { id: 'blk', name: 'Block', startDate: dateKey(addDays(startOfWeek(new Date()), -21)), accumulationWeeks: 3, deload: true, focus: [] }");
+  assert.equal(runCap("blockWeekInfo().deload"), true, "this is the block's deload week at home");
+  for (const [id, value] of Object.entries({ tripProfile: "hotel-room", tripUntil: runCap("dateKey(addDays(new Date(), 6))") })) cap.elements.set(id, { value, innerHTML: "", classList: { add() {}, remove() {} } });
+  cap.elements.set("tripPauseBlock", { checked: true, value: "on", innerHTML: "", classList: { add() {}, remove() {} } });
+  runCap("state.trip = { active: false }; state.trip.startedOn = null; startTrip()");
+  assert.equal(runCap("blockWeekInfo().deload"), false, "no deload is prescribed while the block is paused for a trip");
+  assert.match(runCap("renderBlockStatusLine()"), /Paused while traveling/, "the block says it is paused");
+  // A different block started during the trip is not moved back.
+  runCap("state.trainingBlock = { ...state.trainingBlock, id: 'other' }; const before = state.trainingBlock.startDate; state.trip.startedOn = dateKey(addDays(new Date(), -10)); state.trip.until = dateKey(new Date()); checkTripExpiry(); window.__same = before === state.trainingBlock.startDate");
+  assert.equal(runCap("window.__same"), true, "only the block that was paused is moved back");
+  assert.equal(runCap("state.trip.active"), false, "trip mode ends on the day you're back");
+
+  // Bodyweight push-ups and bench dips complete without typing 0.
+  runCap("selectEquipmentProfile('all-equipment'); startWorkout('room-full'); const i = state.activeWorkout.exercises.findIndex((e) => e.id === 'push-up'); updateSet(i, 0, 'reps', '20'); completeSet(i, 0); window.__pushUp = state.activeWorkout.exercises[i].sets[0]");
+  assert.equal(runCap("window.__pushUp.done && window.__pushUp.weight"), "0", "a push-up set with no added weight completes");
+  console.log("PR #4 audit fix checks passed.");
+}
+{
+  // The week shown on return equals the week shown during a paused trip.
+  const ws = makeContext({ profile: { bodyweight: 200 } });
+  const run = (code) => vm.runInContext(code, ws.context);
+  run("{ const monday = startOfWeek(new Date()); state.trainingBlock = { id: 'wb', name: 'B', startDate: dateKey(addDays(monday, -14)), accumulationWeeks: 4, deload: true, focus: [] }; state.trip = { active: true, startedOn: dateKey(monday), until: dateKey(addDays(monday, 4)), profileId: 'hotel-room', previousProfileId: '', pauseBlock: true, blockId: 'wb', blockStartDate: state.trainingBlock.startDate }; }");
+  const during = run("blockWeekInfo().weekNumber");
+  run("endTrip(true)");
+  assert.equal(run("blockWeekInfo().weekNumber"), during, "a Monday-to-Friday trip leaves the block on the same week");
+  run("{ const monday = startOfWeek(new Date()); state.trainingBlock.startDate = dateKey(addDays(monday, -14)); state.trip = { active: true, startedOn: dateKey(addDays(monday, -7)), until: dateKey(addDays(monday, 5)), profileId: 'hotel-room', previousProfileId: '', pauseBlock: true, blockId: 'wb', blockStartDate: state.trainingBlock.startDate }; }");
+  const duringLong = run("blockWeekInfo().weekNumber");
+  run("endTrip(true)");
+  assert.equal(run("blockWeekInfo(state.trainingBlock, addDays(startOfWeek(new Date()), 5)).weekNumber"), duringLong, "Monday to the next Saturday moves the block back exactly one week");
+  console.log("Trip week-shift checks passed.");
+}
+

@@ -139,6 +139,7 @@ final class PeakSetHealthKitService {
         let shareTypes: Set<HKSampleType> = [bodyMassType, HKObjectType.workoutType()]
         var readTypes: Set<HKObjectType> = [stepType]
         readTypes.formUnion(Self.bodyReadTypes.map(\.type))
+        readTypes.formUnion(Self.nutritionReadTypes.map(\.type))
         store.requestAuthorization(toShare: shareTypes, read: readTypes) { success, error in
             if let error {
                 completion(.failure(error))
@@ -244,6 +245,89 @@ final class PeakSetHealthKitService {
             } else {
                 completion(.success(samples))
             }
+        }
+    }
+
+    /// Daily nutrition totals written by food-tracking apps (MacroFactor,
+    /// MyFitnessPal and others). Calories in kcal, macros in grams.
+    private static let nutritionReadTypes: [(key: String, type: HKQuantityType, unit: HKUnit)] = [
+        (HKQuantityTypeIdentifier.dietaryEnergyConsumed, "kcal", HKUnit.kilocalorie()),
+        (.dietaryProtein, "protein", .gram()),
+        (.dietaryCarbohydrates, "carbs", .gram()),
+        (.dietaryFatTotal, "fat", .gram())
+    ].compactMap { identifier, key, unit in
+        HKObjectType.quantityType(forIdentifier: identifier).map { (key, $0, unit) }
+    }
+
+    /// One total per local calendar day since `since`, as
+    /// `{date: "yyyy-MM-dd", kcal, protein, carbs, fat}`. HealthKit's statistics
+    /// merge overlapping sources by the athlete's data-source priority, so two
+    /// apps logging the same meal are not counted twice.
+    func readNutritionDays(since: Date, completion: @escaping (Result<[[String: Any]], Error>) -> Void) {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            completion(.failure(ServiceError.healthDataUnavailable))
+            return
+        }
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: since)
+        let now = Date()
+        guard start < now else {
+            completion(.success([]))
+            return
+        }
+        let dayFormatter = DateFormatter()
+        dayFormatter.calendar = Calendar(identifier: .gregorian)
+        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dayFormatter.timeZone = calendar.timeZone
+        dayFormatter.dateFormat = "yyyy-MM-dd"
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: now, options: [])
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var days: [String: [String: Double]] = [:]
+        var firstError: Error?
+
+        for (key, type, unit) in Self.nutritionReadTypes {
+            group.enter()
+            let query = HKStatisticsCollectionQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum,
+                anchorDate: start,
+                intervalComponents: DateComponents(day: 1)
+            )
+            query.initialResultsHandler = { _, collection, error in
+                defer { group.leave() }
+                lock.lock()
+                defer { lock.unlock() }
+                if let error {
+                    // No data (or read access off, which HealthKit hides) is
+                    // simply an empty result; keep the other types.
+                    if (error as? HKError)?.code != .errorNoData, firstError == nil { firstError = error }
+                    return
+                }
+                collection?.enumerateStatistics(from: start, to: now) { statistics, _ in
+                    guard let sum = statistics.sumQuantity() else { return }
+                    let value = sum.doubleValue(for: unit)
+                    guard value.isFinite, value > 0 else { return }
+                    days[dayFormatter.string(from: statistics.startDate), default: [:]][key] = (value * 10).rounded() / 10
+                }
+            }
+            store.execute(query)
+        }
+
+        group.notify(queue: .global()) {
+            // A real failure on any one type fails the read: reporting the
+            // others alone would blank that macro on days the app already has.
+            if let firstError {
+                completion(.failure(firstError))
+                return
+            }
+            let result: [[String: Any]] = days.keys.sorted().map { day in
+                var entry: [String: Any] = ["date": day]
+                for (key, value) in days[day] ?? [:] { entry[key] = value }
+                return entry
+            }
+            completion(.success(result))
         }
     }
 
