@@ -294,7 +294,9 @@ function startTrip() {
   if (daysBetweenKeys(todayKey(), until) > 60) return toast("Trips can be up to 60 days.");
   const capInput = document.getElementById("tripDumbbellCap");
   const capField = document.getElementById("tripCapField");
-  if (capInput && !capField?.hidden) {
+  // Untouched, the prefilled limit stays exactly as stored (no unit rounding).
+  const prefill = travelDumbbellCap(profile);
+  if (capInput && !capField?.hidden && capInput.value !== String(prefill ?? "")) {
     const cap = Number(capInput.value);
     if (capInput.value !== "" && !(cap > 0 && cap <= 400)) return toast("Enter the heaviest dumbbell, or leave it blank for no limit.");
     // Blank means no limit.
@@ -308,7 +310,8 @@ function startTrip() {
     until,
     profileId: profile.id,
     previousProfileId: state.activeEquipmentProfileId === profile.id ? "" : state.activeEquipmentProfileId,
-    pauseBlock: blockRunning && document.getElementById("tripPauseBlock")?.checked !== false,
+    // A short trip doesn't pause the block (the form says so).
+    pauseBlock: blockRunning && daysBetweenKeys(todayKey(), until) >= TRIP_PAUSE_MIN_DAYS && document.getElementById("tripPauseBlock")?.checked !== false,
     // Only this block is paused and moved back; one started later is not.
     blockId: blockRunning ? String(state.trainingBlock.id || "") : "",
     blockStartDate: blockRunning ? String(state.trainingBlock.startDate || "") : ""
@@ -332,13 +335,14 @@ function endTrip(automatic = false) {
   let shifted = 0;
   const block = state.trainingBlock;
   if (trip.pauseBlock && block && String(block.id || "") === trip.blockId && block.startDate === trip.blockStartDate) {
+    // Move back by the block weeks crossed while away, so the week shown on
+    // return is the week shown during the trip.
     const pausedFrom = trip.startedOn > block.startDate ? trip.startedOn : block.startDate;
-    const days = Math.max(0, daysBetweenKeys(pausedFrom, end));
+    const fromWeek = startOfWeek(parseDateKey(pausedFrom) || new Date());
+    const toWeek = startOfWeek(parseDateKey(end) || new Date());
     const start = parseDateKey(block.startDate);
-    if (days >= TRIP_PAUSE_MIN_DAYS && start) {
-      shifted = Math.max(1, Math.round(days / 7));
-      block.startDate = dateKey(addDays(start, shifted * 7));
-    }
+    shifted = Math.max(0, Math.round(daysBetweenKeys(dateKey(fromWeek), dateKey(toWeek)) / 7));
+    if (shifted && start) block.startDate = dateKey(addDays(start, shifted * 7));
   }
   if (trip.previousProfileId && state.equipmentProfiles.some((item) => item.id === trip.previousProfileId)) {
     state.activeEquipmentProfileId = trip.previousProfileId;
@@ -424,7 +428,7 @@ function renderTripCard() {
     const cap = travelDumbbellCap(profile);
     return `<section class="card pad trip-card" style="margin-top:12px">
       <div class="card-head"><div><p class="eyebrow">Trip mode</p><h2>${escapeHtml(profile?.name || "Travel")}</h2></div><span class="badge green">Back ${escapeHtml(formatShortDate(trip.until))}</span></div>
-      <p class="muted">Today's workout fits this equipment, and exercises you can't do here are swapped when you start.${cap !== null ? ` Dumbbells top out at ${formatWeight(cap, 2)} ${unit}.` : ""}${trip.pauseBlock ? " Your training block is paused while you're away." : ""}</p>
+      <p class="muted">Today's workout fits this equipment, and exercises you can't do here are swapped when you start.${cap !== null ? ` Dumbbells top out at ${formatWeight(cap, 1)} ${unit}.` : ""}${trip.pauseBlock ? " Your training block is paused while you're away." : ""}</p>
       <div class="field" style="margin-top:10px"><label for="tripTrainingAt">Training at</label><select id="tripTrainingAt" onchange="changeTripProfile(this.value)">${tripProfileOptions(profile?.id)}</select></div>
       ${renderGymFinder()}
       <div class="actions"><button class="secondary-btn" onclick="endTripNow()">I'm Back</button></div>

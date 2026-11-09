@@ -1647,10 +1647,11 @@ console.log("Audit round 8 checks passed.");
   assert.equal(run("state.activeEquipmentProfileId"), "hotel-room", "trip mode switches to the hotel equipment");
   assert.ok(run("travelPlanFits(todaysSelectedPlan())"), "Today recommends a workout the hotel room can do");
   assert.match(run("renderToday()"), /Trip mode/, "Today shows the trip");
-  run("state.trip.startedOn = dateKey(addDays(new Date(), -9)); state.trip.until = dateKey(addDays(new Date(), -1)); checkTripExpiry()");
+  // Tuesday last week to Wednesday this week: one block week crossed.
+  run("state.trip.startedOn = dateKey(addDays(startOfWeek(new Date()), -6)); state.trip.until = dateKey(addDays(startOfWeek(new Date()), 2)); endTrip(true)");
   assert.equal(run("state.activeEquipmentProfileId"), "all-equipment", "the home profile comes back after the trip");
-  assert.equal(run("state.trip.active"), false, "the trip ends on its own after the return date");
-  assert.equal(run(`daysBetweenKeys('${blockStart}', state.trainingBlock.startDate)`), 7, "a 9-day trip moves the block back one week");
+  assert.equal(run("state.trip.active"), false, "the trip ends on the return date");
+  assert.equal(run(`daysBetweenKeys('${blockStart}', state.trainingBlock.startDate)`), 7, "a trip across one week boundary moves the block back one week");
   console.log("Travel checks passed.");
 }
 
@@ -2236,5 +2237,19 @@ console.log("Audit round 8 checks passed.");
   runCap("selectEquipmentProfile('all-equipment'); startWorkout('room-full'); const i = state.activeWorkout.exercises.findIndex((e) => e.id === 'push-up'); updateSet(i, 0, 'reps', '20'); completeSet(i, 0); window.__pushUp = state.activeWorkout.exercises[i].sets[0]");
   assert.equal(runCap("window.__pushUp.done && window.__pushUp.weight"), "0", "a push-up set with no added weight completes");
   console.log("PR #4 audit fix checks passed.");
+}
+{
+  // The week shown on return equals the week shown during a paused trip.
+  const ws = makeContext({ profile: { bodyweight: 200 } });
+  const run = (code) => vm.runInContext(code, ws.context);
+  run("{ const monday = startOfWeek(new Date()); state.trainingBlock = { id: 'wb', name: 'B', startDate: dateKey(addDays(monday, -14)), accumulationWeeks: 4, deload: true, focus: [] }; state.trip = { active: true, startedOn: dateKey(monday), until: dateKey(addDays(monday, 4)), profileId: 'hotel-room', previousProfileId: '', pauseBlock: true, blockId: 'wb', blockStartDate: state.trainingBlock.startDate }; }");
+  const during = run("blockWeekInfo().weekNumber");
+  run("endTrip(true)");
+  assert.equal(run("blockWeekInfo().weekNumber"), during, "a Monday-to-Friday trip leaves the block on the same week");
+  run("{ const monday = startOfWeek(new Date()); state.trainingBlock.startDate = dateKey(addDays(monday, -14)); state.trip = { active: true, startedOn: dateKey(addDays(monday, -7)), until: dateKey(addDays(monday, 5)), profileId: 'hotel-room', previousProfileId: '', pauseBlock: true, blockId: 'wb', blockStartDate: state.trainingBlock.startDate }; }");
+  const duringLong = run("blockWeekInfo().weekNumber");
+  run("endTrip(true)");
+  assert.equal(run("blockWeekInfo(state.trainingBlock, addDays(startOfWeek(new Date()), 5)).weekNumber"), duringLong, "Monday to the next Saturday moves the block back exactly one week");
+  console.log("Trip week-shift checks passed.");
 }
 
