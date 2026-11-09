@@ -1653,3 +1653,161 @@ console.log("Audit round 8 checks passed.");
   assert.equal(run(`daysBetweenKeys('${blockStart}', state.trainingBlock.startDate)`), 7, "a 9-day trip moves the block back one week");
   console.log("Travel checks passed.");
 }
+
+// ---- Contest-prep tools (prep.js): peak week, posing practice, warm-up and plates ----
+{
+  const localKey = (offsetDays) => {
+    const date = new Date();
+    date.setDate(date.getDate() + offsetDays);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  };
+  const profile = { gender: "Male", age: 30, bodyweight: 200, division: "Classic Physique", createdAt: new Date().toISOString() };
+  assert(read("index.html").indexOf('<script src="./prep.js"></script>') > read("index.html").indexOf('<script src="./health.js"></script>'), "prep.js loads after health.js");
+
+  // Checklist generation by days out.
+  const pw = makeContext({ profile: { ...profile, goalDate: localKey(3) } });
+  const runPw = (code) => vm.runInContext(code, pw.context);
+  const days = JSON.parse(runPw("JSON.stringify(peakWeekChecklist(peakWeekContext().showDate, peakWeekContext().daysOut))"));
+  assert.deepEqual(days.map((day) => day.day), [7, 6, 5, 4, 3, 2, 1, 0], "peak week runs 7 days out to show day");
+  assert.equal(days.find((day) => day.isToday).day, 3, "today is the day matching days out");
+  assert.deepEqual(days.filter((day) => day.past).map((day) => day.day), [7, 6, 5, 4], "earlier days are marked past");
+  assert.equal(days.at(-1).date, localKey(3), "show day is the goal date");
+  assert.equal(days[0].date, localKey(-4), "7 days out is a week before the show");
+  const showDayText = days.at(-1).items.map((item) => item.text).join(" | ");
+  for (const word of [/tan/i, /suit/i, /oil/i, /pump-up/i, /snacks/i, /check-in/i]) assert.match(showDayText, word, `show day covers ${word}`);
+  const allItems = days.flatMap((day) => day.items.map((item) => `${item.text} ${item.detail}`)).join(" | ");
+  assert.doesNotMatch(allItems, /diuretic|water pill|dandelion|cut (the )?water|stop drinking|dehydrat|restrict water|water load/i, "peak week items never prescribe water cuts or diuretics");
+  assert.match(runPw("PEAK_SAFETY_TEXT"), /coach/i, "peak week guidance defers to the coach");
+  assert.match(runPw("PEAK_SAFETY_TEXT"), /Do not cut water or take diuretics/, "peak week warns against water cuts and diuretics");
+  const today3 = runPw("renderToday()");
+  assert.match(today3, /peak-week-card/, "Today shows the Peak Week card 3 days out");
+  assert.match(today3, /3 days out/, "the card counts days out");
+  assert.match(today3, /Rehearse your pump-up/, "the card shows today's (3 days out) items");
+  // Check-offs, targets and custom items are saved per show date.
+  const showDate = localKey(3);
+  runPw(`togglePeakWeekItem('${showDate}', 'd3-pump')`);
+  assert.equal(runPw(`state.prepTools.peakWeek['${showDate}'].done['d3-pump']`), true, "checking an item saves it for this show");
+  runPw(`setPeakWeekTarget('${showDate}', 3, 'water', 'Same as last week')`);
+  assert.equal(runPw(`state.prepTools.peakWeek['${showDate}'].targets[3].water`), "Same as last week", "water target is free text the athlete edits");
+  runPw(`window.__toasts = []; toast = (message) => window.__toasts.push(message); setPeakWeekTarget('${showDate}', 1, 'water', 'Take a diuretic')`);
+  assert.match(runPw("window.__toasts.join('|')"), /confirm with your coach or doctor/, "a diuretic target gets a warning");
+  assert.equal(runPw("peakTargetRisky('0 L') && !peakTargetRisky('4 L, same as usual')"), true, "zero water is flagged; a normal target is not");
+  runPw(`document.getElementById('peakCustom-0').value = 'Bring <b>robe</b>'; addPeakWeekItem('${showDate}', 0)`);
+  const custom = JSON.parse(runPw(`JSON.stringify(state.prepTools.peakWeek['${showDate}'].custom)`));
+  assert.equal(custom.length, 1, "athletes can add their own items");
+  assert.match(runPw("renderPrepTools()"), /Bring &lt;b&gt;robe&lt;\/b&gt;/, "custom item text is escaped");
+  assert.equal(runPw(`peakWeekProgress('${showDate}').done`), 1, "progress counts checked items");
+  // A new show date starts a fresh checklist; the old one is kept.
+  runPw(`state.profile.goalDate = '${localKey(5)}'`);
+  assert.equal(runPw(`peakWeekProgress('${localKey(5)}').done`), 0, "a different show date has its own check-offs");
+  assert.ok(runPw(`Boolean(state.prepTools.peakWeek['${showDate}'])`), "the earlier show's checklist is kept");
+  // Restore of a damaged or hostile prepTools survives migration.
+  const bad = makeContext({ profile, prepTools: { peakWeek: { "not-a-date": {}, [showDate]: { done: { "d0-tan": true, "bad id!": true }, targets: { 9: { water: "x" }, 2: { water: 5 } }, custom: [{ id: "x1", day: 99, text: "Hi" }, null, { id: "x1", day: 1, text: "dupe" }] } }, barWeight: { barbell: { imperial: -5, metric: "1e400" } }, posing: { hold: 999, rounds: "abc", division: "__proto__" } } });
+  const cleaned = JSON.parse(vm.runInContext("JSON.stringify(state.prepTools)", bad.context));
+  assert.deepEqual(Object.keys(cleaned.peakWeek), [showDate], "only real show dates survive");
+  assert.deepEqual(cleaned.peakWeek[showDate].done, { "d0-tan": true }, "invalid item ids are dropped");
+  assert.deepEqual(cleaned.peakWeek[showDate].targets, {}, "out-of-range days and non-text targets are dropped");
+  assert.deepEqual(cleaned.peakWeek[showDate].custom, [{ id: "x1", day: 7, text: "Hi" }], "custom items are clamped and de-duplicated");
+  assert.equal(cleaned.barWeight.barbell.imperial + "|" + cleaned.barWeight.barbell.metric, "45|20", "invalid bar weights fall back to 45 lb / 20 kg");
+  assert.equal(`${cleaned.posing.hold}|${cleaned.posing.rounds}|${cleaned.posing.division}`, "90|2|", "posing settings are clamped");
+
+  // Far out: no Today card, but the preview is reachable from More.
+  const far = makeContext({ profile: { ...profile, goalDate: localKey(60) } });
+  assert.doesNotMatch(vm.runInContext("renderToday()", far.context), /peak-week-card/, "no Peak Week card 60 days out");
+  assert.match(vm.runInContext("renderMore()", far.context), /setView\('prep'\)/, "More links to the Peak Week preview");
+  assert.match(vm.runInContext("setView('prep'); renderContent()", far.context), /Preview: peak week starts/, "the Peak Week page works as a preview when far out");
+  assert.match(vm.runInContext("renderToday()", makeContext({ profile: { ...profile, goalDate: localKey(12) } }).context), /Starts in 5 days/, "Today previews peak week from three weeks out");
+  const none = makeContext({ profile });
+  assert.match(vm.runInContext("setView('prep'); renderContent()", none.context), /Set a show date/, "without a show date the checklist is a read-only preview");
+  assert.doesNotMatch(vm.runInContext("renderPeakWeekSection()", none.context), /togglePeakWeekItem/, "the no-date preview has no check-offs");
+  assert.match(vm.runInContext("renderToday()", makeContext({ profile: { ...profile, goalDate: localKey(0) } }).context), /Today is the show/, "show day gets the show-day card");
+  assert.doesNotMatch(vm.runInContext("renderToday()", makeContext({ profile: { ...profile, goalDate: localKey(-1) } }).context), /peak-week-card/, "the card goes away after the show");
+
+  // Posing practice: division poses, timing, and logging into prep logs.
+  const ps = makeContext({ profile });
+  const runPs = (code) => vm.runInContext(code, ps.context);
+  assert.equal(runPs("posingDivision().key"), "classic-physique", "the posing routine follows the profile division");
+  const classic = JSON.parse(runPs("JSON.stringify(posingPoses())"));
+  assert.ok(classic.includes("Favorite classic pose") && classic.includes("Quarter turn: side"), "Classic Physique runs its mandatories and quarter turns");
+  assert.deepEqual(JSON.parse(runPs("JSON.stringify(posingPoses(POSING_DIVISIONS.find((d) => d.key === 'mens-bodybuilding'), false))")), ["Front double biceps", "Front lat spread", "Side chest", "Back double biceps", "Back lat spread", "Side triceps", "Abdominals and thighs", "Most muscular"], "Men's Bodybuilding has the eight mandatories");
+  assert.deepEqual(JSON.parse(runPs("JSON.stringify(posingPoses(POSING_DIVISIONS.find((d) => d.key === 'bikini'), false))")), ["Front stance", "Quarter turn: side", "Back stance", "Quarter turn: other side", "Model walk and transitions"], "Bikini always runs quarter turns");
+  assert.equal(runPs("posingDivisionKey(\"Women's Physique\") + '|' + posingDivisionKey('Mens Physique') + '|' + posingDivisionKey('Off-season Size Goal')"), "womens-physique|mens-physique|", "division names map to pose sets");
+  const steps = JSON.parse(runPs("JSON.stringify(posingSteps({ hold: 20, rest: 10, rounds: 2 }, ['A', 'B', 'C']))"));
+  assert.equal(steps.filter((step) => step.type === "pose").length, 6, "each round holds every pose");
+  assert.equal(runPs("posingTotalSeconds(posingSteps({ hold: 20, rest: 10, rounds: 2 }, ['A', 'B', 'C']))"), 5 + 6 * 20 + 5 * 10, "no rest after the final pose");
+  assert.equal(runPs("posingMinutesFor(175, posingSteps({ hold: 20, rest: 10, rounds: 2 }, ['A', 'B', 'C']))"), 2.8, "logged minutes leave out the lead-in, to 1 decimal");
+  runPs("var bells = 0; playBoxingBell = () => { bells += 1; }; window.__toasts = []; toast = (message) => window.__toasts.push(message); setPosingOption('rounds', 1); setPosingOption('hold', 10); setPosingOption('rest', 5); startPosingRoutine()");
+  assert.match(runPs("renderContent()"), /posing-overlay/, "a running routine shows the posing timer");
+  const total = runPs("posingTotalSeconds(posingSession.steps)");
+  runPs("posingTick(posingSession.startedAt + 6000)");
+  assert.equal(runPs("bells"), 1, "the bell rings when the first pose starts");
+  const logsBefore = runPs("state.prepLogs.length");
+  runPs(`posingTick(posingSession.startedAt + ${total * 1000 + 50})`);
+  const entry = JSON.parse(runPs("JSON.stringify(state.prepLogs[0])"));
+  assert.equal(runPs("state.prepLogs.length"), logsBefore + 1, "finishing the routine logs one prep entry");
+  assert.deepEqual(Object.keys(entry).sort(), ["cardioMinutes", "cardioType", "date", "id", "notes", "posingMinutes", "steps"], "the entry has savePrepLog's shape");
+  assert.equal(entry.posingMinutes, Math.round((total - 5) / 6) / 10, "posing minutes match the routine");
+  assert.equal(entry.cardioMinutes + entry.steps, 0, "posing practice adds no cardio or steps");
+  assert.match(entry.notes, /Classic Physique, 1 round/, "the note names the division and rounds");
+  assert.equal(runPs("posingSession"), null, "the routine ends after logging");
+  assert.ok(runPs("stageChecklist({ phase: 'prep' }).find((item) => /Posing practice logged/.test(item.label)).done"), "logged posing counts toward the stage checklist");
+  assert.match(runPs("renderProgress()"), /posing/, "Progress still renders with the posing entry");
+  // Stopping early with little time does not log.
+  runPs("startPosingRoutine(); stopPosingRoutine()");
+  assert.equal(runPs("state.prepLogs.length"), logsBefore + 1, "stopping straight away logs nothing");
+
+  // Warm-up and plate math, lb and kg.
+  const wm = makeContext({ profile });
+  const runWm = (code) => JSON.parse(vm.runInContext(`JSON.stringify(${code})`, wm.context));
+  const plates225 = runWm("platesPerSide(225, { unit: 'lb', bar: 45 })");
+  assert.equal(plates225.ok, true, "225 lb is loadable");
+  assert.deepEqual(plates225.plates, [{ plate: 45, count: 2 }], "225 lb is two 45s a side");
+  assert.deepEqual(runWm("platesPerSide(185, { unit: 'lb', bar: 45 }).plates"), [{ plate: 45, count: 1 }, { plate: 25, count: 1 }], "185 lb is 45 + 25 a side");
+  assert.deepEqual(runWm("platesPerSide(315, { unit: 'lb', bar: 45 }).plates"), [{ plate: 45, count: 3 }], "315 lb is three 45s a side");
+  assert.deepEqual(runWm("platesPerSide(100, { unit: 'lb', bar: 35 }).plates"), [{ plate: 25, count: 1 }, { plate: 5, count: 1 }, { plate: 2.5, count: 1 }], "an adjusted 35 lb bar changes the plate math");
+  assert.equal(runWm("platesPerSide(226, { unit: 'lb', bar: 45 })").ok, false, "226 lb is not loadable with standard plates");
+  assert.equal(runWm("platesPerSide(226, { unit: 'lb', bar: 45 })").nearestBelow + "|" + runWm("platesPerSide(226, { unit: 'lb', bar: 45 })").nearestAbove, "225|230", "the nearest loadable weights are offered");
+  assert.equal(runWm("platesPerSide(30, { unit: 'lb', bar: 45 })").reason, "below-bar", "a load lighter than the bar is impossible");
+  assert.deepEqual(runWm("platesPerSide(45, { unit: 'lb', bar: 45 })").plates, [], "the empty bar needs no plates");
+  assert.deepEqual(runWm("platesPerSide(102.5, { unit: 'kg', bar: 20 }).plates"), [{ plate: 25, count: 1 }, { plate: 15, count: 1 }, { plate: 1.25, count: 1 }], "102.5 kg is 25 + 15 + 1.25 a side");
+  assert.deepEqual(runWm("platesPerSide(140, { unit: 'kg', bar: 20 }).plates"), [{ plate: 25, count: 2 }, { plate: 10, count: 1 }], "140 kg is 25 + 25 + 10 a side");
+  assert.equal(runWm("platesPerSide(15, { unit: 'kg', bar: 20 })").reason, "below-bar", "15 kg on a 20 kg bar is impossible");
+  assert.equal(runWm("platesPerSide(101, { unit: 'kg', bar: 20 })").ok, false, "101 kg can't be loaded with 1.25 kg as the smallest plate");
+  assert.deepEqual(runWm("warmupSets(225, { unit: 'lb', bar: 45 }).sets.map((set) => [set.weight, set.reps])"), [[45, 10], [115, 8], [160, 5], [190, 2]], "heavy barbell work ramps bar x10, 50% x8, 70% x5, 85% x2 in loadable lb");
+  assert.deepEqual(runWm("warmupSets(100, { unit: 'kg', bar: 20 }).sets.map((set) => [set.weight, set.reps])"), [[20, 10], [50, 8], [70, 5], [85, 2]], "heavy barbell work ramps in loadable kg");
+  assert.deepEqual(runWm("warmupSets(135, { unit: 'lb', bar: 45 }).sets.map((set) => [set.weight, set.reps])"), [[45, 10], [80, 6], [110, 3]], "moderate loads get fewer ramp sets");
+  const ramps = runWm("[95, 135, 185, 225, 315, 405].map((w) => warmupSets(w, { unit: 'lb', bar: 45 }).sets.length)");
+  assert.ok(ramps.every((count) => count >= 2 && count <= 4), `barbell ramps are 2-4 sets (${ramps})`);
+  assert.ok(runWm("[95, 135, 185, 225, 315, 405].every((w) => warmupSets(w, { unit: 'lb', bar: 45 }).sets.every((set, i, all) => set.weight < w && (i === 0 || set.weight > all[i - 1].weight) && platesPerSide(set.weight, { unit: 'lb', bar: 45 }).ok))"), "every warm-up is lighter than the work, climbing, and loadable");
+  assert.ok(runWm("[60, 82.5, 100, 140, 180].every((w) => warmupSets(w, { unit: 'kg', bar: 20 }).sets.every((set) => platesPerSide(set.weight, { unit: 'kg', bar: 20 }).ok))"), "kg warm-ups are loadable with kg plates");
+  assert.equal(runWm("warmupSets(30, { unit: 'lb', bar: 45 })").reason, "below-bar", "a working weight below the bar has no warm-up");
+  assert.equal(runWm("warmupSets('', { unit: 'lb', bar: 45 })").reason, "empty", "no working weight, no warm-up");
+  assert.deepEqual(runWm("warmupSets(80, { unit: 'lb', bar: 0 }).sets.map((set) => [set.weight, set.reps])"), [[40, 10], [60, 5]], "dumbbell ramps round to 5 lb");
+  assert.deepEqual(runWm("warmupSets(32, { unit: 'kg', bar: 0 }).sets.map((set) => set.weight)"), [15, 25], "dumbbell ramps round to 2.5 kg");
+
+  // Session render smoke test: helpers appear on loaded lifts and log nothing.
+  const ss = makeContext({ profile });
+  const runSs = (code) => vm.runInContext(code, ss.context);
+  runSs("state.activeWorkout = null; startWorkout('chest-density'); state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'barbell-bench', name: 'Barbell Bench Press' }; state.activeWorkout.exercises[0].sets[0].weight = '225'");
+  const setsBefore = runSs("JSON.stringify(state.activeWorkout.exercises.map((exercise) => exercise.sets))");
+  const session = runSs("renderSession()");
+  assert.match(session, /Warm-up and plates/, "barbell lifts get the warm-up and plates helper");
+  assert.match(session, /45 \+ 45 per side/, "the working set's plates are shown");
+  assert.match(session, /Empty bar \(45 lb\)<\/strong> × 10/, "the ramp starts with the empty bar");
+  assert.equal(runSs("JSON.stringify(state.activeWorkout.exercises.map((exercise) => exercise.sets))"), setsBefore, "rendering the helpers changes no logged data");
+  runSs("state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'smith-incline-press', name: 'Smith Machine Incline Press' }; setBarWeight('smith', '25')");
+  assert.equal(runSs("state.prepTools.barWeight.smith.imperial + '|' + state.prepTools.barWeight.barbell.imperial"), "25|45", "the Smith bar weight is saved on its own");
+  assert.match(runSs("renderSession()"), /Smith bar \(lb\)[\s\S]*value="25"/, "the saved Smith bar weight is used");
+  runSs("state.activeWorkout.exercises[0].sets[0].weight = '20'");
+  assert.match(runSs("renderSession()"), /lighter than the 25 lb bar/, "a load below the bar is called out in the session");
+  runSs("state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'flat-db-press', name: 'Flat Dumbbell Press' }");
+  const dbSession = runSs("renderSession()");
+  assert.ok(/>Warm-up<\/summary>/.test(dbSession) && !/Warm-up and plates/.test(dbSession.slice(dbSession.indexOf('exercise-card-0'), dbSession.indexOf('exercise-card-1'))), "dumbbell lifts get a warm-up helper without plates");
+  runSs("setUnits('metric')");
+  assert.match(runSs("state.activeWorkout.exercises[0] = { ...state.activeWorkout.exercises[0], id: 'barbell-bench', name: 'Barbell Bench Press' }; state.activeWorkout.exercises[0].sets[0].weight = '100'; renderSession()"), /Empty bar \(20 kg\)[\s\S]*25 \+ 15 per side/, "in kg the 20 kg bar and kg plates are used");
+  runSs("setLoadHelperWeight(0, '15')");
+  assert.match(runSs("renderLoadHelperOutput(state.activeWorkout.exercises[0], 0)"), /lighter than the 20 kg bar/, "typing a weight below the bar is flagged");
+  assert.equal(runSs("state.activeWorkout.exercises[0].sets[0].weight"), "100", "typing in the helper never changes a logged set");
+  assert.doesNotThrow(() => runSs("resetDemoData(); renderToday()"), "reset still renders Today");
+  console.log("Contest-prep tools checks passed.");
+}
