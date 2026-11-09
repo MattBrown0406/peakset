@@ -9,20 +9,43 @@ const TRAVEL_PROFILES = [
   { id: "road-gym", name: "Road Gym", equipment: ["Dumbbells", "Cable", "Bench", "Bodyweight", "Bands"], maxDumbbell: 50, maxDumbbellUnit: "lb" },
   { id: "hotel-dumbbells", name: "Hotel Gym: Dumbbells Only", equipment: ["Dumbbells", "Bench", "Bodyweight"], maxDumbbell: 50, maxDumbbellUnit: "lb" },
   { id: "hotel-room", name: "Hotel Room + Band", equipment: ["Bodyweight", "Bands"] },
-  { id: "hotel-room-bodyweight", name: "Hotel Room: No Equipment", equipment: ["Bodyweight"] }
+  { id: "hotel-room-bodyweight", name: "Hotel Room: No Equipment", equipment: ["Bodyweight"] },
+  // Planet Fitness has machines, cables, Smith machines, and dumbbells, but
+  // usually no free barbells; dumbbells often stop around 75-80 lb.
+  { id: "planet-fitness", name: "Planet Fitness", equipment: ["Dumbbells", "Cable", "Machine", "Smith", "Bench", "Bodyweight"], maxDumbbell: 75, maxDumbbellUnit: "lb" }
+];
+
+// National chains for "Find a gym nearby". Apple Maps searches around the
+// phone's location when the link has no coordinates. Full-equipment chains
+// use the Commercial Gym profile.
+const TRAVEL_GYM_CHAINS = [
+  { name: "Planet Fitness", profileId: "planet-fitness" },
+  { name: "24 Hour Fitness", profileId: "all-equipment" },
+  { name: "LA Fitness", profileId: "all-equipment" },
+  { name: "Anytime Fitness", profileId: "all-equipment" },
+  { name: "Snap Fitness", profileId: "all-equipment" },
+  { name: "Gold's Gym", profileId: "all-equipment" },
+  { name: "Crunch Fitness", profileId: "all-equipment" },
+  { name: "EoS Fitness", profileId: "all-equipment" },
+  { name: "Life Time", profileId: "all-equipment" },
+  { name: "YMCA", profileId: "all-equipment" },
+  { name: "Equinox", profileId: "all-equipment" }
 ];
 const TRIP_PAUSE_MIN_DAYS = 4;
 
 function travelMigrateState() {
-  // Add the hotel profiles once; an athlete who deletes one keeps it deleted.
-  if (!state.travelProfilesSeeded) {
-    TRAVEL_PROFILES.forEach((profile) => {
-      const existing = state.equipmentProfiles.find((item) => item.id === profile.id);
-      if (!existing) state.equipmentProfiles.push({ ...profile, equipment: [...profile.equipment] });
-      else if (existing.maxDumbbell === undefined && profile.maxDumbbell) Object.assign(existing, { maxDumbbell: profile.maxDumbbell, maxDumbbellUnit: profile.maxDumbbellUnit });
-    });
-    state.travelProfilesSeeded = true;
-  }
+  // Add each travel profile once; an athlete who deletes one keeps it deleted.
+  const seeded = new Set(Array.isArray(state.travelProfilesSeeded)
+    ? state.travelProfilesSeeded.filter((id) => typeof id === "string")
+    : state.travelProfilesSeeded === true ? ["road-gym", "hotel-dumbbells", "hotel-room", "hotel-room-bodyweight"] : []);
+  TRAVEL_PROFILES.forEach((profile) => {
+    if (seeded.has(profile.id)) return;
+    const existing = state.equipmentProfiles.find((item) => item.id === profile.id);
+    if (!existing) state.equipmentProfiles.push({ ...profile, equipment: [...profile.equipment] });
+    else if (existing.maxDumbbell === undefined && profile.maxDumbbell) Object.assign(existing, { maxDumbbell: profile.maxDumbbell, maxDumbbellUnit: profile.maxDumbbellUnit });
+    seeded.add(profile.id);
+  });
+  state.travelProfilesSeeded = [...seeded];
   state.equipmentProfiles.forEach((profile) => {
     const cap = Number(profile.maxDumbbell);
     if (!(cap > 0 && cap <= 400)) delete profile.maxDumbbell;
@@ -215,7 +238,10 @@ function bestTravelPlan(profile = activeEquipmentProfile()) {
 
 const baseRecommendedForTravel = todaysRecommendedPlan;
 todaysRecommendedPlan = function recommendedWhileTraveling(...args) {
-  if (state.trip?.active) return bestTravelPlan() || baseRecommendedForTravel(...args);
+  // Hotel setups (no machines) get travel workouts; a chain gym on the road
+  // keeps the usual rotation, with swaps for anything it lacks.
+  const profile = activeEquipmentProfile();
+  if (state.trip?.active && profile?.equipment?.length && !profile.equipment.includes("Machine")) return bestTravelPlan() || baseRecommendedForTravel(...args);
   return baseRecommendedForTravel(...args);
 };
 
@@ -277,7 +303,7 @@ function endTrip(automatic = false) {
     shifted = Math.max(1, Math.round(days / 7));
     if (start) state.trainingBlock.startDate = dateKey(addDays(start, shifted * 7));
   }
-  if (trip.previousProfileId && state.equipmentProfiles.some((item) => item.id === trip.previousProfileId) && state.activeEquipmentProfileId === trip.profileId) {
+  if (trip.previousProfileId && state.equipmentProfiles.some((item) => item.id === trip.previousProfileId)) {
     state.activeEquipmentProfileId = trip.previousProfileId;
   }
   state.trip = { active: false };
@@ -300,32 +326,84 @@ function checkTripExpiry() {
   return false;
 }
 
+function appleMapsSearchUrl(query) {
+  return `https://maps.apple.com/?q=${encodeURIComponent(query)}`;
+}
+
+function updateGymSearchLink(value) {
+  const link = document.getElementById("gymSearchLink");
+  if (link) link.href = appleMapsSearchUrl(String(value || "").trim() || "gym");
+}
+
+// Links (not script navigation) so iOS hands them to the Maps app.
+function renderGymFinder() {
+  const chips = TRAVEL_GYM_CHAINS.map((chain) => `<a class="chip gym-chip" href="${appleMapsSearchUrl(chain.name)}" target="_blank" rel="noopener">${escapeHtml(chain.name)}</a>`).join("");
+  return `<details class="gym-finder" style="margin-top:10px">
+    <summary><strong>Find a gym nearby</strong> <span class="muted">Opens Apple Maps to the closest one.</span></summary>
+    <div class="filters gym-chain-list" style="margin-top:10px">${chips}<a class="chip gym-chip" href="${appleMapsSearchUrl("gym")}" target="_blank" rel="noopener">Any gym</a></div>
+    <div class="field" style="margin-top:10px"><label for="gymSearchName">Another gym</label><input id="gymSearchName" placeholder="Gym name" autocomplete="off" oninput="updateGymSearchLink(this.value)" /></div>
+    <div class="actions"><a id="gymSearchLink" class="secondary-btn gym-search-btn" href="${appleMapsSearchUrl("gym")}" target="_blank" rel="noopener">Search in Maps</a></div>
+    <p class="muted compact-note">Most chains sell day passes or let members visit other locations; check with the gym. Training there? Pick its equipment under "Training at" so workouts fit.</p>
+  </details>`;
+}
+
+// Profiles a trip can use: every equipment profile, with the full gym named plainly.
+function tripProfileOptions(selectedId) {
+  return state.equipmentProfiles.map((profile) => {
+    const label = profile.equipment?.length ? profile.name : `${profile.name} (full equipment)`;
+    return `<option value="${escapeHtml(profile.id)}" ${profile.equipment?.includes("Dumbbells") ? 'data-dumbbells="1"' : ""} data-cap="${travelDumbbellCap(profile) ?? ""}" ${profile.id === selectedId ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
+// Each profile has its own dumbbell limit (a hotel rack vs Planet Fitness).
+function tripProfileChanged(select) {
+  const option = select.selectedOptions[0];
+  const field = document.getElementById("tripCapField");
+  const input = document.getElementById("tripDumbbellCap");
+  if (field) field.hidden = !option?.dataset.dumbbells;
+  if (input) input.value = option?.dataset.cap || "";
+}
+
+function changeTripProfile(profileId) {
+  const profile = state.equipmentProfiles.find((item) => item.id === profileId);
+  if (!state.trip?.active || !profile) return;
+  state.trip.profileId = profile.id;
+  state.activeEquipmentProfileId = profile.id;
+  state.todayPlanId = null;
+  saveState();
+  render();
+  toast(`Workouts now fit ${profile.name}.`);
+}
+
 function renderTripCard() {
   const trip = state.trip;
   const unit = weightUnit();
   if (trip?.active) {
-    const profile = state.equipmentProfiles.find((item) => item.id === trip.profileId) || activeEquipmentProfile();
+    // The equipment in use now (it can also be changed from Builder mid-trip).
+    const profile = activeEquipmentProfile();
     const cap = travelDumbbellCap(profile);
     return `<section class="card pad trip-card" style="margin-top:12px">
       <div class="card-head"><div><p class="eyebrow">Trip mode</p><h2>${escapeHtml(profile?.name || "Travel")}</h2></div><span class="badge green">Back ${escapeHtml(formatShortDate(trip.until))}</span></div>
       <p class="muted">Today's workout fits this equipment, and exercises you can't do here are swapped when you start.${cap !== null ? ` Dumbbells top out at ${formatWeight(cap, 2)} ${unit}.` : ""}${trip.pauseBlock ? " Your training block is paused while you're away." : ""}</p>
+      <div class="field" style="margin-top:10px"><label for="tripTrainingAt">Training at</label><select id="tripTrainingAt" onchange="changeTripProfile(this.value)">${tripProfileOptions(profile?.id)}</select></div>
+      ${renderGymFinder()}
       <div class="actions"><button class="secondary-btn" onclick="endTripNow()">I'm Back</button></div>
     </section>`;
   }
-  const options = state.equipmentProfiles.filter((profile) => profile.equipment?.length);
-  const preferred = options.find((profile) => profile.id === "hotel-dumbbells") || options[0];
+  const preferred = state.equipmentProfiles.find((profile) => profile.id === "hotel-dumbbells") || state.equipmentProfiles.find((profile) => profile.equipment?.length) || state.equipmentProfiles[0];
   const blockRunning = typeof blockWeekInfo === "function" && blockWeekInfo()?.status === "active";
   const defaultUntil = dateKey(addDays(new Date(), 4));
   return `<section class="card pad trip-card" style="margin-top:12px">
     <details>
       <summary><strong>Traveling?</strong> <span class="muted">Switch to hotel workouts until you're back.</span></summary>
       <div class="grid two" style="margin-top:10px">
-        <div class="field"><label for="tripProfile">Where you'll train</label><select id="tripProfile" onchange="document.getElementById('tripCapField').hidden = !this.selectedOptions[0]?.dataset.dumbbells">${options.map((profile) => `<option value="${escapeHtml(profile.id)}" ${profile.equipment.includes("Dumbbells") ? 'data-dumbbells="1"' : ""} ${profile.id === preferred?.id ? "selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}</select></div>
+        <div class="field"><label for="tripProfile">Where you'll train</label><select id="tripProfile" onchange="tripProfileChanged(this)">${tripProfileOptions(preferred?.id)}</select></div>
         <div class="field"><label for="tripUntil">Back on</label><input id="tripUntil" type="date" value="${defaultUntil}" min="${todayKey()}" /></div>
         <div class="field" id="tripCapField" ${preferred?.equipment.includes("Dumbbells") ? "" : "hidden"}><label for="tripDumbbellCap">Heaviest dumbbells (${unit})</label><input id="tripDumbbellCap" type="number" inputmode="decimal" min="1" step="0.5" value="${travelDumbbellCap(preferred) ?? ""}" placeholder="No limit" /></div>
       </div>
       ${blockRunning ? `<label class="toggle-row"><input id="tripPauseBlock" type="checkbox" checked /> <span>Pause my training block while I'm away (trips of ${TRIP_PAUSE_MIN_DAYS}+ days)</span></label>` : ""}
       <div class="actions"><button class="primary-btn" onclick="startTrip()">Start Trip Mode</button></div>
+      ${renderGymFinder()}
     </details>
   </section>`;
 }

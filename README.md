@@ -60,6 +60,7 @@ Debug builds accept `SIMCTL_CHILD_MASSMETHOD_DEBUG_JS='<script>'` on `xcrun simc
 - Travel training: hotel equipment profiles (cables, dumbbells only, a room with a band, a room with nothing), dumbbell-only and hotel-room workouts, 20–30 minute express sessions, and bodyweight and band exercises that log reps only
 - Exercises the current equipment can't do are swapped automatically when a workout starts (saved swaps first, then the closest same-muscle exercise)
 - A heaviest-dumbbell setting per equipment profile: progression, Copy Last, and the watch never suggest more than the hotel has, and Tempo, Paused, and 1½-rep set types make light weights harder
+- Find a gym nearby: one tap opens Apple Maps to the closest Planet Fitness, 24 Hour Fitness, LA Fitness, Anytime, Snap, Gold's, Crunch, EoS, Life Time, YMCA, or Equinox (or any gym by name), plus a Planet Fitness equipment profile (no free barbells, dumbbells to 75 lb)
 - Trip mode: pick where you'll train and when you're back; Today recommends workouts that fit, the training block can pause while away, and the home profile returns on its own
 - 30+ pre-planned body-part, prep, weak-point, and Road Gym workouts
 - Advanced workout builder with equipment profiles, scheduling, reordering, duplication, supersets, set types, and reusable templates

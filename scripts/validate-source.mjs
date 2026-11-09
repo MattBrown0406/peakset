@@ -2181,3 +2181,22 @@ console.log("Audit round 8 checks passed.");
   assert.match(infoPlist, /NSHealthShareUsageDescription<\/key>\s*<string>[^<]*nutrition/, "the Health read permission mentions nutrition");
   console.log("Nutrition checks passed.");
 }
+
+// Travel gym finder: chain searches open Apple Maps; chain equipment profiles.
+{
+  const gf = makeContext({ profile: { bodyweight: 200 }, travelProfilesSeeded: true, equipmentProfiles: [{ id: "all-equipment", name: "Commercial Gym", equipment: [] }] });
+  const run = (code) => vm.runInContext(code, gf.context);
+  assert.ok(run("state.equipmentProfiles.some((p) => p.id === 'planet-fitness' && p.maxDumbbell === 75)"), "an athlete from before the chain profiles still gets Planet Fitness");
+  assert.ok(!run("state.equipmentProfiles.some((p) => p.id === 'hotel-room')"), "profiles seeded earlier and then deleted stay deleted");
+  const today = run("renderToday()");
+  assert.ok(today.includes('href="https://maps.apple.com/?q=Planet%20Fitness"') && today.includes('href="https://maps.apple.com/?q=24%20Hour%20Fitness"') && today.includes('href="https://maps.apple.com/?q=Gold\'s%20Gym"'), "chain buttons open Apple Maps searches near the athlete");
+  assert.ok(!/<script|javascript:/i.test(run("appleMapsSearchUrl('<script>x</script>')")), "typed gym names are URL-encoded");
+  assert.match(run("renderToday()"), /data-cap="75"/, "the trip form carries each profile's own dumbbell limit");
+  // A trip to a full chain gym keeps the usual rotation, not hotel workouts.
+  run("state.trip = { active: true, startedOn: dateKey(new Date()), until: dateKey(addDays(new Date(), 3)), profileId: 'all-equipment', previousProfileId: '', pauseBlock: false }; state.activeEquipmentProfileId = 'all-equipment'");
+  assert.notEqual(run("todaysRecommendedPlan().phase"), "travel", "a full gym on the road gets normal workouts");
+  run("changeTripProfile('planet-fitness')");
+  assert.equal(run("state.activeEquipmentProfileId"), "planet-fitness", "changing where you train mid-trip switches the equipment");
+  assert.match(run("renderToday()"), /Training at/, "the active trip card lets the athlete change gyms");
+  console.log("Gym finder checks passed.");
+}

@@ -2216,3 +2216,20 @@ button.check-item.prep-check {
 .nutrition-badges .badge {
   white-space: nowrap;
 }
+
+/* Travel gym finder (travel.js) */
+.gym-chain-list {
+  flex-wrap: wrap;
+}
+
+.gym-chip,
+.gym-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.gym-finder summary {
+  cursor: pointer;
+}
