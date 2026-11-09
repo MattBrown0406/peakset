@@ -4,7 +4,7 @@ import WebKit
 import AVFoundation
 
 struct PeakSetWebView: UIViewRepresentable {
-    static let messageHandlers = ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit", "peaksetBackup", "peaksetPhoto", "peaksetWatch"]
+    static let messageHandlers = ["peaksetSharePdf", "peaksetPlayBell", "peaksetTimer", "peaksetHealthKit", "peaksetBackup", "peaksetPhoto", "peaksetWatch", "peaksetWidget"]
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -87,6 +87,10 @@ struct PeakSetWebView: UIViewRepresentable {
             case "peaksetWatch":
                 if let payload = message.body as? [String: Any], let snapshot = payload["snapshot"] as? String {
                     PeakSetWatchBridge.shared.publish(snapshotJSON: snapshot)
+                }
+            case "peaksetWidget":
+                if let payload = message.body as? [String: Any], let summary = payload["summary"] as? String {
+                    PeakSetWidgetBridge.shared.publish(summaryJSON: summary)
                 }
             default:
                 break

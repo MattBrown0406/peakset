@@ -1604,3 +1604,98 @@ console.log("Audit round 8 checks passed.");
   console.log("Audit round 12 checks passed.");
 }
 }
+
+// ---- Home Screen and Lock Screen widgets ----
+{
+  const widgetJs = read("widget.js");
+  assert.equal(webScripts.at(-1), "widget.js", "widget.js loads last so it wraps every earlier saveState");
+  const summaryKeys = ["version", "day", "title", "exerciseCount", "doneToday", "doneTitle", "active", "activeTitle", "completedSets", "totalSets", "blockLine", "behind", "weightAverage", "unit"];
+  const today = new Date();
+  const localDay = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const wg = makeContext({ profile: { bodyweight: 150 }, weightLogs: [{ id: "w1", date: new Date().toISOString(), bodyweight: 150 }, { id: "w2", date: new Date(Date.now() - 2 * 86400000).toISOString(), bodyweight: 151 }, { id: "w0", date: new Date(Date.now() - 9 * 86400000).toISOString(), bodyweight: 170 }] });
+  const runWg = (code) => vm.runInContext(code, wg.context);
+  runWg("state.blockDraft = { weeks: 4, start: 'this', focus: [] }; startTrainingBlock()");
+  const summary = JSON.parse(runWg("JSON.stringify(buildWidgetSummary())"));
+  assert.deepEqual(Object.keys(summary), summaryKeys, "the widget summary has exactly the fields the widget decodes");
+  assert.equal(summary.day, localDay, "the widget summary is dated by the local calendar day");
+  assert.equal(summary.title, runWg("todaysSelectedPlan().title"), "the widget shows the workout the Today tab offers");
+  assert.ok(Number.isInteger(summary.exerciseCount) && summary.exerciseCount > 0, "the widget shows today's exercise count");
+  assert.equal(summary.exerciseCount, runWg("knownPlanExercises(todayPreviewPlan(todaysSelectedPlan())).length"), "the exercise count matches the Today tab's list");
+  assert.equal(summary.doneToday || summary.active, false, "nothing is done or in progress yet");
+  assert.equal(summary.blockLine, "Week 1 of 5 · 3 RIR", "the widget shows the training block week and RIR");
+  assert.equal(summary.weightAverage + summary.unit, "150.5lb", "the widget shows the 7-day body-weight average in the athlete's unit");
+  assert.ok(summary.behind.length > 0 && summary.behind.length <= 4, "the medium widget lists up to four muscles behind");
+  for (const muscle of summary.behind) {
+    assert.deepEqual(Object.keys(muscle), ["label", "sets", "low", "high"], "each behind muscle carries its label, sets, and target range");
+    assert.ok(muscle.sets < muscle.low && muscle.low <= muscle.high, `${muscle.label} is behind its target range`);
+  }
+  const gaps = summary.behind.map((muscle) => muscle.low - muscle.sets);
+  assert.deepEqual(gaps, [...gaps].sort((a, b) => b - a), "the furthest-behind muscle is listed first");
+  // A workout in progress, then finished today.
+  runWg("startWorkout('chest-density'); const ex = state.activeWorkout.exercises[0]; ex.sets[0].weight = '100'; ex.sets[0].reps = '10'; completeSet(0, 0); stopTimer()");
+  const live = JSON.parse(runWg("JSON.stringify(buildWidgetSummary())"));
+  assert.equal(`${live.active}|${live.activeTitle}|${live.completedSets}`, `true|${runWg("state.activeWorkout.title")}|1`, "the widget shows the workout in progress");
+  assert.ok(live.totalSets > 1, "the in-progress workout counts its sets");
+  const finishedTitle = runWg("state.activeWorkout.title");
+  runWg("window.confirm = () => true; finishWorkout()");
+  const done = JSON.parse(runWg("JSON.stringify(buildWidgetSummary())"));
+  assert.equal(`${done.doneToday}|${done.doneTitle}|${done.active}`, `true|${finishedTitle}|false`, "the widget says Done today once a workout is finished");
+  // Publishing: one debounced message per change, none when nothing changed.
+  runWg("window.__widgetPosts = []; window.webkit = { messageHandlers: { peaksetWidget: { postMessage: (message) => window.__widgetPosts.push(message) } } }; lastWidgetSummary = ''; publishWidgetSummary(); publishWidgetSummary()");
+  assert.equal(runWg("window.__widgetPosts.length"), 1, "an unchanged summary is not posted again");
+  assert.deepEqual(Object.keys(JSON.parse(runWg("window.__widgetPosts[0].summary"))), summaryKeys, "the posted summary is the JSON the native side stores");
+  runWg("widgetPublishTimer = null; saveState()");
+  assert.ok(runWg("widgetPublishTimer !== null"), "saveState schedules a debounced widget publish");
+  runWg("publishWidgetSummary()");
+  assert.equal(runWg("widgetPublishTimer"), null, "publishing clears the pending debounce");
+  // No-throw across odd states: no block, upcoming coach block, metric, bad log dates, object-row plans.
+  const odd = makeContext({ units: "metric", workoutLogs: [{ id: "bad", title: "Old", date: "not a date", sets: [] }], customPlans: [{ id: "c1", title: "Mine", muscle: "chest", phase: "offseason", note: "", scheduleDay: today.toLocaleDateString("en-US", { weekday: "long" }), exercises: [{ id: "barbell-bench", sets: 3, reps: "8" }] }] });
+  const oddSummary = JSON.parse(vm.runInContext("JSON.stringify(buildWidgetSummary())", odd.context));
+  assert.equal(`${oddSummary.blockLine}|${oddSummary.weightAverage}|${oddSummary.unit}|${oddSummary.doneToday}`, "|null|kg|false", "no block, no weigh-ins, and a bad log date still build a summary");
+  assert.ok(Number.isInteger(oddSummary.exerciseCount), "a plan with object rows still yields an exercise count");
+  vm.runInContext("state.blockDraft = { weeks: 4, start: 'next', focus: [] }; startTrainingBlock()", odd.context);
+  assert.match(JSON.parse(vm.runInContext("JSON.stringify(buildWidgetSummary())", odd.context)).blockLine, /^Block starts /, "an upcoming block shows its start date");
+  assert.ok(widgetJs.includes('document.addEventListener("visibilitychange"'), "leaving the app flushes the pending widget summary");
+
+  // Native: the Swift model decodes the same fields; stale summaries say so.
+  const widgetModel = read("ios/Shared/MassMethodWidgetSummary.swift");
+  const swiftFields = [...literalBetween(widgetModel, "static let widgetKind", "init(version:").matchAll(/^\s+var (\w+):/gm)].map((match) => match[1]);
+  assert.deepEqual(swiftFields, summaryKeys, "MassMethodWidgetSummary.swift fields match buildWidgetSummary");
+  assert.ok(widgetModel.includes('static let appGroup = "group.com.mattbrown.peakset"'), "the widget data lives in the App Group");
+  assert.ok(widgetModel.includes('String(format: "%04d-%02d-%02d"'), "the native day key matches the web dateKey format");
+  const widgetView = read("ios/MassMethodWidgets/MassMethodTodayWidget.swift");
+  assert.ok(widgetView.includes(`"Open Mass Method to see today's workout"`), "a summary from another day asks the athlete to open the app");
+  assert.ok(widgetView.includes("summary.isCurrent(at: date)"), "the widget checks the summary's day against the entry's date");
+  for (const family of [".systemSmall", ".systemMedium", ".accessoryRectangular", ".accessoryInline", ".accessoryCircular"]) {
+    assert.ok(widgetView.includes(family), `the widget supports ${family}`);
+  }
+  assert.ok((widgetView.match(/\.containerBackground\(for: \.widget\)/g) || []).length >= 5, "every widget family adopts containerBackground (iOS 17)");
+  assert.ok(read("ios/MassMethodWidgets/MassMethodWidgetsBundle.swift").includes("MassMethodTodayWidget()\n        RestTimerLiveActivity()"), "the widget bundle ships the Home Screen widget and the Live Activity");
+  const widgetBridge = read("ios/PeakSet/PeakSetWidgetBridge.swift");
+  assert.ok(widgetBridge.includes("WidgetCenter.shared.reloadAllTimelines()") && widgetBridge.includes("minimumReloadInterval"), "widget reloads are throttled");
+  assert.ok(widgetBridge.includes("UIApplication.didEnterBackgroundNotification"), "a throttled reload is sent when the app goes to the background");
+  assert.ok(swiftWebView.includes('"peaksetWidget"') && swiftWebView.includes("PeakSetWidgetBridge.shared.publish(summaryJSON: summary)"), "the web view forwards widget summaries");
+
+  // Signing: both targets carry the App Group; both bundles declare the UserDefaults reason.
+  const appGroupEntitlement = "<key>com.apple.security.application-groups</key>\n\t<array>\n\t\t<string>group.com.mattbrown.peakset</string>\n\t</array>";
+  assert.ok(entitlements.includes(appGroupEntitlement), "the app entitlements include the App Group");
+  assert.ok(read("ios/MassMethodWidgets/MassMethodWidgets.entitlements").includes(appGroupEntitlement), "the widget extension entitlements include the App Group");
+  assert.equal((xcodeProject.match(/CODE_SIGN_ENTITLEMENTS = MassMethodWidgets\/MassMethodWidgets\.entitlements;/g) || []).length, 2, "the widget extension signs with its entitlements in Debug and Release");
+  assert.equal((xcodeProject.match(/CODE_SIGN_ENTITLEMENTS = PeakSet\/PeakSet\.entitlements;/g) || []).length, 2, "the app signs with its entitlements in Debug and Release");
+  assert.equal((xcodeProject.match(/com\.apple\.ApplicationGroups\.iOS = \{\n\t+enabled = 1;/g) || []).length, 2, "App Groups is enabled for the app and the widget extension");
+  // The phase definitions (`ID /* Sources */ = {`), not their mentions in target lists.
+  const phase = (id, name = "Sources") => literalBetween(xcodeProject, `\t\t${id} /* ${name} */ = {`, "};");
+  const appSources = phase("1A2B3C4D5E6F700000000500");
+  const widgetSources = phase("2B3C4D5E6F7A800000000018");
+  assert.ok(appSources.includes("PeakSetWidgetBridge.swift in Sources") && appSources.includes("MassMethodWidgetSummary.swift in Sources"), "the app compiles the widget bridge and summary model");
+  assert.ok(widgetSources.includes("MassMethodTodayWidget.swift in Sources") && widgetSources.includes("MassMethodWidgetSummary.swift in Sources"), "the widget extension compiles the widget and summary model");
+  assert.ok(phase("2B3C4D5E6F7A80000000001A", "Resources").includes("PrivacyInfo.xcprivacy in Resources"), "the widget extension ships its privacy manifest");
+  assert.ok(read("ios/MassMethodWidgets/PrivacyInfo.xcprivacy").includes("<string>1C8F.1</string>"), "the widget privacy manifest declares App Group UserDefaults");
+  assert.ok(read("ios/PeakSet/PrivacyInfo.xcprivacy").includes("<string>1C8F.1</string>"), "the app privacy manifest declares App Group UserDefaults");
+  const objectIds = [...xcodeProject.matchAll(/^\t\t([0-9A-F]{24}) (?:\/\*.*?\*\/ )?= \{/gm)].map((match) => match[1]);
+  assert.equal(new Set(objectIds).size, objectIds.length, "every project.pbxproj object ID is unique");
+  for (const [, ref] of xcodeProject.matchAll(/fileRef = ([0-9A-F]{24})/g)) {
+    assert.ok(objectIds.includes(ref), `project.pbxproj build file points at a missing file reference ${ref}`);
+  }
+  console.log("Widget checks passed.");
+}
